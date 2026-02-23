@@ -39,6 +39,7 @@ In-depth technical documentation:
 | [Performance SLO](./reference/PERFORMANCE_SLO.md) | CI-enforced performance objectives and budget gates |
 | [REST API](./reference/api-reference.md) | HTTP API endpoints |
 | [SIMD Performance](./reference/SIMD_PERFORMANCE.md) | SIMD optimizations and benchmarks |
+| [VelesDB Core Production Readiness](./reference/velesdb-core-production-readiness.md) | Current status, gaps, and production hardening plan for `velesdb-core` |
 
 ---
 
