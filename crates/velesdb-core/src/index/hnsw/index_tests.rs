@@ -1158,6 +1158,33 @@ fn test_recall_quality_minimum_threshold() {
 }
 
 #[test]
+fn test_rerank_latency_target_configuration_roundtrip() {
+    let index = HnswIndex::new(32, DistanceMetric::Cosine);
+    assert_eq!(index.rerank_latency_target_us(), 0);
+
+    index.set_rerank_latency_target_us(250);
+    assert_eq!(index.rerank_latency_target_us(), 250);
+}
+
+#[test]
+fn test_rerank_latency_ema_updates_after_two_stage_search() {
+    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    index.set_rerank_latency_target_us(1);
+
+    for i in 0u64..1500 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i * 5 + j as u64) as f32 * 0.0013).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.009).cos()).collect();
+    let _ = index.search_with_quality(&query, 20, SearchQuality::Accurate);
+
+    assert!(index.rerank_latency_ema_us() > 0);
+}
+
+#[test]
 fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression() {
     let index = HnswIndex::new(64, DistanceMetric::Cosine);
 
