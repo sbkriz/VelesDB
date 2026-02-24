@@ -8,6 +8,7 @@ use crate::index::hnsw::sharded_vectors::ShardedVectors;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
 use std::path::Path;
+use std::sync::atomic::AtomicU64;
 
 impl HnswIndex {
     /// Creates a new HNSW index with auto-tuned parameters based on dimension.
@@ -141,6 +142,8 @@ impl HnswIndex {
             mappings,
             vectors: ShardedVectors::new(dimension),
             enable_vector_storage,
+            rerank_latency_target_us: AtomicU64::new(0),
+            rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
         }
     }
@@ -217,6 +220,8 @@ impl HnswIndex {
             mappings,
             vectors: ShardedVectors::new(meta.dimension),
             enable_vector_storage: meta.enable_vector_storage,
+            rerank_latency_target_us: AtomicU64::new(0),
+            rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
         })
     }

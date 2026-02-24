@@ -3,8 +3,30 @@
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::params::SearchQuality;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 impl HnswIndex {
+    /// Sets a soft latency target (microseconds) for two-stage reranking adaptation.
+    ///
+    /// A value of `0` disables latency-aware adaptation.
+    pub fn set_rerank_latency_target_us(&self, target_us: u64) {
+        self.rerank_latency_target_us
+            .store(target_us, Ordering::Relaxed);
+    }
+
+    /// Returns the configured soft latency target for reranking (microseconds).
+    #[must_use]
+    pub fn rerank_latency_target_us(&self) -> u64 {
+        self.rerank_latency_target_us.load(Ordering::Relaxed)
+    }
+
+    /// Returns the exponential moving average of reranking latency (microseconds).
+    #[must_use]
+    pub fn rerank_latency_ema_us(&self) -> u64 {
+        self.rerank_latency_ema_us.load(Ordering::Relaxed)
+    }
+
     /// Validates that the query/vector dimension matches the index dimension.
     ///
     /// RF-2.7: Helper to eliminate 7x duplicated validation pattern.
@@ -90,7 +112,43 @@ impl HnswIndex {
             _ => return None,
         };
 
-        Some(rerank_k.min(len.max(k)))
+        let bounded = rerank_k.min(len.max(k));
+        Some(self.adapt_rerank_k_to_latency(bounded, k))
+    }
+
+    #[inline]
+    fn adapt_rerank_k_to_latency(&self, rerank_k: usize, k: usize) -> usize {
+        let target_us = self.rerank_latency_target_us.load(Ordering::Relaxed);
+        if target_us == 0 || rerank_k <= k {
+            return rerank_k;
+        }
+
+        let ema_us = self.rerank_latency_ema_us.load(Ordering::Relaxed);
+        if ema_us == 0 {
+            return rerank_k;
+        }
+
+        if ema_us > target_us + (target_us / 4) {
+            ((rerank_k * 3) / 4).max(k)
+        } else if ema_us + (target_us / 5) < target_us {
+            (rerank_k + (rerank_k / 5)).max(k)
+        } else {
+            rerank_k
+        }
+    }
+
+    #[inline]
+    fn update_rerank_latency_ema(&self, sample_us: u64) {
+        const ALPHA_NUM: u64 = 1;
+        const ALPHA_DEN: u64 = 8;
+
+        let current = self.rerank_latency_ema_us.load(Ordering::Relaxed);
+        let next = if current == 0 {
+            sample_us
+        } else {
+            ((ALPHA_DEN - ALPHA_NUM) * current + (ALPHA_NUM * sample_us)) / ALPHA_DEN
+        };
+        self.rerank_latency_ema_us.store(next, Ordering::Relaxed);
     }
 
     /// Searches for the k nearest neighbors with a specific quality profile.
@@ -188,6 +246,8 @@ impl HnswIndex {
             return Vec::new();
         }
 
+        let rerank_start = Instant::now();
+
         // 2. Re-rank using SIMD-optimized exact distance computation
         // EPIC-A.2: Collect candidate vectors from ShardedVectors for re-ranking
         let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
@@ -219,6 +279,9 @@ impl HnswIndex {
         self.metric.sort_results(&mut reranked);
 
         reranked.truncate(k);
+        let elapsed_micros = rerank_start.elapsed().as_micros();
+        let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
+        self.update_rerank_latency_ema(elapsed);
         reranked
     }
 
@@ -383,6 +446,8 @@ impl HnswIndex {
             return Vec::new();
         }
 
+        let rerank_start = Instant::now();
+
         // 2. Re-rank using SIMD-optimized exact distance computation
         // EPIC-A.2: Collect candidate vectors from ShardedVectors
         let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
@@ -413,6 +478,9 @@ impl HnswIndex {
         self.metric.sort_results(&mut reranked);
 
         reranked.truncate(k);
+        let elapsed_micros = rerank_start.elapsed().as_micros();
+        let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
+        self.update_rerank_latency_ema(elapsed);
         reranked
     }
 
