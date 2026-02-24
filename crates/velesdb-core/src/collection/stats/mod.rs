@@ -28,6 +28,12 @@ mod tests;
 /// Statistics for a collection.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CollectionStats {
+    /// Total number of points in the collection.
+    pub total_points: u64,
+    /// Total payload storage footprint in bytes.
+    pub payload_size_bytes: u64,
+    /// Per-field statistics for cost-based planning.
+    pub field_stats: HashMap<String, ColumnStats>,
     /// Number of active rows
     pub row_count: u64,
     /// Number of deleted/tombstoned rows
@@ -55,6 +61,7 @@ impl CollectionStats {
     #[must_use]
     pub fn with_counts(row_count: u64, deleted_count: u64) -> Self {
         Self {
+            total_points: row_count,
             row_count,
             deleted_count,
             ..Default::default()
@@ -80,6 +87,11 @@ impl CollectionStats {
     /// Estimates selectivity for a column based on cardinality
     #[must_use]
     pub fn estimate_selectivity(&self, column: &str) -> f64 {
+        if let Some(col_stats) = self.field_stats.get(column) {
+            if col_stats.distinct_values > 0 && self.total_points > 0 {
+                return 1.0 / col_stats.distinct_values as f64;
+            }
+        }
         if let Some(col_stats) = self.column_stats.get(column) {
             if col_stats.distinct_count > 0 && self.row_count > 0 {
                 return 1.0 / col_stats.distinct_count as f64;
@@ -109,12 +121,34 @@ pub struct ColumnStats {
     pub null_count: u64,
     /// Number of distinct values (cardinality)
     pub distinct_count: u64,
+    /// Number of distinct values (CBO alias).
+    pub distinct_values: u64,
     /// Minimum value (serialized)
     pub min_value: Option<String>,
     /// Maximum value (serialized)
     pub max_value: Option<String>,
     /// Average value size in bytes
     pub avg_size_bytes: u64,
+    /// Optional histogram for selectivity estimates.
+    pub histogram: Option<Histogram>,
+}
+
+/// Histogram bucket storing approximate distribution details.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HistogramBucket {
+    /// Inclusive lower bound for the bucket.
+    pub lower_bound: f64,
+    /// Exclusive upper bound for the bucket.
+    pub upper_bound: f64,
+    /// Number of sampled rows in the bucket.
+    pub count: u64,
+}
+
+/// Simple histogram used by the CBO.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Histogram {
+    /// Ordered list of histogram buckets.
+    pub buckets: Vec<HistogramBucket>,
 }
 
 impl ColumnStats {
@@ -131,6 +165,7 @@ impl ColumnStats {
     #[must_use]
     pub fn with_distinct_count(mut self, count: u64) -> Self {
         self.distinct_count = count;
+        self.distinct_values = count;
         self
     }
 
@@ -199,6 +234,7 @@ impl StatsCollector {
     /// Sets row count
     pub fn set_row_count(&mut self, count: u64) {
         self.stats.row_count = count;
+        self.stats.total_points = count;
     }
 
     /// Sets deleted count
@@ -209,11 +245,15 @@ impl StatsCollector {
     /// Sets total size
     pub fn set_total_size(&mut self, size: u64) {
         self.stats.total_size_bytes = size;
+        self.stats.payload_size_bytes = size;
     }
 
     /// Adds column statistics
     pub fn add_column_stats(&mut self, stats: ColumnStats) {
-        self.stats.column_stats.insert(stats.name.clone(), stats);
+        self.stats
+            .column_stats
+            .insert(stats.name.clone(), stats.clone());
+        self.stats.field_stats.insert(stats.name.clone(), stats);
     }
 
     /// Adds index statistics

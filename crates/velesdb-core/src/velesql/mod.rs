@@ -34,6 +34,8 @@ mod cache;
 #[cfg(test)]
 mod cache_tests;
 #[cfg(test)]
+mod cbo_tests;
+#[cfg(test)]
 mod complex_parser_tests;
 #[cfg(test)]
 mod distinct_tests;
@@ -109,5 +111,5 @@ pub use explain::{
 };
 pub use parser::match_clause;
 pub use parser::Parser;
-pub use planner::{ExecutionStrategy, QueryPlanner, QueryStats};
+pub use planner::{Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};

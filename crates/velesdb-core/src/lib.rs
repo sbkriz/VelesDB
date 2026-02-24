@@ -183,6 +183,10 @@ pub struct Database {
     data_dir: std::path::PathBuf,
     /// Collections managed by this database
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
+    /// Cached collection statistics for CBO planning.
+    collection_stats: parking_lot::RwLock<
+        std::collections::HashMap<String, crate::collection::stats::CollectionStats>,
+    >,
 }
 
 #[cfg(feature = "persistence")]
@@ -211,6 +215,7 @@ impl Database {
         Ok(Self {
             data_dir,
             collections: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            collection_stats: parking_lot::RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -278,6 +283,51 @@ impl Database {
     /// Returns `None` if the collection does not exist.
     pub fn get_collection(&self, name: &str) -> Option<Collection> {
         self.collections.read().get(name).cloned()
+    }
+
+    /// Analyzes a collection, caches stats, and persists them to disk.
+    pub fn analyze_collection(
+        &self,
+        name: &str,
+    ) -> Result<crate::collection::stats::CollectionStats> {
+        let collection = self
+            .get_collection(name)
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
+        let stats = collection.analyze()?;
+
+        self.collection_stats
+            .write()
+            .insert(name.to_string(), stats.clone());
+
+        let stats_path = self.data_dir.join(name).join("collection.stats.json");
+        let serialized = serde_json::to_vec_pretty(&stats)
+            .map_err(|e| Error::Serialization(format!("failed to serialize stats: {e}")))?;
+        std::fs::write(&stats_path, serialized)?;
+
+        Ok(stats)
+    }
+
+    /// Returns cached statistics when available, loading from disk if present.
+    pub fn get_collection_stats(
+        &self,
+        name: &str,
+    ) -> Result<Option<crate::collection::stats::CollectionStats>> {
+        if let Some(stats) = self.collection_stats.read().get(name).cloned() {
+            return Ok(Some(stats));
+        }
+
+        let stats_path = self.data_dir.join(name).join("collection.stats.json");
+        if !stats_path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = std::fs::read(stats_path)?;
+        let stats: crate::collection::stats::CollectionStats = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::Serialization(format!("failed to parse stats: {e}")))?;
+        self.collection_stats
+            .write()
+            .insert(name.to_string(), stats.clone());
+        Ok(Some(stats))
     }
 
     /// Executes a `VelesQL` query with database-level JOIN resolution.

@@ -14,6 +14,8 @@
 use crate::collection::stats::{CollectionStats, IndexStats, StatsCollector};
 use crate::collection::Collection;
 use crate::error::Error;
+use crate::storage::PayloadStorage;
+use std::collections::{HashMap, HashSet};
 
 impl Collection {
     /// Analyzes the collection and returns statistics.
@@ -47,6 +49,47 @@ impl Collection {
         // Reason: Collection sizes are bounded by available memory, always < u64::MAX on 64-bit systems
         collector
             .set_row_count(u64::try_from(config.point_count).expect("point_count fits in u64"));
+        drop(config);
+
+        let mut distinct_values: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut null_counts: HashMap<String, u64> = HashMap::new();
+        let mut payload_size_bytes = 0u64;
+
+        let payload_storage = self.payload_storage.read();
+        let ids = payload_storage.ids();
+        for id in ids.into_iter().take(1_000) {
+            if let Ok(Some(payload)) = payload_storage.retrieve(id) {
+                if let Ok(payload_bytes) = serde_json::to_vec(&payload) {
+                    payload_size_bytes = payload_size_bytes
+                        .saturating_add(u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX));
+                }
+
+                if let Some(obj) = payload.as_object() {
+                    for (key, value) in obj {
+                        if value.is_null() {
+                            *null_counts.entry(key.clone()).or_insert(0) += 1;
+                        } else {
+                            distinct_values
+                                .entry(key.clone())
+                                .or_default()
+                                .insert(value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        drop(payload_storage);
+
+        collector.set_total_size(payload_size_bytes);
+
+        for (field, values) in distinct_values {
+            let mut col = crate::collection::stats::ColumnStats::new(field.clone())
+                .with_distinct_count(u64::try_from(values.len()).unwrap_or(u64::MAX));
+            if let Some(null_count) = null_counts.get(&field) {
+                col = col.with_null_count(*null_count);
+            }
+            collector.add_column_stats(col);
+        }
 
         // HNSW index statistics
         let hnsw_len = self.index.len();
