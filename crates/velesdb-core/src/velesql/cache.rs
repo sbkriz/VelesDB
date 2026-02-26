@@ -6,7 +6,6 @@
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
 
 use super::ast::Query;
 use super::error::ParseError;
@@ -54,10 +53,10 @@ impl CacheStats {
 /// assert!(cache.stats().hits >= 1);
 /// ```
 pub struct QueryCache {
-    /// Cache storage: hash -> Query
-    cache: RwLock<FxHashMap<u64, Query>>,
-    /// LRU order: front = oldest, back = newest
-    order: RwLock<VecDeque<u64>>,
+    /// Cache storage: full query string -> Query
+    cache: RwLock<FxHashMap<String, Query>>,
+    /// LRU order: front = oldest query string, back = newest
+    order: RwLock<VecDeque<String>>,
     /// Maximum cache size
     max_size: usize,
     /// Cache statistics
@@ -86,16 +85,25 @@ impl QueryCache {
     ///
     /// Returns `ParseError` if the query is invalid.
     pub fn parse(&self, query: &str) -> Result<Query, ParseError> {
-        let hash = Self::hash_query(query);
+        // Fast-path read
+        let cached = { self.cache.read().get(query).cloned() };
 
-        // Try cache read first
-        {
-            let cache = self.cache.read();
-            if let Some(cached) = cache.get(&hash) {
-                let mut stats = self.stats.write();
-                stats.hits += 1;
-                return Ok(cached.clone());
+        if let Some(cached) = cached {
+            let cache = self.cache.write();
+            let mut order = self.order.write();
+            let mut stats = self.stats.write();
+
+            stats.hits += 1;
+
+            // Keep strict LRU invariant (no duplicates + move-to-MRU)
+            if cache.contains_key(query) {
+                if let Some(pos) = order.iter().position(|q| q == query) {
+                    order.remove(pos);
+                }
+                order.push_back(query.to_string());
             }
+
+            return Ok(cached);
         }
 
         // Cache miss - parse the query
@@ -117,8 +125,13 @@ impl QueryCache {
                 }
             }
 
-            cache.insert(hash, parsed.clone());
-            order.push_back(hash);
+            // Prevent duplicate order entries for same query
+            if let Some(pos) = order.iter().position(|q| q == query) {
+                order.remove(pos);
+            }
+
+            cache.insert(query.to_string(), parsed.clone());
+            order.push_back(query.to_string());
         }
 
         Ok(parsed)
@@ -151,13 +164,6 @@ impl QueryCache {
         cache.clear();
         order.clear();
         *stats = CacheStats::default();
-    }
-
-    /// Computes a hash for the query string.
-    fn hash_query(query: &str) -> u64 {
-        let mut hasher = rustc_hash::FxHasher::default();
-        query.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
@@ -252,6 +258,61 @@ mod tests {
         let _ = cache.parse("SELECT * FROM docs LIMIT 3");
         assert_eq!(cache.len(), 2);
         assert!(cache.stats().evictions >= 1);
+    }
+
+    #[test]
+    fn test_query_cache_hit_refreshes_mru_without_duplicates() {
+        let cache = QueryCache::new(3);
+        let q1 = "SELECT * FROM docs LIMIT 1";
+        let q2 = "SELECT * FROM docs LIMIT 2";
+        let q3 = "SELECT * FROM docs LIMIT 3";
+
+        let _ = cache.parse(q1);
+        let _ = cache.parse(q2);
+        let _ = cache.parse(q3);
+        let _ = cache.parse(q1); // refresh MRU
+
+        let order = cache.order.read();
+        assert_eq!(order.len(), cache.len());
+        assert_eq!(order.iter().filter(|v| v.as_str() == q1).count(), 1);
+        assert_eq!(order.back().map(std::string::String::as_str), Some(q1));
+    }
+
+    #[test]
+    fn test_query_cache_concurrent_invariant_no_order_duplicates() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let cache = Arc::new(QueryCache::new(32));
+        let queries = [
+            "SELECT * FROM docs LIMIT 1",
+            "SELECT * FROM docs LIMIT 2",
+            "SELECT * FROM docs LIMIT 3",
+            "SELECT * FROM docs LIMIT 4",
+            "SELECT * FROM docs LIMIT 5",
+        ];
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cache = Arc::clone(&cache);
+            handles.push(thread::spawn(move || {
+                for i in 0..200 {
+                    let q = queries[i % queries.len()];
+                    let _ = cache.parse(q);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread must complete");
+        }
+
+        let order = cache.order.read();
+        let mut uniq = std::collections::HashSet::new();
+        for q in order.iter() {
+            assert!(uniq.insert(q.clone()), "duplicate query in LRU order: {q}");
+        }
+        assert_eq!(order.len(), cache.len());
     }
 
     #[test]
