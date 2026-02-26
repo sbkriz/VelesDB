@@ -2,6 +2,18 @@
 
 This document describes the internal architecture of VelesDB.
 
+## Architecture Status Update (2026-02-26)
+
+VelesDB core architecture is explicitly **hybrid by design**:
+
+- **Vector engine** with 5 metrics (`Cosine`, `Euclidean`, `DotProduct`, `Hamming`, `Jaccard`) and SIMD acceleration.
+- **Graph engine** for nodes/edges/traversal inside collection runtime.
+- **Multi-column engine** (`ColumnStore`) for typed filtering and bitmap operations.
+- **VelesQL control plane** (parser/validation/planning/cache) orchestrating cross-domain execution paths.
+
+For the current expert review and target architecture roadmap, see:
+`docs/reviews/velesdb-core-velesql-expert-review-2026-02-26.md`.
+
 ## High-Level Overview
 
 ```
