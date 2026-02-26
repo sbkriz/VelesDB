@@ -1,6 +1,7 @@
 //! WHERE clause and condition parsing.
 
 use super::{extract_identifier, Rule};
+use crate::metrics::global_guardrails_metrics;
 use crate::velesql::ast::{
     BetweenCondition, CompareOp, Comparison, Condition, FusionConfig, InCondition, IsNullCondition,
     LikeCondition, MatchCondition, SimilarityCondition, VectorExpr, VectorFusedSearch,
@@ -10,6 +11,8 @@ use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
 impl Parser {
+    const MAX_CONDITION_DEPTH: usize = 256;
+
     fn extract_column_name(pair: &pest::iterators::Pair<'_, Rule>) -> String {
         if pair.as_rule() != Rule::column_name && pair.as_rule() != Rule::where_column {
             return extract_identifier(pair);
@@ -37,50 +40,85 @@ impl Parser {
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected condition"))?;
 
-        Self::parse_or_expr(or_expr)
+        Self::parse_or_expr_with_depth(or_expr, 0)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn parse_or_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
+        Self::parse_or_expr_with_depth(pair, 0)
+    }
+
+    fn ensure_depth(depth: usize, input: &str) -> Result<(), ParseError> {
+        if depth > Self::MAX_CONDITION_DEPTH {
+            global_guardrails_metrics().record_parser_depth_limit_rejected();
+            return Err(ParseError::syntax(0, input, "Condition nesting too deep"));
+        }
+        Ok(())
+    }
+
+    fn parse_or_expr_with_depth(
+        pair: pest::iterators::Pair<Rule>,
+        depth: usize,
+    ) -> Result<Condition, ParseError> {
+        Self::ensure_depth(depth, pair.as_str())?;
         let mut inner = pair.into_inner().peekable();
 
         let first = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected condition"))?;
 
-        let mut result = Self::parse_and_expr(first)?;
+        let mut result = Self::parse_and_expr_with_depth(first, depth + 1)?;
 
         for and_expr in inner {
-            let right = Self::parse_and_expr(and_expr)?;
+            let right = Self::parse_and_expr_with_depth(and_expr, depth + 1)?;
             result = Condition::Or(Box::new(result), Box::new(right));
         }
 
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn parse_and_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
+        Self::parse_and_expr_with_depth(pair, 0)
+    }
+
+    fn parse_and_expr_with_depth(
+        pair: pest::iterators::Pair<Rule>,
+        depth: usize,
+    ) -> Result<Condition, ParseError> {
+        Self::ensure_depth(depth, pair.as_str())?;
         let mut inner = pair.into_inner().peekable();
 
         let first = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected condition"))?;
 
-        let mut result = Self::parse_primary_expr(first)?;
+        let mut result = Self::parse_primary_expr_with_depth(first, depth + 1)?;
 
         for primary in inner {
-            let right = Self::parse_primary_expr(primary)?;
+            let right = Self::parse_primary_expr_with_depth(primary, depth + 1)?;
             result = Condition::And(Box::new(result), Box::new(right));
         }
 
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn parse_primary_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
+        Self::parse_primary_expr_with_depth(pair, 0)
+    }
+
+    fn parse_primary_expr_with_depth(
+        pair: pest::iterators::Pair<Rule>,
+        depth: usize,
+    ) -> Result<Condition, ParseError> {
+        Self::ensure_depth(depth, pair.as_str())?;
         let inner = pair
             .into_inner()
             .next()
@@ -88,7 +126,7 @@ impl Parser {
 
         match inner.as_rule() {
             Rule::or_expr => {
-                let cond = Self::parse_or_expr(inner)?;
+                let cond = Self::parse_or_expr_with_depth(inner, depth + 1)?;
                 Ok(Condition::Group(Box::new(cond)))
             }
             Rule::not_expr => {
@@ -96,7 +134,7 @@ impl Parser {
                     .into_inner()
                     .next()
                     .ok_or_else(|| ParseError::syntax(0, "", "Expected expression after NOT"))?;
-                let cond = Self::parse_primary_expr(nested)?;
+                let cond = Self::parse_primary_expr_with_depth(nested, depth + 1)?;
                 Ok(Condition::Not(Box::new(cond)))
             }
             Rule::similarity_expr => Self::parse_similarity_expr(inner),

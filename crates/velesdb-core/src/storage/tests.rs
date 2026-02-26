@@ -313,6 +313,22 @@ fn test_retrieve_ref_large_dimension() {
     assert_eq!(guard.as_ref()[767], 767.0);
 }
 
+#[test]
+fn test_retrieve_ref_returns_invalid_data_on_misaligned_offset() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+    storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+
+    // Inject a corrupted, non-f32-aligned offset to ensure retrieve_ref is fallible.
+    storage.index.insert(42, 1);
+
+    let result = storage.retrieve_ref(42);
+    match result {
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::InvalidData),
+        Ok(_) => panic!("misaligned offset must not succeed"),
+    }
+}
+
 // =========================================================================
 // TS-CORE-004: Compaction Tests
 // =========================================================================

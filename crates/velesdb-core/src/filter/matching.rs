@@ -1,7 +1,11 @@
 //! Condition matching logic and helper functions.
 
 use super::Condition;
+use crate::metrics::global_guardrails_metrics;
 use serde_json::Value;
+
+const LIKE_MAX_PATTERN_BYTES: usize = 4096;
+const LIKE_MAX_DYN_OPS: usize = 2_000_000;
 
 impl Condition {
     /// Evaluates the condition against a payload.
@@ -97,6 +101,16 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
 /// * `pattern` - The SQL LIKE pattern
 /// * `case_insensitive` - If true, performs case-insensitive matching (ILIKE)
 fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
+    if pattern.len() > LIKE_MAX_PATTERN_BYTES {
+        global_guardrails_metrics().record_like_guardrail_rejected();
+        return false;
+    }
+
+    if text.len().saturating_mul(pattern.len().max(1)) > LIKE_MAX_DYN_OPS {
+        global_guardrails_metrics().record_like_guardrail_rejected();
+        return false;
+    }
+
     let (text, pattern) = if case_insensitive {
         (text.to_lowercase(), pattern.to_lowercase())
     } else {
@@ -106,72 +120,68 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
     like_match_impl(text.as_bytes(), pattern.as_bytes())
 }
 
-/// Recursive implementation of LIKE matching using dynamic programming approach.
-fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
-    let m = text.len();
-    let n = pattern.len();
+#[derive(Clone, Copy)]
+enum Token {
+    AnySeq,
+    AnyOne,
+    Literal(u8),
+}
 
-    // dp[i][j] = true if text[0..i] matches pattern[0..j]
-    let mut dp = vec![vec![false; n + 1]; m + 1];
-
-    // Empty pattern matches empty text
-    dp[0][0] = true;
-
-    // Handle patterns starting with % (can match empty string)
-    let mut j = 0;
-    while j < n {
-        if pattern[j] == b'%' {
-            dp[0][j + 1] = dp[0][j];
-            j += 1;
-        } else if pattern[j] == b'\\' && j + 1 < n {
-            // Escaped character - skip both
-            break;
-        } else {
-            break;
-        }
-    }
-
-    let mut pi = 0;
-    while pi < n {
-        let (pat_char, pat_len) = if pattern[pi] == b'\\' && pi + 1 < n {
-            // Escaped character: \% or \_
-            (Some(pattern[pi + 1]), 2)
-        } else if pattern[pi] == b'%' {
-            (None, 1) // % wildcard
-        } else if pattern[pi] == b'_' {
-            (Some(0), 1) // _ wildcard (0 means "match any single char")
-        } else {
-            (Some(pattern[pi]), 1)
-        };
-
-        for ti in 0..=m {
-            match pat_char {
-                None => {
-                    // % matches zero or more characters
-                    // dp[ti][pi+1] is true if any dp[k][pi] is true for k <= ti
-                    if ti == 0 {
-                        dp[ti][pi + pat_len] = dp[ti][pi];
-                    } else {
-                        dp[ti][pi + pat_len] = dp[ti][pi] || dp[ti - 1][pi + pat_len];
-                    }
+fn tokenize_like_pattern(pattern: &[u8]) -> Vec<Token> {
+    let mut out = Vec::with_capacity(pattern.len());
+    let mut i = 0;
+    while i < pattern.len() {
+        match pattern[i] {
+            b'\\' if i + 1 < pattern.len() => {
+                out.push(Token::Literal(pattern[i + 1]));
+                i += 2;
+            }
+            b'%' => {
+                if !matches!(out.last(), Some(Token::AnySeq)) {
+                    out.push(Token::AnySeq);
                 }
-                Some(0) => {
-                    // _ matches exactly one character
-                    if ti > 0 {
-                        dp[ti][pi + pat_len] = dp[ti - 1][pi];
-                    }
-                }
-                Some(c) => {
-                    // Literal character match
-                    if ti > 0 && text[ti - 1] == c {
-                        dp[ti][pi + pat_len] = dp[ti - 1][pi];
-                    }
-                }
+                i += 1;
+            }
+            b'_' => {
+                out.push(Token::AnyOne);
+                i += 1;
+            }
+            c => {
+                out.push(Token::Literal(c));
+                i += 1;
             }
         }
+    }
+    out
+}
 
-        pi += pat_len;
+/// LIKE matching using rolling DP (O(text_len * token_len) time, O(token_len) memory).
+fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
+    let tokens = tokenize_like_pattern(pattern);
+    let n = tokens.len();
+
+    let mut prev = vec![false; n + 1];
+    prev[0] = true;
+    for (j, tok) in tokens.iter().enumerate() {
+        if matches!(tok, Token::AnySeq) {
+            prev[j + 1] = prev[j];
+        } else {
+            break;
+        }
     }
 
-    dp[m][n]
+    let mut curr = vec![false; n + 1];
+    for &ch in text {
+        curr.fill(false);
+        for (j, tok) in tokens.iter().enumerate() {
+            curr[j + 1] = match tok {
+                Token::AnySeq => curr[j] || prev[j + 1],
+                Token::AnyOne => prev[j],
+                Token::Literal(c) => prev[j] && ch == *c,
+            };
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[n]
 }

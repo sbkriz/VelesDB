@@ -188,6 +188,15 @@ fn test_like_escaped_underscore() {
     assert!(condition.matches(&payload));
 }
 
+#[test]
+fn test_like_guardrail_rejects_too_large_complexity_budget() {
+    let text = "a".repeat(5_000);
+    let pattern = "%a%".repeat(600);
+    let payload = json!({"name": text});
+    let condition = Condition::like("name", &pattern);
+    assert!(!condition.matches(&payload));
+}
+
 // =============================================================================
 // AC4: Filter integration
 // =============================================================================

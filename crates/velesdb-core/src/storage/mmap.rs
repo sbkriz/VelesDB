@@ -25,6 +25,7 @@ use super::guard::VectorSliceGuard;
 use super::metrics::StorageMetrics;
 use super::sharded_index::ShardedIndex;
 use super::traits::VectorStorage;
+use crate::metrics::global_guardrails_metrics;
 
 use memmap2::MmapMut;
 use parking_lot::RwLock;
@@ -383,6 +384,7 @@ impl MmapStorage {
         let vector_size = self.dimension * std::mem::size_of::<f32>();
 
         if offset + vector_size > mmap.len() {
+            global_guardrails_metrics().record_invalid_offset_read_error();
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Offset out of bounds",
@@ -398,12 +400,16 @@ impl MmapStorage {
         // - Condition 4: All writes via store() use f32-aligned offsets.
         // Reason: Zero-copy vector access via memory mapping requires raw pointer operations.
         // P2 Audit 2026-01-29: Converted from debug_assert to assert for memory safety
-        assert!(
-            offset % std::mem::align_of::<f32>() == 0,
-            "EPIC-032/US-001: offset {} is not f32-aligned (must be multiple of {})",
-            offset,
-            std::mem::align_of::<f32>()
-        );
+        if offset % std::mem::align_of::<f32>() != 0 {
+            global_guardrails_metrics().record_invalid_offset_read_error();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "EPIC-032/US-001: offset {offset} is not f32-aligned (must be multiple of {})",
+                    std::mem::align_of::<f32>()
+                ),
+            ));
+        }
         #[allow(clippy::cast_ptr_alignment)]
         let ptr = unsafe { mmap.as_ptr().add(offset).cast::<f32>() };
 
