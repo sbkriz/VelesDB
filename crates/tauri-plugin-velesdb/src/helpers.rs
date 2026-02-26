@@ -42,8 +42,9 @@ pub fn parse_storage_mode(mode: &str) -> Result<velesdb_core::StorageMode> {
         "full" | "f32" => Ok(StorageMode::Full),
         "sq8" | "int8" => Ok(StorageMode::SQ8),
         "binary" | "bit" => Ok(StorageMode::Binary),
+        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
         _ => Err(Error::InvalidConfig(format!(
-            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', or 'binary'"
+            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', 'binary', or 'pq'"
         ))),
     }
 }
@@ -56,6 +57,7 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> String {
         StorageMode::Full => "full",
         StorageMode::SQ8 => "sq8",
         StorageMode::Binary => "binary",
+        StorageMode::ProductQuantization => "pq",
     }
     .to_string()
 }
@@ -134,6 +136,10 @@ mod tests {
             parse_storage_mode("binary"),
             Ok(StorageMode::Binary)
         ));
+        assert!(matches!(
+            parse_storage_mode("pq"),
+            Ok(StorageMode::ProductQuantization)
+        ));
     }
 
     #[test]
@@ -152,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_storage_mode_roundtrip() {
-        for mode in [StorageMode::Full, StorageMode::SQ8, StorageMode::Binary] {
+        for mode in [StorageMode::Full, StorageMode::SQ8, StorageMode::Binary, StorageMode::ProductQuantization] {
             let s = storage_mode_to_string(mode);
             assert_eq!(parse_storage_mode(&s).unwrap(), mode);
         }

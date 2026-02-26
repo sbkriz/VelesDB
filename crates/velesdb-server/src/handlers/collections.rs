@@ -65,12 +65,13 @@ pub async fn create_collection(
         "full" | "f32" => StorageMode::Full,
         "sq8" | "int8" => StorageMode::SQ8,
         "binary" | "bit" => StorageMode::Binary,
+        "pq" | "product_quantization" => StorageMode::ProductQuantization,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!(
-                        "Invalid storage_mode: {}. Valid: full, sq8, binary",
+                        "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
                         req.storage_mode
                     ),
                 }),
