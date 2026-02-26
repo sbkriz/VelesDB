@@ -206,6 +206,9 @@ pub enum StorageMode {
     SQ8,
     /// Binary quantization (1-bit). 32x compression, ~95% recall.
     Binary,
+    /// Product quantization. High compression with trained codebooks.
+    #[serde(alias = "product_quantization")]
+    Pq,
 }
 
 /// Migration options.

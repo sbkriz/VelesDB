@@ -23,8 +23,9 @@ pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
         "full" => Ok(StorageMode::Full),
         "sq8" => Ok(StorageMode::SQ8),
         "binary" => Ok(StorageMode::Binary),
+        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
         _ => Err(JsValue::from_str(
-            "Unknown storage mode. Use: full, sq8, binary",
+            "Unknown storage mode. Use: full, sq8, binary, pq",
         )),
     }
 }
@@ -73,6 +74,12 @@ pub fn create_with_capacity(
         StorageMode::Binary => {
             let bytes_per = dimension.div_ceil(8);
             store.data_binary.reserve(capacity * bytes_per);
+        }
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => {
+            store.data_sq8.reserve(capacity * dimension);
+            store.sq8_mins.reserve(capacity);
+            store.sq8_scales.reserve(capacity);
         }
     }
     store.payloads.reserve(capacity);

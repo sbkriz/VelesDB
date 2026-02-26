@@ -52,7 +52,8 @@ fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
         "full" => Ok(StorageMode::Full),
         "sq8" => Ok(StorageMode::SQ8),
         "binary" => Ok(StorageMode::Binary),
-        _ => Err("Unknown storage mode. Use: full, sq8, binary".to_string()),
+        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
+        _ => Err("Unknown storage mode. Use: full, sq8, binary, pq".to_string()),
     }
 }
 
@@ -131,6 +132,7 @@ mod tests {
         assert!(matches!(parse_storage_mode_inner("full"), Ok(StorageMode::Full)));
         assert!(matches!(parse_storage_mode_inner("SQ8"), Ok(StorageMode::SQ8)));
         assert!(matches!(parse_storage_mode_inner("binary"), Ok(StorageMode::Binary)));
+        assert!(matches!(parse_storage_mode_inner("pq"), Ok(StorageMode::ProductQuantization)));
     }
 
     #[test]
