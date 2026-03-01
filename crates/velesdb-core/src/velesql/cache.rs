@@ -102,8 +102,9 @@ impl QueryCache {
         let canonical_query = canonicalize_query(query);
         let hash = (self.hash_fn)(&canonical_query);
 
-        let cache = self.cache.read();
-        let cached = cache.get(&hash).and_then(|entries| {
+        let cached = {
+            let cache = self.cache.read();
+            cache.get(&hash).and_then(|entries| {
                 entries
                     .iter()
                     .find(|entry| {
@@ -111,32 +112,26 @@ impl QueryCache {
                         entry.original_query == query && entry.canonical_query == canonical_query
                     })
                     .cloned()
-            });
+            })
+        };
 
         if let Some(cached) = cached {
-            let mut order = self.order.write();
-            let mut stats = self.stats.write();
-
-            stats.hits += 1;
-
             let key = CacheKey {
                 hash,
                 original_query: query.to_string(),
             };
 
-            // Keep order/cache synchronized while the cache read-lock is held.
-            if cache.get(&hash).is_some() {
-                // Move to MRU, keeping order duplicate-free.
+            {
+                let mut order = self.order.write();
                 if let Some(pos) = order.iter().position(|existing| existing == &key) {
                     order.remove(pos);
                 }
                 order.push_back(key);
             }
 
+            self.stats.write().hits += 1;
             return Ok(cached.parsed);
         }
-
-        drop(cache);
 
         let parsed = Parser::parse(query)?;
 

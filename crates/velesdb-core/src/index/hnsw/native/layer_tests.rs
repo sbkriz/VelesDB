@@ -94,3 +94,22 @@ fn test_layer_empty_neighbors() {
 
     assert!(layer.get_neighbors(0).is_empty());
 }
+
+#[test]
+fn test_layer_with_neighbors_reads_slice() {
+    let layer = Layer::new(4);
+    layer.set_neighbors(2, vec![7, 8, 9]);
+
+    let len = layer.with_neighbors(2, |neighbors| neighbors.len());
+    assert_eq!(len, Some(3));
+
+    let sum = layer.with_neighbors(2, |neighbors| neighbors.iter().sum::<usize>());
+    assert_eq!(sum, Some(24));
+}
+
+#[test]
+fn test_layer_with_neighbors_out_of_bounds_returns_none() {
+    let layer = Layer::new(1);
+    let result = layer.with_neighbors(99, |neighbors| neighbors.len());
+    assert_eq!(result, None);
+}

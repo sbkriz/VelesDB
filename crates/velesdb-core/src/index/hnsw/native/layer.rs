@@ -38,6 +38,20 @@ impl Layer {
         }
     }
 
+    /// Runs a closure with immutable access to a node's adjacency list under a read lock.
+    pub(crate) fn with_neighbors<R>(
+        &self,
+        node_id: NodeId,
+        f: impl FnOnce(&[NodeId]) -> R,
+    ) -> Option<R> {
+        if node_id < self.neighbors.len() {
+            let guard = self.neighbors[node_id].read();
+            Some(f(&guard))
+        } else {
+            None
+        }
+    }
+
     /// Sets the neighbors for a node.
     pub(crate) fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
         if node_id < self.neighbors.len() {

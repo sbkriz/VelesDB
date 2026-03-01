@@ -3,7 +3,9 @@
 //! Manages per-collection edge stores for graph operations.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 use velesdb_core::collection::graph::{EdgeStore, GraphEdge};
 
 use super::types::TraversalResultItem;
@@ -25,15 +27,11 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal lock is poisoned.
     pub fn get_or_create_store(
         &self,
         collection_name: &str,
     ) -> Result<Arc<RwLock<EdgeStore>>, String> {
-        let mut stores = self
-            .stores
-            .write()
-            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        let mut stores = self.stores.write();
         Ok(stores
             .entry(collection_name.to_string())
             .or_insert_with(|| Arc::new(RwLock::new(EdgeStore::new())))
@@ -44,10 +42,10 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the lock is poisoned or if adding the edge fails.
+    /// Returns an error if adding the edge fails.
     pub fn add_edge(&self, collection_name: &str, edge: GraphEdge) -> Result<(), String> {
         let store = self.get_or_create_store(collection_name)?;
-        let mut guard = store.write().map_err(|e| format!("Lock error: {e}"))?;
+        let mut guard = store.write();
         guard.add_edge(edge).map_err(|e| e.to_string())
     }
 
@@ -55,14 +53,13 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal lock is poisoned.
     pub fn get_edges_by_label(
         &self,
         collection_name: &str,
         label: &str,
     ) -> Result<Vec<GraphEdge>, String> {
         let store = self.get_or_create_store(collection_name)?;
-        let guard = store.read().map_err(|e| format!("Lock poisoned: {e}"))?;
+        let guard = store.read();
         Ok(guard
             .get_edges_by_label(label)
             .into_iter()
@@ -74,13 +71,9 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal lock is poisoned.
     #[allow(clippy::type_complexity)]
     pub fn list_stores(&self) -> Result<Vec<(String, Arc<RwLock<EdgeStore>>)>, String> {
-        let stores = self
-            .stores
-            .read()
-            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        let stores = self.stores.read();
         Ok(stores.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
@@ -88,7 +81,6 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal lock is poisoned.
     pub fn traverse_bfs(
         &self,
         collection_name: &str,
@@ -98,7 +90,7 @@ impl GraphService {
         rel_types: &[String],
     ) -> Result<Vec<TraversalResultItem>, String> {
         let store = self.get_or_create_store(collection_name)?;
-        let guard = store.read().map_err(|e| format!("Lock error: {e}"))?;
+        let guard = store.read();
 
         // PERF: Convert rel_types to HashSet for O(1) lookup instead of O(k)
         let rel_filter: HashSet<&str> = rel_types.iter().map(String::as_str).collect();
@@ -155,7 +147,6 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal lock is poisoned.
     pub fn traverse_dfs(
         &self,
         collection_name: &str,
@@ -165,7 +156,7 @@ impl GraphService {
         rel_types: &[String],
     ) -> Result<Vec<TraversalResultItem>, String> {
         let store = self.get_or_create_store(collection_name)?;
-        let guard = store.read().map_err(|e| format!("Lock error: {e}"))?;
+        let guard = store.read();
 
         // PERF: Convert rel_types to HashSet for O(1) lookup instead of O(k)
         let rel_filter: HashSet<&str> = rel_types.iter().map(String::as_str).collect();
@@ -219,14 +210,13 @@ impl GraphService {
     ///
     /// # Errors
     ///
-    /// Returns an error if the internal lock is poisoned.
     pub fn get_node_degree(
         &self,
         collection_name: &str,
         node_id: u64,
     ) -> Result<(usize, usize), String> {
         let store = self.get_or_create_store(collection_name)?;
-        let guard = store.read().map_err(|e| format!("Lock error: {e}"))?;
+        let guard = store.read();
 
         let in_degree = guard.get_incoming(node_id).len();
         let out_degree = guard.get_outgoing(node_id).len();
