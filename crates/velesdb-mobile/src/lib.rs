@@ -41,8 +41,8 @@ mod types;
 
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
 pub use types::{
-    DistanceMetric, FusionStrategy, IndividualSearchRequest, SearchResult, StorageMode, VelesError,
-    VelesPoint,
+    DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
+    MobileIndexInfo, SearchResult, StorageMode, VelesError, VelesPoint,
 };
 
 use std::sync::Arc;
@@ -706,6 +706,79 @@ impl VelesCollection {
                 score: r.score,
             })
             .collect())
+    }
+
+    /// Flushes collection data to durable storage.
+    pub fn flush(&self) -> Result<(), VelesError> {
+        self.inner.flush()?;
+        Ok(())
+    }
+
+    /// Returns all point IDs currently present in the collection.
+    pub fn all_ids(&self) -> Vec<u64> {
+        self.inner.all_ids()
+    }
+
+    /// Creates a secondary metadata index for a payload field.
+    pub fn create_index(&self, field_name: String) -> Result<(), VelesError> {
+        self.inner.create_index(&field_name)?;
+        Ok(())
+    }
+
+    /// Checks whether a secondary metadata index exists for a field.
+    pub fn has_secondary_index(&self, field_name: String) -> bool {
+        self.inner.has_secondary_index(&field_name)
+    }
+
+    /// Creates a graph/property index for equality lookups.
+    pub fn create_property_index(&self, label: String, property: String) -> Result<(), VelesError> {
+        self.inner.create_property_index(&label, &property)?;
+        Ok(())
+    }
+
+    /// Creates a graph/range index for range queries.
+    pub fn create_range_index(&self, label: String, property: String) -> Result<(), VelesError> {
+        self.inner.create_range_index(&label, &property)?;
+        Ok(())
+    }
+
+    /// Checks if a property index exists.
+    pub fn has_property_index(&self, label: String, property: String) -> bool {
+        self.inner.has_property_index(&label, &property)
+    }
+
+    /// Checks if a range index exists.
+    pub fn has_range_index(&self, label: String, property: String) -> bool {
+        self.inner.has_range_index(&label, &property)
+    }
+
+    /// Lists all index definitions on this collection.
+    pub fn list_indexes(&self) -> Vec<MobileIndexInfo> {
+        self.inner
+            .list_indexes()
+            .into_iter()
+            .map(MobileIndexInfo::from)
+            .collect()
+    }
+
+    /// Drops an index and returns true when something was removed.
+    pub fn drop_index(&self, label: String, property: String) -> Result<bool, VelesError> {
+        Ok(self.inner.drop_index(&label, &property)?)
+    }
+
+    /// Returns total memory usage used by indexes.
+    pub fn indexes_memory_usage(&self) -> u64 {
+        u64::try_from(self.inner.indexes_memory_usage()).unwrap_or(u64::MAX)
+    }
+
+    /// Runs ANALYZE and returns fresh statistics for this collection.
+    pub fn analyze(&self) -> Result<MobileCollectionStats, VelesError> {
+        Ok(self.inner.analyze()?.into())
+    }
+
+    /// Returns the latest known collection statistics snapshot.
+    pub fn get_stats(&self) -> MobileCollectionStats {
+        self.inner.get_stats().into()
     }
 }
 
