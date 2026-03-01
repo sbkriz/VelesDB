@@ -31,7 +31,11 @@ tempfile = "3.14"
 toml = "0.8"
 
 [features]
-default = []
+default = ["velesdb-core/default"]
+gpu = ["velesdb-core/gpu"]
+persistence = ["velesdb-core/persistence"]
+update-check = ["velesdb-core/update-check"]
+loom = ["velesdb-core/loom"]
 
 [lints]
 workspace = true
