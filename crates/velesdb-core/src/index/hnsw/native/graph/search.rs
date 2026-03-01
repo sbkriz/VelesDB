@@ -120,17 +120,24 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let mut best_dist = self.distance.distance(query, &vectors[entry]);
 
             loop {
-                let neighbors = self.with_layers_read(|layers| layers[layer].get_neighbors(best));
-                let mut improved = false;
+                let improved = self.with_layers_read(|layers| {
+                    layers[layer]
+                        .with_neighbors(best, |neighbors| {
+                            let mut improved = false;
 
-                for neighbor in neighbors {
-                    let dist = self.distance.distance(query, &vectors[neighbor]);
-                    if dist < best_dist {
-                        best = neighbor;
-                        best_dist = dist;
-                        improved = true;
-                    }
-                }
+                            for &neighbor in neighbors {
+                                let dist = self.distance.distance(query, &vectors[neighbor]);
+                                if dist < best_dist {
+                                    best = neighbor;
+                                    best_dist = dist;
+                                    improved = true;
+                                }
+                            }
+
+                            improved
+                        })
+                        .unwrap_or(false)
+                });
 
                 if !improved {
                     break;
@@ -178,38 +185,40 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     break;
                 }
 
-                let neighbors = self.with_layers_read(|layers| layers[layer].get_neighbors(c_node));
-
-                if dimension >= 384 && neighbors.len() > prefetch_distance {
-                    for &neighbor_id in neighbors.iter().take(prefetch_distance) {
-                        if neighbor_id < vectors.len() {
-                            crate::simd_native::prefetch_vector(&vectors[neighbor_id]);
-                        }
-                    }
-                }
-
-                for (i, neighbor) in neighbors.iter().enumerate() {
-                    if dimension >= 384 && i + prefetch_distance < neighbors.len() {
-                        let prefetch_id = neighbors[i + prefetch_distance];
-                        if prefetch_id < vectors.len() {
-                            crate::simd_native::prefetch_vector(&vectors[prefetch_id]);
-                        }
-                    }
-
-                    if visited.insert(*neighbor) {
-                        let dist = self.distance.distance(query, &vectors[*neighbor]);
-                        let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
-
-                        if dist < furthest || results.len() < ef {
-                            candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
-                            results.push((OrderedFloat(dist), *neighbor));
-
-                            if results.len() > ef {
-                                results.pop();
+                self.with_layers_read(|layers| {
+                    let _ = layers[layer].with_neighbors(c_node, |neighbors| {
+                        if dimension >= 384 && neighbors.len() > prefetch_distance {
+                            for &neighbor_id in neighbors.iter().take(prefetch_distance) {
+                                if neighbor_id < vectors.len() {
+                                    crate::simd_native::prefetch_vector(&vectors[neighbor_id]);
+                                }
                             }
                         }
-                    }
-                }
+
+                        for (i, neighbor) in neighbors.iter().enumerate() {
+                            if dimension >= 384 && i + prefetch_distance < neighbors.len() {
+                                let prefetch_id = neighbors[i + prefetch_distance];
+                                if prefetch_id < vectors.len() {
+                                    crate::simd_native::prefetch_vector(&vectors[prefetch_id]);
+                                }
+                            }
+
+                            if visited.insert(*neighbor) {
+                                let dist = self.distance.distance(query, &vectors[*neighbor]);
+                                let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
+
+                                if dist < furthest || results.len() < ef {
+                                    candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
+                                    results.push((OrderedFloat(dist), *neighbor));
+
+                                    if results.len() > ef {
+                                        results.pop();
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
             }
         });
 

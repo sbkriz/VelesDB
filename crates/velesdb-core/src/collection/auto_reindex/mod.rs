@@ -33,7 +33,9 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 use std::time::Duration;
 
 use crate::index::hnsw::HnswParams;
@@ -90,56 +92,43 @@ impl AutoReindexManager {
 
     /// Returns whether auto-reindex is enabled
     ///
-    /// Returns `false` if the lock is poisoned (fail-safe).
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        self.config.read().map(|c| c.enabled).unwrap_or(false)
+        self.config.read().enabled
     }
 
     /// Enables or disables auto-reindex
     ///
-    /// Silently fails if the lock is poisoned.
     pub fn set_enabled(&self, enabled: bool) {
-        if let Ok(mut guard) = self.config.write() {
-            guard.enabled = enabled;
-        }
+        self.config.write().enabled = enabled;
     }
 
     /// Updates the configuration
     ///
-    /// Silently fails if the lock is poisoned.
     pub fn set_config(&self, config: AutoReindexConfig) {
-        if let Ok(mut guard) = self.config.write() {
-            *guard = config;
-        }
+        *self.config.write() = config;
     }
 
     /// Gets the current configuration
     ///
-    /// Returns default config if the lock is poisoned.
     #[must_use]
     pub fn config(&self) -> AutoReindexConfig {
-        self.config.read().map(|c| c.clone()).unwrap_or_default()
+        self.config.read().clone()
     }
 
     /// Sets the event callback for reindex lifecycle events
     ///
-    /// Silently fails if the lock is poisoned.
     pub fn on_event<F>(&self, callback: F)
     where
         F: Fn(ReindexEvent) + Send + Sync + 'static,
     {
-        if let Ok(mut guard) = self.event_callback.write() {
-            *guard = Some(Arc::new(callback));
-        }
+        *self.event_callback.write() = Some(Arc::new(callback));
     }
 
     /// Emits an event to the registered callback
     fn emit_event(&self, event: ReindexEvent) {
-        if let Ok(guard) = self.event_callback.read() {
-            if let Some(ref callback) = *guard {
-                callback(event);
-            }
+        if let Some(ref callback) = *self.event_callback.read() {
+            callback(event);
         }
     }
 
@@ -155,7 +144,6 @@ impl AutoReindexManager {
     ///
     /// `DivergenceCheck` with recommendation and details
     ///
-    /// Returns a no-reindex recommendation if the lock is poisoned.
     #[must_use]
     pub fn check_divergence(
         &self,
@@ -163,15 +151,7 @@ impl AutoReindexManager {
         current_size: usize,
         dimension: usize,
     ) -> DivergenceCheck {
-        let Ok(config) = self.config.read() else {
-            return DivergenceCheck {
-                should_reindex: false,
-                current_m: current_params.max_connections,
-                optimal_m: current_params.max_connections,
-                ratio: 1.0,
-                reason: None,
-            };
-        };
+        let config = self.config.read();
 
         // Check minimum size
         if current_size < config.min_size_for_reindex {
@@ -219,7 +199,6 @@ impl AutoReindexManager {
 
     /// Checks if reindex should be triggered (convenience method)
     ///
-    /// Returns `false` if locks are poisoned (fail-safe).
     #[must_use]
     pub fn should_reindex(
         &self,
@@ -228,14 +207,10 @@ impl AutoReindexManager {
         dimension: usize,
     ) -> bool {
         // Check cooldown
-        if let Ok(guard) = self.last_reindex_timestamp.read() {
-            if let Some(last) = *guard {
-                let Ok(config) = self.config.read() else {
-                    return false;
-                };
-                if last.elapsed() < config.cooldown {
-                    return false;
-                }
+        if let Some(last) = *self.last_reindex_timestamp.read() {
+            let config = self.config.read();
+            if last.elapsed() < config.cooldown {
+                return false;
             }
         }
 
@@ -252,21 +227,16 @@ impl AutoReindexManager {
     ///
     /// Returns `Ok(())` if validation passes, `Err(reason)` if rollback needed
     ///
-    /// Returns `Err` if the lock is poisoned.
-    ///
     /// # Errors
     ///
-    /// Returns an error message when lock access fails or when latency/recall
+    /// Returns an error message when latency/recall
     /// regressions exceed configured thresholds.
     pub fn validate_benchmark(
         &self,
         old_benchmark: &BenchmarkResult,
         new_benchmark: &BenchmarkResult,
     ) -> Result<(), String> {
-        let config = self
-            .config
-            .read()
-            .map_err(|_| "Config lock poisoned".to_string())?;
+        let config = self.config.read();
 
         // Check latency regression
         if old_benchmark.latency_p99_us > 0 {
@@ -383,17 +353,13 @@ impl AutoReindexManager {
 
     /// Completes the reindex successfully
     ///
-    /// Returns `false` if the lock is poisoned.
     pub fn complete_reindex(&self, duration: Duration) -> bool {
         if self.state() != ReindexState::Validating && self.state() != ReindexState::Swapping {
             return false;
         }
 
         // Update last reindex timestamp
-        let Ok(mut guard) = self.last_reindex_timestamp.write() else {
-            return false;
-        };
-        *guard = Some(std::time::Instant::now());
+        *self.last_reindex_timestamp.write() = Some(std::time::Instant::now());
 
         self.state
             .store(ReindexState::Idle as u8, Ordering::Release);
