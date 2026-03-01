@@ -149,6 +149,7 @@ class VelesDBVectorStore(VectorStore):
                     self._collection_name,
                     dimension=dimension,
                     metric=self._metric,
+                    storage_mode=self._storage_mode,
                 )
                 # Reload to get the collection object
                 self._collection = db.get_collection(self._collection_name)
@@ -159,6 +160,45 @@ class VelesDBVectorStore(VectorStore):
         id_val = self._next_id
         self._next_id += 1
         return id_val
+
+    def _to_document(self, result: dict) -> Document:
+        """Convert a VelesDB search result into a LangChain Document."""
+        payload = result.get("payload", {})
+        text = payload.get("text", "")
+        metadata = {k: v for k, v in payload.items() if k != "text"}
+        return Document(page_content=text, metadata=metadata)
+
+    def _run_vector_search(
+        self,
+        query_embedding: List[float],
+        k: int,
+        *,
+        filter: Optional[dict] = None,
+        ef_search: Optional[int] = None,
+        ids_only: bool = False,
+    ) -> List[dict]:
+        """Run the appropriate core vector search variant."""
+        dimension = len(query_embedding)
+        collection = self._get_collection(dimension)
+
+        if ids_only:
+            if filter is not None:
+                return collection.search_ids(query_embedding, top_k=k, filter=filter)
+            return collection.search_ids(query_embedding, top_k=k)
+
+        if ef_search is not None:
+            if filter is not None:
+                return collection.search_with_ef(
+                    query_embedding,
+                    top_k=k,
+                    ef_search=ef_search,
+                    filter=filter,
+                )
+            return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
+
+        if filter is not None:
+            return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
+        return collection.search(query_embedding, top_k=k)
 
     def add_texts(
         self,
@@ -270,27 +310,10 @@ class VelesDBVectorStore(VectorStore):
         Returns:
             List of (Document, score) tuples.
         """
-        # Generate query embedding
         query_embedding = self._embedding.embed_query(query)
-        dimension = len(query_embedding)
+        results = self._run_vector_search(query_embedding, k)
 
-        # Get collection
-        collection = self._get_collection(dimension)
-
-        # Search
-        results = collection.search(query_embedding, top_k=k)
-
-        # Convert to Documents
-        documents: List[Tuple[Document, float]] = []
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            metadata = {k: v for k, v in payload.items() if k != "text"}
-            doc = Document(page_content=text, metadata=metadata)
-            score = result.get("score", 0.0)
-            documents.append((doc, score))
-
-        return documents
+        return [(self._to_document(result), result.get("score", 0.0)) for result in results]
 
     def similarity_search_with_relevance_scores(
         self,
@@ -346,29 +369,9 @@ class VelesDBVectorStore(VectorStore):
         Returns:
             List of Documents matching the query and filter.
         """
-        # Generate query embedding
         query_embedding = self._embedding.embed_query(query)
-        dimension = len(query_embedding)
-
-        # Get collection
-        collection = self._get_collection(dimension)
-
-        # Search with filter if provided
-        if filter:
-            results = collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-        else:
-            results = collection.search(query_embedding, top_k=k)
-
-        # Convert to Documents
-        documents: List[Document] = []
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            metadata = {k: v for k, v in payload.items() if k != "text"}
-            doc = Document(page_content=text, metadata=metadata)
-            documents.append(doc)
-
-        return documents
+        results = self._run_vector_search(query_embedding, k, filter=filter)
+        return [self._to_document(result) for result in results]
 
     def hybrid_search(
         self,
@@ -482,6 +485,41 @@ class VelesDBVectorStore(VectorStore):
             documents.append((doc, score))
 
         return documents
+
+    def similarity_search_with_ef(
+        self,
+        query: str,
+        k: int = 4,
+        ef_search: int = 64,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Search using the core HNSW ef_search tuning parameter."""
+        validate_text(query)
+        validate_k(k)
+
+        query_embedding = self._embedding.embed_query(query)
+        results = self._run_vector_search(
+            query_embedding,
+            k,
+            ef_search=ef_search,
+            filter=filter,
+        )
+        return [self._to_document(result) for result in results]
+
+    def similarity_search_ids(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[dict]:
+        """Search returning only {id, score} for parity with velesdb-core."""
+        validate_text(query)
+        validate_k(k)
+
+        query_embedding = self._embedding.embed_query(query)
+        return self._run_vector_search(query_embedding, k, filter=filter, ids_only=True)
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         """Delete documents by ID.
