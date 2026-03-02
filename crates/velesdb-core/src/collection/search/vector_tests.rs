@@ -18,7 +18,12 @@ fn test_search_ids_product_quantization_cosine_scores_stay_in_similarity_domain(
     let points: Vec<Point> = (0u64..160)
         .map(|id| {
             let mut vector: Vec<f32> = (0..16)
-                .map(|d| ((id + 1) as f32 * 0.13 + d as f32 * 0.07).cos())
+                .map(|d| {
+                    let id_term = f32::from(u16::try_from(id + 1).expect("id fits in u16")) * 0.13;
+                    let d_term =
+                        f32::from(u16::try_from(d).expect("dimension index fits in u16")) * 0.07;
+                    (id_term + d_term).cos()
+                })
                 .collect();
             let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
             if norm > 0.0 {

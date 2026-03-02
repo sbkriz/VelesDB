@@ -18,7 +18,12 @@ fn test_upsert_product_quantization_after_training_backfills_cache() {
     let points: Vec<Point> = (0u64..128)
         .map(|id| {
             let mut vector: Vec<f32> = (0..16)
-                .map(|d| ((id + 1) as f32 * 0.17 + d as f32 * 0.11).sin())
+                .map(|d| {
+                    let id_term = f32::from(u16::try_from(id + 1).expect("id fits in u16")) * 0.17;
+                    let d_term =
+                        f32::from(u16::try_from(d).expect("dimension index fits in u16")) * 0.11;
+                    (id_term + d_term).sin()
+                })
                 .collect();
             let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
             if norm > 0.0 {
