@@ -146,28 +146,32 @@ impl Collection {
                 }
             }
             StorageMode::ProductQuantization => {
-                let maybe_code: Option<PQVector> = {
-                    let mut quantizer_guard = self.pq_quantizer.write();
-                    if quantizer_guard.is_none() {
-                        let mut buffer = self.pq_training_buffer.write();
-                        buffer.push_back(point.vector.clone());
-                        if buffer.len() >= PQ_TRAINING_SAMPLES {
-                            let training: Vec<Vec<f32>> = buffer.iter().cloned().collect();
-                            let num_centroids = 256usize.min(training.len().max(2));
-                            *quantizer_guard = Some(ProductQuantizer::train(
-                                &training,
-                                auto_num_subspaces(point.vector.len()),
-                                num_centroids,
-                            ));
-                        }
+                let mut quantizer_guard = self.pq_quantizer.write();
+                let mut backfill_samples: Vec<(u64, Vec<f32>)> = Vec::new();
+
+                if quantizer_guard.is_none() {
+                    let mut buffer = self.pq_training_buffer.write();
+                    buffer.push_back((point.id, point.vector.clone()));
+                    if buffer.len() >= PQ_TRAINING_SAMPLES {
+                        let training: Vec<Vec<f32>> =
+                            buffer.iter().map(|(_, vector)| vector.clone()).collect();
+                        let num_centroids = 256usize.min(training.len().max(2));
+                        *quantizer_guard = Some(ProductQuantizer::train(
+                            &training,
+                            auto_num_subspaces(point.vector.len()),
+                            num_centroids,
+                        ));
+                        backfill_samples = buffer.drain(..).collect();
+                    }
+                }
+
+                if let (Some(cache), Some(quantizer)) = (pq_cache, quantizer_guard.as_ref()) {
+                    for (id, vector) in backfill_samples {
+                        let code = quantizer.quantize(&vector);
+                        cache.insert(id, code);
                     }
 
-                    quantizer_guard
-                        .as_ref()
-                        .map(|quantizer| quantizer.quantize(&point.vector))
-                };
-
-                if let (Some(cache), Some(code)) = (pq_cache, maybe_code) {
+                    let code = quantizer.quantize(&point.vector);
                     cache.insert(point.id, code);
                 }
             }

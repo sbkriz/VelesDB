@@ -114,7 +114,7 @@ impl ProductQuantizer {
 
 /// Asymmetric distance computation (ADC): query is f32, candidate is PQ-coded.
 #[must_use]
-pub fn distance_pq(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCodebook) -> f32 {
+pub fn distance_pq_l2(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCodebook) -> f32 {
     assert_eq!(query_vector.len(), codebook.dimension);
     assert_eq!(pq_vector.codes.len(), codebook.num_subspaces);
 
@@ -138,6 +138,12 @@ pub fn distance_pq(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCode
         .map(|(subspace, &code)| lookup_tables[subspace][usize::from(code)])
         .sum::<f32>()
         .sqrt()
+}
+
+/// Backward-compatible alias for L2 ADC distance.
+#[must_use]
+pub fn distance_pq(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCodebook) -> f32 {
+    distance_pq_l2(query_vector, pq_vector, codebook)
 }
 
 fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
@@ -222,7 +228,7 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
 
 #[cfg(test)]
 mod tests {
-    use super::{distance_pq, ProductQuantizer};
+    use super::{distance_pq_l2, ProductQuantizer};
 
     #[test]
     fn train_builds_expected_codebook_shape() {
@@ -284,8 +290,8 @@ mod tests {
         let far = pq.quantize(&[5.0, 5.0, 5.0, 5.0]);
         let query = [0.0, 0.0, 0.0, 0.0];
 
-        let d_near = distance_pq(&query, &near, &pq.codebook);
-        let d_far = distance_pq(&query, &far, &pq.codebook);
+        let d_near = distance_pq_l2(&query, &near, &pq.codebook);
+        let d_far = distance_pq_l2(&query, &far, &pq.codebook);
 
         assert!(d_near < d_far, "ADC did not preserve proximity ordering");
     }

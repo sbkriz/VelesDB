@@ -171,6 +171,27 @@ class TestGraphLoader:
         call_args = mock_collection.upsert_metadata.call_args[0][0][0]
         assert call_args["payload"]["text_preview"] == ""
 
+    def test_load_from_nodes_on_vector_collection_without_vectors(self):
+        """load_from_nodes should still store metadata on vector collections."""
+        from llamaindex_velesdb import GraphLoader
+
+        mock_store = MagicMock()
+        mock_collection = MagicMock()
+        mock_collection.info.return_value = {"metadata_only": False}
+        mock_store._collection = mock_collection
+
+        mock_node = MagicMock()
+        mock_node.node_id = "test-node-vector-collection"
+        mock_node.get_content.return_value = "Vector collection node"
+        mock_node.metadata = {"source": "doc.txt"}
+
+        loader = GraphLoader(mock_store)
+        result = loader.load_from_nodes([mock_node], node_label="DOCUMENT")
+
+        assert result["nodes"] == 1
+        assert result["edges"] == 0
+        mock_collection.upsert_metadata.assert_called_once()
+
     def test_add_node_no_collection_raises(self):
         """Test that add_node raises when collection cannot be initialized."""
         from llamaindex_velesdb import GraphLoader

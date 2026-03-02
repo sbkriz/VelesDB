@@ -7,6 +7,8 @@
 //!   `list_indexes`, `drop_index`
 
 mod crud;
+#[cfg(test)]
+mod crud_tests;
 mod graph_api;
 mod index_management;
 #[cfg(test)]

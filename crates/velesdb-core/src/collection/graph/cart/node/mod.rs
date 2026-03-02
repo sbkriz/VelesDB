@@ -297,7 +297,7 @@ impl CARTNode {
                             if removed && child.is_empty() {
                                 children[i] = None;
                                 let n = *num_children as usize;
-                                for j in i..n - 1 {
+                                for j in i..n.saturating_sub(1) {
                                     keys[j] = keys[j + 1];
                                     children[j] = children[j + 1].take();
                                 }
@@ -325,7 +325,7 @@ impl CARTNode {
                         if removed && child.is_empty() {
                             children[idx] = None;
                             let n = *num_children as usize;
-                            for j in idx..n - 1 {
+                            for j in idx..n.saturating_sub(1) {
                                 keys[j] = keys[j + 1];
                                 children[j] = children[j + 1].take();
                             }

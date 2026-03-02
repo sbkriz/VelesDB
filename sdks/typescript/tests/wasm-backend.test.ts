@@ -167,6 +167,27 @@ describe('WasmBackend', () => {
       // No error means success
     });
 
+    it('should forward payload docs in insertBatch via insert_with_payload', async () => {
+      await backend.insertBatch('vectors', [
+        { id: '1', vector: [1.0, 0.0, 0.0, 0.0], payload: { category: 'A' } },
+        { id: '2', vector: [0.0, 1.0, 0.0, 0.0] },
+      ]);
+
+      const collections = (backend as any).collections;
+      const store = collections.get('vectors').store as MockVectorStore;
+
+      expect(store.insert_with_payload).toHaveBeenCalledTimes(1);
+      expect(store.insert_with_payload).toHaveBeenCalledWith(
+        BigInt(1),
+        expect.any(Float32Array),
+        { category: 'A' },
+      );
+      expect(store.insert_batch).toHaveBeenCalledTimes(1);
+      expect(store.insert_batch).toHaveBeenCalledWith([
+        [BigInt(2), [0.0, 1.0, 0.0, 0.0]],
+      ]);
+    });
+
     it('should search vectors', async () => {
       const results = await backend.search('vectors', [1.0, 0.0, 0.0, 0.0], { k: 2 });
       expect(results.length).toBe(2);

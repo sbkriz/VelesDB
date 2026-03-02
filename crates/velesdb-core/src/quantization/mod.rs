@@ -18,7 +18,7 @@ mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
-pub use pq::{distance_pq, PQCodebook, PQVector, ProductQuantizer};
+pub use pq::{distance_pq, distance_pq_l2, PQCodebook, PQVector, ProductQuantizer};
 
 // Re-export scalar quantization
 pub use scalar::{

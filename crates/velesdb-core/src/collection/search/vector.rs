@@ -1,10 +1,11 @@
 //! Vector similarity search methods for Collection.
 
 use crate::collection::types::Collection;
+use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
-use crate::quantization::{distance_pq, StorageMode};
+use crate::quantization::{distance_pq_l2, PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{PayloadStorage, VectorStorage};
 
 impl Collection {
@@ -12,6 +13,7 @@ impl Collection {
         let config = self.config.read();
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
+        let metric = config.metric;
         drop(config);
 
         if !is_pq {
@@ -31,7 +33,7 @@ impl Collection {
             .into_iter()
             .map(|(id, fallback_score)| {
                 let score = pq_cache.get(&id).map_or(fallback_score, |pq_vec| {
-                    distance_pq(query, pq_vec, &quantizer.codebook)
+                    rescore_with_metric(query, pq_vec, quantizer, metric)
                 });
                 (id, score)
             })
@@ -46,6 +48,21 @@ impl Collection {
         });
         rescored.truncate(k);
         rescored
+    }
+}
+
+fn rescore_with_metric(
+    query: &[f32],
+    pq_vec: &PQVector,
+    quantizer: &ProductQuantizer,
+    metric: DistanceMetric,
+) -> f32 {
+    match metric {
+        DistanceMetric::Euclidean => distance_pq_l2(query, pq_vec, &quantizer.codebook),
+        _ => {
+            let reconstructed = quantizer.reconstruct(pq_vec);
+            metric.calculate(query, &reconstructed)
+        }
     }
 }
 

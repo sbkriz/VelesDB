@@ -17,6 +17,8 @@
 
 mod grouped;
 mod having;
+#[cfg(test)]
+mod having_tests;
 
 use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;

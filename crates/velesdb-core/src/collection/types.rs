@@ -163,7 +163,8 @@ pub struct Collection {
     pub(super) pq_quantizer: Arc<RwLock<Option<ProductQuantizer>>>,
 
     /// Buffer of first vectors used to train PQ codebooks.
-    pub(super) pq_training_buffer: Arc<RwLock<VecDeque<Vec<f32>>>>,
+    /// Stores `(point_id, vector)` so trained quantizers can backfill cache entries.
+    pub(super) pq_training_buffer: Arc<RwLock<VecDeque<(u64, Vec<f32>)>>>,
 
     /// Property index for O(1) equality lookups on graph nodes (EPIC-009).
     pub(super) property_index: Arc<RwLock<PropertyIndex>>,

@@ -17,6 +17,8 @@ mod query_validation_tests;
 mod similarity_exec_tests;
 mod text;
 mod vector;
+#[cfg(test)]
+mod vector_tests;
 
 // Re-export all search methods via trait implementations
 // The actual impl blocks are in submodules
