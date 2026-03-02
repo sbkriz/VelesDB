@@ -21,6 +21,7 @@
 #![allow(clippy::doc_markdown)] // API names and parameter labels are kept verbatim in docs.
 
 mod batch;
+mod brute_force;
 mod constructors;
 mod search;
 mod trait_impl;
@@ -36,6 +37,7 @@ use super::sharded_vectors::ShardedVectors;
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
+use std::sync::atomic::AtomicU64;
 
 // Native persistence - no HnswIo needed (v1.0+)
 type HnswIo = ();
@@ -117,6 +119,12 @@ pub struct HnswIndex {
     ///
     /// Default: `true` (full functionality)
     pub(crate) enable_vector_storage: bool,
+    /// Optional soft latency target for two-stage reranking (microseconds).
+    ///
+    /// `0` disables latency-aware rerank adaptation.
+    pub(crate) rerank_latency_target_us: AtomicU64,
+    /// Exponential moving average of two-stage rerank latency (microseconds).
+    pub(crate) rerank_latency_ema_us: AtomicU64,
     /// Holds the `HnswIo` for loaded indices.
     ///
     /// # Safety

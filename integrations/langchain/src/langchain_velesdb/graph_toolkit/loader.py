@@ -5,11 +5,15 @@ Handles conversion from extracted data to VelesDB graph storage format.
 
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 import hashlib
+import logging
+import velesdb
 
 if TYPE_CHECKING:
     from velesdb import Database, Collection
 
 from langchain_velesdb.graph_toolkit.extractor import Entity, Relation
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_id(name: str, entity_type: str) -> int:
@@ -46,12 +50,32 @@ class GraphLoader:
         self.collection_name = collection_name
         self.embedding_fn = embedding_fn
         self._collection: Optional["Collection"] = None
+        self._graph_store = getattr(db, "graph_store", None)
+        if self._graph_store is None and hasattr(velesdb, "GraphStore"):
+            self._graph_store = velesdb.GraphStore()
+        self._metadata_only = False
 
-    @property
-    def collection(self) -> "Collection":
-        """Get or create the collection."""
+    def _get_or_create_collection(self, dimension: Optional[int] = None) -> "Collection":
+        """Get an existing collection or create one using real Python bindings."""
         if self._collection is None:
-            self._collection = self.db.get_or_create_collection(self.collection_name)
+            existing = self.db.get_collection(self.collection_name)
+            if existing is not None:
+                self._collection = existing
+                info = existing.info()
+                self._metadata_only = bool(info.get("metadata_only", False))
+                return existing
+
+            if dimension is not None:
+                self._collection = self.db.create_collection(
+                    self.collection_name,
+                    dimension=dimension,
+                    metric="cosine",
+                    storage_mode="full",
+                )
+                self._metadata_only = False
+            else:
+                self._collection = self.db.create_metadata_collection(self.collection_name)
+                self._metadata_only = True
         return self._collection
 
     def load(
@@ -90,22 +114,29 @@ class GraphLoader:
                 vector = self.embedding_fn(text)
 
             try:
-                if vector:
-                    self.collection.add_node(
-                        id=entity_id,
-                        label=entity.entity_type,
-                        vector=vector,
-                        metadata=metadata,
-                    )
+                collection = self._get_or_create_collection(
+                    len(vector) if vector is not None else None
+                )
+                if vector is not None and not self._metadata_only:
+                    collection.upsert([{
+                        "id": entity_id,
+                        "vector": vector,
+                        "payload": {
+                            "label": entity.entity_type,
+                            **metadata,
+                        },
+                    }])
                 else:
-                    self.collection.add_node(
-                        id=entity_id,
-                        label=entity.entity_type,
-                        metadata=metadata,
-                    )
+                    collection.upsert_metadata([{
+                        "id": entity_id,
+                        "payload": {
+                            "label": entity.entity_type,
+                            **metadata,
+                        },
+                    }])
                 nodes_added += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load entity '%s' into graph collection: %s", entity.name, exc)
 
         for relation in relations:
             source_id = entity_map.get(relation.source)
@@ -119,17 +150,26 @@ class GraphLoader:
                 relation.relation_type,
             )
 
+            if self._graph_store is None:
+                continue
+
             try:
-                self.collection.add_edge(
-                    id=edge_id,
-                    source=source_id,
-                    target=target_id,
-                    label=relation.relation_type,
-                    metadata=relation.properties,
-                )
+                self._graph_store.add_edge({
+                    "id": edge_id,
+                    "source": source_id,
+                    "target": target_id,
+                    "label": relation.relation_type,
+                    "properties": relation.properties,
+                })
                 edges_added += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to add relation '%s' -> '%s' (%s): %s",
+                    relation.source,
+                    relation.target,
+                    relation.relation_type,
+                    exc,
+                )
 
         return {"nodes": nodes_added, "edges": edges_added}
 

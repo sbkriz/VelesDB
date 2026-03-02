@@ -48,6 +48,24 @@ pub fn insert_vector(store: &mut VectorStore, id: u64, vector: &[f32]) {
                 store.data_binary.push(byte);
             }
         }
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => {
+            let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
+                (min.min(v), max.max(v))
+            });
+            let scale = if (max - min).abs() < 1e-10 {
+                1.0
+            } else {
+                255.0 / (max - min)
+            };
+            store.sq8_mins.push(min);
+            store.sq8_scales.push(scale);
+            for &v in vector {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
+                store.data_sq8.push(quantized);
+            }
+        }
     }
 }
 
@@ -102,6 +120,24 @@ pub fn insert_with_payload(
                 store.data_binary.push(byte);
             }
         }
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => {
+            let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
+                (min.min(v), max.max(v))
+            });
+            let scale = if (max - min).abs() < 1e-10 {
+                1.0
+            } else {
+                255.0 / (max - min)
+            };
+            store.sq8_mins.push(min);
+            store.sq8_scales.push(scale);
+            for &v in vector {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
+                store.data_sq8.push(quantized);
+            }
+        }
     }
 }
 
@@ -128,6 +164,14 @@ pub fn remove_at_index(store: &mut VectorStore, idx: usize) {
             let start = idx * bytes_per;
             let end = start + bytes_per;
             store.data_binary.drain(start..end);
+        }
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => {
+            store.sq8_mins.swap_remove(idx);
+            store.sq8_scales.swap_remove(idx);
+            let start = idx * store.dimension;
+            let end = start + store.dimension;
+            store.data_sq8.drain(start..end);
         }
     }
 }

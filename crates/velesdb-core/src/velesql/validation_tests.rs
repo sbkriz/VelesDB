@@ -7,6 +7,7 @@ use super::ast::{
     CompareOp, Comparison, Condition, Query, SelectColumns, SelectStatement, SimilarityCondition,
     Value, VectorExpr,
 };
+use super::error::ParseErrorKind;
 use super::validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};
 
 // ============================================================================
@@ -636,7 +637,7 @@ fn test_validation_error_display() {
     let err = ValidationError::multiple_similarity("test");
     let display = format!("{err}");
     assert!(display.contains("V001"));
-    assert!(display.contains("sequential queries"));
+    assert!(display.contains("Use AND instead of OR with similarity()"));
 }
 
 #[test]
@@ -884,4 +885,81 @@ fn test_has_not_similarity_false() {
 fn test_validation_error_is_error_trait() {
     let err = ValidationError::multiple_similarity("test");
     let _: &dyn std::error::Error = &err;
+}
+
+#[test]
+fn test_complexity_rejects_query_length() {
+    let query = create_simple_query();
+    let cfg = ValidationConfig {
+        max_query_length: 8,
+        ..ValidationConfig::default()
+    };
+    let err = QueryValidator::enforce_query_complexity(&query, "SELECT * FROM docs", &cfg)
+        .expect_err("must reject long query");
+    assert_eq!(err.kind, ParseErrorKind::ComplexityLimit);
+    assert!(err.message.contains("Query length exceeded"));
+}
+
+#[test]
+fn test_complexity_rejects_like_budget() {
+    let c1 = Condition::Like(super::ast::LikeCondition {
+        column: "title".into(),
+        pattern: "%rust%".into(),
+        case_insensitive: false,
+    });
+    let c2 = Condition::Like(super::ast::LikeCondition {
+        column: "body".into(),
+        pattern: "%db%".into(),
+        case_insensitive: true,
+    });
+
+    let query = Query {
+        select: SelectStatement {
+            distinct: super::ast::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: "docs".into(),
+            from_alias: None,
+            joins: vec![],
+            where_clause: Some(Condition::And(Box::new(c1), Box::new(c2))),
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: None,
+    };
+
+    let cfg = ValidationConfig {
+        max_like_ilike_terms: 1,
+        ..ValidationConfig::default()
+    };
+    let err = QueryValidator::enforce_query_complexity(&query, "SELECT", &cfg)
+        .expect_err("must reject like budget");
+    assert!(err.message.contains("LIKE/ILIKE budget exceeded"));
+}
+
+#[test]
+fn test_complexity_rejects_graph_expansion_budget() {
+    let parsed = super::Parser::parse("MATCH (a)-[*1..5]->(b) RETURN a").expect("valid");
+    let mc = parsed
+        .match_clause
+        .as_ref()
+        .expect("graph query should include match clause");
+    assert_eq!(mc.patterns.len(), 1);
+    assert_eq!(mc.patterns[0].relationships.len(), 1);
+    assert_eq!(mc.patterns[0].relationships[0].range, Some((1, 5)));
+
+    let cfg = ValidationConfig {
+        max_graph_expansion: 3,
+        ..ValidationConfig::default()
+    };
+    let err =
+        QueryValidator::enforce_query_complexity(&parsed, "MATCH (a)-[*1..5]->(b) RETURN a", &cfg)
+            .expect_err("must reject graph expansion");
+    assert!(err.message.contains("Graph expansion exceeded"));
 }

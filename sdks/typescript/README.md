@@ -62,7 +62,7 @@ await db.init();
 
 // Same API as WASM backend
 await db.createCollection('products', { dimension: 1536 });
-await db.insert('products', { id: 'p1', vector: [...] });
+await db.insert('products', { id: 1, vector: [...] });
 const results = await db.search('products', query, { k: 10 });
 ```
 
@@ -120,6 +120,10 @@ await db.insert('docs', {
   vector: [0.1, 0.2, ...],  // or Float32Array
   payload: { key: 'value' } // optional metadata
 });
+
+// REST backend note:
+// IDs must be numeric and within JS safe integer range (0..Number.MAX_SAFE_INTEGER).
+// Non-numeric strings are rejected.
 ```
 
 ### `db.insertBatch(collection, documents)`
@@ -189,6 +193,12 @@ const results = await db.query(
   "SELECT * FROM docs WHERE VECTOR NEAR $v AND content MATCH 'rust' LIMIT 10",
   { v: queryVector }
 );
+
+// Aggregation query (returns { result, stats })
+const agg = await db.query(
+  'documents',
+  "SELECT COUNT(*) AS total FROM documents"
+);
 ```
 
 ### `db.multiQuerySearch(collection, vectors, options)` (v1.1.0+) ⭐ NEW
@@ -224,7 +234,7 @@ const results = await db.multiQuerySearch('docs', vectors, {
 });
 ```
 
-> **Note:** Multi-query fusion is only available with the REST backend.
+> **Note:** WASM supports `rrf`, `average`, `maximum`. `weighted` is REST-only.
 
 ### `db.isEmpty(collection)` (v0.8.11+)
 

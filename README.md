@@ -12,8 +12,8 @@
 </h3>
 
 <p align="center">
-  <strong>� v1.4.0 Released</strong> — VelesQL v2.0, MATCH queries, Multi-Score Fusion, 100% Ecosystem Complete<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.0">Download Now</a> • <a href="#-quick-start">Quick Start</a>
+  <strong>🚀 v1.4.1 Released</strong> — Ecosystem crates synced on crates.io + hardened release workflow<br/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.1">Download Now</a> • <a href="#-quick-start">Quick Start</a>
 </p>
 
 <p align="center">
@@ -29,6 +29,15 @@
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/velesdb-core"><img src="https://img.shields.io/crates/v/velesdb-core?style=flat-square" alt="velesdb-core version"></a>
+  <a href="https://crates.io/crates/velesdb-server"><img src="https://img.shields.io/crates/v/velesdb-server?style=flat-square" alt="velesdb-server version"></a>
+  <a href="https://crates.io/crates/velesdb-cli"><img src="https://img.shields.io/crates/v/velesdb-cli?style=flat-square" alt="velesdb-cli version"></a>
+  <a href="https://crates.io/crates/velesdb-migrate"><img src="https://img.shields.io/crates/v/velesdb-migrate?style=flat-square" alt="velesdb-migrate version"></a>
+  <a href="https://crates.io/crates/velesdb-mobile"><img src="https://img.shields.io/crates/v/velesdb-mobile?style=flat-square" alt="velesdb-mobile version"></a>
+  <a href="https://crates.io/crates/tauri-plugin-velesdb"><img src="https://img.shields.io/crates/v/tauri-plugin-velesdb?style=flat-square" alt="tauri-plugin-velesdb version"></a>
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
@@ -207,6 +216,32 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | **Browser-side Search**       | WASM module, zero backend           |
 | **Edge/IoT Devices**          | 15MB footprint, ARM NEON optimized  |
 | **On-Prem / Air-Gapped**      | No cloud dependency, full data sovereignty |
+
+---
+
+## 🧭 New to `velesdb-core` and VelesQL? Quick diagnosis (first-hour issues)
+
+If you're new to VelesDB, most "it doesn't work" moments come from a **model mismatch**, not from runtime bugs.
+
+### Symptom → probable cause → immediate fix
+
+| Symptom | Probable cause | Immediate fix |
+|---|---|---|
+| `MATCH` query fails or behaves unlike SQL | VelesQL is SQL-like, not PostgreSQL/MySQL-compatible SQL | Start from VelesQL examples, then adapt queries incrementally |
+| Query returns 0 rows | Vector dimension mismatch, strict threshold, or empty collection | Verify dimension first, remove strict filters, retest |
+| Can't change metric/dimension after create | Collection schema is intentionally immutable for HNSW/SIMD performance | Create a new collection and reindex data |
+| Installed `velesdb-core` but no HTTP endpoint/REPL | `velesdb-core` is embedded engine only | Add `velesdb-server` (HTTP) and/or `velesdb-cli` (REPL) |
+| Benchmarks don't match your machine | Hardware/workload/config differences (`ef_search`, payload, filters) | Benchmark with your real dataset and query distribution |
+
+### Fast sanity sequence (recommended)
+
+1. Confirm embedding dimension == collection dimension.
+2. Run a permissive nearest-neighbor query (no strict filters).
+3. Validate at least one known inserted vector is retrievable.
+4. Add thresholds and metadata filters progressively.
+5. Tune `ef_search` after functional correctness is validated.
+
+For an actionable bilingual checklist (EN + FR), see **[docs/NEW_USER_TROUBLESHOOTING.md](docs/NEW_USER_TROUBLESHOOTING.md)**.
 
 ---
 
@@ -436,6 +471,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}` | `DELETE` | Delete a collection |
 | `/collections/{name}/empty` | `POST` | Remove all points from a collection |
 | `/collections/{name}/flush` | `POST` | Flush collection data to disk |
+| `/collections/{name}/sanity` | `GET` | Quick collection diagnostics (readiness and counters) |
 
 ### Points
 
@@ -483,6 +519,7 @@ curl -X POST http://localhost:8080/query \
 - `GROUP BY` / `HAVING` with AND/OR operators
 - `ORDER BY` multi-column + `similarity()` function
 - `JOIN ... ON` across collections (inner join runtime support)
+- `JOIN ... USING (...)` runtime supports single-column only (`USING (a, b)` rejected)
 - `UNION` / `INTERSECT` / `EXCEPT` set operations
 - `USING FUSION(strategy='rrf')` hybrid search
 - `WITH (max_groups=100)` query-time config

@@ -20,7 +20,9 @@ import type {
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
-  QueryResponse,
+  QueryApiResponse,
+  ExplainResponse,
+  CollectionSanityResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -230,6 +232,36 @@ export class VelesDB {
     if (!Array.isArray(doc.vector) && !(doc.vector instanceof Float32Array)) {
       throw new ValidationError('Vector must be an array or Float32Array');
     }
+
+    if (
+      this.config.backend === 'rest' &&
+      (
+        typeof doc.id !== 'number' ||
+        !Number.isInteger(doc.id) ||
+        doc.id < 0 ||
+        doc.id > Number.MAX_SAFE_INTEGER
+      )
+    ) {
+      throw new ValidationError(
+        `REST backend requires numeric u64-compatible document IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER})`
+      );
+    }
+  }
+
+  private validateRestPointId(id: string | number): void {
+    if (
+      this.config.backend === 'rest' &&
+      (
+        typeof id !== 'number' ||
+        !Number.isInteger(id) ||
+        id < 0 ||
+        id > Number.MAX_SAFE_INTEGER
+      )
+    ) {
+      throw new ValidationError(
+        `REST backend requires numeric u64-compatible document IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER})`
+      );
+    }
   }
 
   /**
@@ -293,6 +325,7 @@ export class VelesDB {
    */
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
+    this.validateRestPointId(id);
     return this.backend.delete(collection, id);
   }
 
@@ -305,6 +338,7 @@ export class VelesDB {
    */
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
+    this.validateRestPointId(id);
     return this.backend.get(collection, id);
   }
 
@@ -385,7 +419,7 @@ export class VelesDB {
     queryString: string,
     params?: Record<string, unknown>,
     options?: QueryOptions
-  ): Promise<QueryResponse> {
+  ): Promise<QueryApiResponse> {
     this.ensureInitialized();
 
     if (!collection || typeof collection !== 'string') {
@@ -426,6 +460,27 @@ export class VelesDB {
    * });
    * ```
    */
+
+  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
+    this.ensureInitialized();
+
+    if (!queryString || typeof queryString !== 'string') {
+      throw new ValidationError('Query string must be a non-empty string');
+    }
+
+    return this.backend.queryExplain(queryString, params);
+  }
+
+  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+
+    if (!collection || typeof collection !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+
+    return this.backend.collectionSanity(collection);
+  }
+
   async multiQuerySearch(
     collection: string,
     vectors: Array<number[] | Float32Array>,

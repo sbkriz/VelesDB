@@ -8,7 +8,7 @@ use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use parking_lot::RwLock;
 use std::path::PathBuf;
@@ -83,9 +83,13 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         };
 
         collection.save_config()?;
@@ -170,9 +174,13 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         };
 
         collection.save_config()?;
@@ -279,9 +287,13 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 

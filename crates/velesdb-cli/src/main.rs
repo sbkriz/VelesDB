@@ -69,6 +69,7 @@ enum StorageModeArg {
     Full,
     Sq8,
     Binary,
+    Pq,
 }
 
 impl From<StorageModeArg> for StorageMode {
@@ -77,6 +78,7 @@ impl From<StorageModeArg> for StorageMode {
             StorageModeArg::Full => StorageMode::Full,
             StorageModeArg::Sq8 => StorageMode::SQ8,
             StorageModeArg::Binary => StorageMode::Binary,
+            StorageModeArg::Pq => StorageMode::ProductQuantization,
         }
     }
 }

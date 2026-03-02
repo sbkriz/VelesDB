@@ -198,11 +198,15 @@ class TestGraphLoader:
 
     def test_load_entities_and_relations(self):
         mock_collection = Mock()
-        mock_collection.add_node = Mock()
-        mock_collection.add_edge = Mock()
+        mock_collection.upsert = Mock()
+        mock_collection.upsert_metadata = Mock()
+        mock_collection.info = Mock(return_value={"metadata_only": True})
 
         mock_db = Mock()
-        mock_db.get_or_create_collection = Mock(return_value=mock_collection)
+        mock_db.get_collection = Mock(return_value=None)
+        mock_db.create_metadata_collection = Mock(return_value=mock_collection)
+        mock_graph_store = Mock()
+        mock_db.graph_store = mock_graph_store
 
         loader = GraphLoader(mock_db)
 
@@ -218,16 +222,20 @@ class TestGraphLoader:
 
         assert result["nodes"] == 2
         assert result["edges"] == 1
-        assert mock_collection.add_node.call_count == 2
-        assert mock_collection.add_edge.call_count == 1
+        assert mock_collection.upsert_metadata.call_count == 2
+        assert mock_graph_store.add_edge.call_count == 1
 
     def test_load_skips_invalid_relations(self):
         mock_collection = Mock()
-        mock_collection.add_node = Mock()
-        mock_collection.add_edge = Mock()
+        mock_collection.upsert = Mock()
+        mock_collection.upsert_metadata = Mock()
+        mock_collection.info = Mock(return_value={"metadata_only": True})
 
         mock_db = Mock()
-        mock_db.get_or_create_collection = Mock(return_value=mock_collection)
+        mock_db.get_collection = Mock(return_value=None)
+        mock_db.create_metadata_collection = Mock(return_value=mock_collection)
+        mock_graph_store = Mock()
+        mock_db.graph_store = mock_graph_store
 
         loader = GraphLoader(mock_db)
 
@@ -238,6 +246,31 @@ class TestGraphLoader:
 
         assert result["nodes"] == 1
         assert result["edges"] == 0
+        assert mock_graph_store.add_edge.call_count == 0
+
+    def test_load_relation_uses_properties_key_not_metadata(self):
+        """Contract parity: GraphStore edges must use `properties` key."""
+        mock_collection = Mock()
+        mock_collection.upsert = Mock()
+        mock_collection.upsert_metadata = Mock()
+        mock_collection.info = Mock(return_value={"metadata_only": True})
+
+        mock_db = Mock()
+        mock_db.get_collection = Mock(return_value=None)
+        mock_db.create_metadata_collection = Mock(return_value=mock_collection)
+        mock_graph_store = Mock()
+        mock_db.graph_store = mock_graph_store
+
+        loader = GraphLoader(mock_db)
+        entities = [Entity("Alice", "PERSON"), Entity("Acme", "ORGANIZATION")]
+        relations = [Relation("Alice", "Acme", "WORKS_AT", {"since": "2024"})]
+
+        loader.load(entities, relations, generate_embeddings=False)
+
+        call_arg = mock_graph_store.add_edge.call_args[0][0]
+        assert "properties" in call_arg
+        assert "metadata" not in call_arg
+        assert call_arg["properties"] == {"since": "2024"}
 
 
 if __name__ == "__main__":

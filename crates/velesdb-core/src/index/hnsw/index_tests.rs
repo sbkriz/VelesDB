@@ -438,6 +438,68 @@ fn test_hnsw_persistence() {
 }
 
 #[test]
+fn test_hnsw_load_legacy_snapshot_without_vectors_disables_vacuum() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    // Arrange: create a valid snapshot then remove vector sidecar to simulate legacy format.
+    let dir = tempdir().unwrap();
+    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+    index.save(dir.path()).unwrap();
+    fs::remove_file(dir.path().join("native_vectors.bin")).unwrap();
+
+    // Act: load snapshot missing vectors.
+    let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+
+    // Assert: keep queryability but block vacuum that would otherwise rebuild from missing vectors.
+    assert_eq!(loaded_index.len(), 2);
+    assert!(!loaded_index.has_vector_storage());
+    assert_eq!(
+        loaded_index.vacuum(),
+        Err(VacuumError::VectorStorageDisabled)
+    );
+    assert_eq!(loaded_index.len(), 2);
+}
+
+#[test]
+fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let index = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+
+    index.save(dir.path()).unwrap();
+    assert!(!dir.path().join("native_vectors.bin").exists());
+
+    let loaded = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+    assert!(!loaded.has_vector_storage());
+}
+
+#[test]
+fn test_hnsw_fast_insert_save_removes_stale_vectors_file() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    // Write a regular snapshot first (with vectors sidecar).
+    let regular = HnswIndex::new(3, DistanceMetric::Cosine);
+    regular.insert(1, &[1.0, 0.0, 0.0]);
+    regular.save(dir.path()).unwrap();
+    assert!(dir.path().join("native_vectors.bin").exists());
+
+    // Overwrite with fast-insert snapshot; stale vectors file must be removed.
+    let fast = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    fast.insert(2, &[0.0, 1.0, 0.0]);
+    fast.save(dir.path()).unwrap();
+
+    assert!(!dir.path().join("native_vectors.bin").exists());
+}
+
+#[test]
 fn test_hnsw_insert_batch_parallel() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine);
@@ -1155,6 +1217,94 @@ fn test_recall_quality_minimum_threshold() {
         "Recall@{k} should be >= 80% for Accurate, got {:.1}%",
         recall * 100.0
     );
+}
+
+#[test]
+fn test_rerank_latency_target_configuration_roundtrip() {
+    let index = HnswIndex::new(32, DistanceMetric::Cosine);
+    assert_eq!(index.rerank_latency_target_us(), 0);
+
+    index.set_rerank_latency_target_us(250);
+    assert_eq!(index.rerank_latency_target_us(), 250);
+}
+
+#[test]
+fn test_rerank_latency_ema_updates_after_two_stage_search() {
+    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    index.set_rerank_latency_target_us(1);
+
+    for i in 0u64..1500 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i * 5 + j as u64) as f32 * 0.0013).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.009).cos()).collect();
+    let _ = index.search_with_quality(&query, 20, SearchQuality::Accurate);
+
+    assert!(index.rerank_latency_ema_us() > 0);
+}
+
+#[test]
+fn test_update_rerank_latency_ema_large_current_does_not_overflow() {
+    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+
+    for i in 0u64..400 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i * 3 + j as u64) as f32 * 0.0021).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    index
+        .rerank_latency_ema_us
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.011).cos()).collect();
+    let results = index.search_with_quality(&query, 20, SearchQuality::Accurate);
+
+    assert!(!results.is_empty());
+
+    let ema = index.rerank_latency_ema_us();
+    let expected_min = (u64::MAX / 10) * 7;
+    assert!(ema >= expected_min, "EMA underflow/wrap detected: {ema}");
+}
+
+#[test]
+fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression() {
+    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+
+    for i in 0u64..2000 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i + j as u64) as f32 * 0.001).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.013).cos()).collect();
+    let results = index.search_with_quality(&query, 20, SearchQuality::Custom(512));
+
+    assert!(!results.is_empty());
+    assert!(results.len() <= 20);
+}
+
+#[test]
+fn test_search_with_quality_accurate_stays_stable_on_medium_dataset() {
+    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+
+    for i in 0u64..5000 {
+        let v: Vec<f32> = (0..128)
+            .map(|j| ((i * 3 + j as u64) as f32 * 0.0007).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.007).sin()).collect();
+    let results = index.search_with_quality(&query, 15, SearchQuality::Accurate);
+
+    assert!(!results.is_empty());
+    assert!(results.len() <= 15);
 }
 
 // =========================================================================

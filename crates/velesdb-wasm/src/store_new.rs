@@ -1,33 +1,6 @@
 //! Constructor helpers for `VectorStore`.
 
 use crate::{DistanceMetric, StorageMode, VectorStore};
-use wasm_bindgen::JsValue;
-
-/// Parses a metric string to `DistanceMetric`.
-pub fn parse_metric(metric: &str) -> Result<DistanceMetric, JsValue> {
-    match metric.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceMetric::Cosine),
-        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
-        "dot" | "dotproduct" | "inner" => Ok(DistanceMetric::DotProduct),
-        "hamming" => Ok(DistanceMetric::Hamming),
-        "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err(JsValue::from_str(
-            "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
-        )),
-    }
-}
-
-/// Parses a storage mode string to `StorageMode`.
-pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
-    match mode.to_lowercase().as_str() {
-        "full" => Ok(StorageMode::Full),
-        "sq8" => Ok(StorageMode::SQ8),
-        "binary" => Ok(StorageMode::Binary),
-        _ => Err(JsValue::from_str(
-            "Unknown storage mode. Use: full, sq8, binary",
-        )),
-    }
-}
 
 /// Creates a new empty `VectorStore`.
 pub fn create_store(
@@ -73,6 +46,12 @@ pub fn create_with_capacity(
         StorageMode::Binary => {
             let bytes_per = dimension.div_ceil(8);
             store.data_binary.reserve(capacity * bytes_per);
+        }
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => {
+            store.data_sq8.reserve(capacity * dimension);
+            store.sq8_mins.reserve(capacity);
+            store.sq8_scales.reserve(capacity);
         }
     }
     store.payloads.reserve(capacity);

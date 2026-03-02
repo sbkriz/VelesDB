@@ -26,6 +26,7 @@
 
 mod aggregation;
 mod distinct;
+mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
@@ -401,7 +402,7 @@ impl Collection {
                     // Pure text search - no filter needed
                     self.text_search(&m.query, execution_limit)
                 } else {
-                    // Generic metadata filter: perform a scan (fallback).
+                    // Generic metadata filter with optional secondary index acceleration.
                     // If condition only contains graph predicates, scan all then graph-filter.
                     if skip_metadata_prefilter_for_graph_or {
                         self.execute_scan_query(
@@ -411,10 +412,16 @@ impl Collection {
                             execution_limit,
                         )
                     } else if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
-                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
-                            metadata_cond,
-                        ));
-                        self.execute_scan_query(&filter, execution_limit)
+                        if let Some(indexed_results) =
+                            self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
+                        {
+                            indexed_results
+                        } else {
+                            let filter = crate::filter::Filter::new(
+                                crate::filter::Condition::from(metadata_cond),
+                            );
+                            self.execute_scan_query(&filter, execution_limit)
+                        }
                     } else {
                         self.execute_scan_query(
                             &crate::filter::Filter::new(crate::filter::Condition::And {
@@ -461,57 +468,6 @@ impl Collection {
         results.truncate(limit);
 
         Ok(results)
-    }
-
-    pub(crate) fn evaluate_graph_match_anchor_ids(
-        &self,
-        predicate: &crate::velesql::GraphMatchPredicate,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        from_alias: Option<&str>,
-    ) -> Result<HashSet<u64>> {
-        let pattern = &predicate.pattern;
-        let first_node = pattern.nodes.first().ok_or_else(|| {
-            crate::error::Error::Config("MATCH predicate requires at least one node".to_string())
-        })?;
-
-        let anchor_alias = first_node.alias.clone().ok_or_else(|| {
-            crate::error::Error::Config(
-                "MATCH predicate in SELECT WHERE requires an alias on the first node, e.g. MATCH (d:Doc)-[:REL]->(x)"
-                    .to_string(),
-            )
-        })?;
-
-        if let Some(from_alias) = from_alias {
-            if from_alias != anchor_alias {
-                return Err(crate::error::Error::Config(format!(
-                    "MATCH predicate anchor alias '{}' must match FROM alias '{}'",
-                    anchor_alias, from_alias
-                )));
-            }
-        }
-
-        let clause = crate::velesql::MatchClause {
-            patterns: vec![predicate.pattern.clone()],
-            where_clause: None,
-            return_clause: crate::velesql::ReturnClause {
-                items: vec![crate::velesql::ReturnItem {
-                    expression: "*".to_string(),
-                    alias: None,
-                }],
-                order_by: None,
-                // Internal anchor evaluation must not silently cap MATCH results.
-                limit: Some(u64::MAX),
-            },
-        };
-
-        let matches = self.execute_match(&clause, params)?;
-        let mut ids = HashSet::with_capacity(matches.len());
-        for m in matches {
-            if let Some(id) = m.bindings.get(&anchor_alias) {
-                ids.insert(*id);
-            }
-        }
-        Ok(ids)
     }
 
     // NOTE: apply_distinct and compute_distinct_key moved to distinct.rs

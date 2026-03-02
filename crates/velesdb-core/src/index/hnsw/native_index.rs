@@ -94,7 +94,7 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if file operations fail.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        use super::persistence::{self, HnswMappingsData, HnswMeta};
+        use super::persistence::{self, HnswMappingsData, HnswMeta, HnswVectorsData};
 
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
@@ -113,6 +113,21 @@ impl NativeHnswIndex {
                 next_idx,
             },
         )?;
+
+        if self.enable_vector_storage {
+            persistence::save_vectors(
+                path,
+                &HnswVectorsData {
+                    vectors: self.vectors.collect_for_parallel(),
+                },
+            )?;
+        } else {
+            // Keep on-disk state unambiguous in fast-insert mode.
+            let vectors_path = path.join("native_vectors.bin");
+            if vectors_path.exists() {
+                std::fs::remove_file(vectors_path)?;
+            }
+        }
 
         // Save metadata
         persistence::save_meta(
@@ -160,13 +175,32 @@ impl NativeHnswIndex {
             mappings_data.next_idx,
         );
 
+        let (vectors, enable_vector_storage) = if meta.enable_vector_storage {
+            match persistence::load_vectors(path) {
+                Ok(vectors_data) => {
+                    let vectors = ShardedVectors::new(meta.dimension);
+                    vectors.insert_batch(vectors_data.vectors);
+                    (vectors, true)
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::debug!(
+                        "native_vectors.bin missing during NativeHNSW load; disabling vector storage"
+                    );
+                    (ShardedVectors::new(meta.dimension), false)
+                }
+                Err(err) => return Err(err),
+            }
+        } else {
+            (ShardedVectors::new(meta.dimension), false)
+        };
+
         Ok(Self {
             dimension: meta.dimension,
             metric: meta.metric,
             inner: RwLock::new(inner),
             mappings,
-            vectors: ShardedVectors::new(meta.dimension),
-            enable_vector_storage: meta.enable_vector_storage,
+            vectors,
+            enable_vector_storage,
             params: HnswParams::auto(meta.dimension),
         })
     }
@@ -199,6 +233,13 @@ impl NativeHnswIndex {
         self.inner.read().is_empty()
     }
 
+    /// Returns whether vector storage is enabled.
+    #[inline]
+    #[must_use]
+    pub fn has_vector_storage(&self) -> bool {
+        self.enable_vector_storage
+    }
+
     /// Searches for the k nearest neighbors.
     pub fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
         self.search_with_quality(query, k, SearchQuality::Balanced)
@@ -228,16 +269,21 @@ impl NativeHnswIndex {
 
     /// Inserts a single vector.
     ///
-    /// # Panics
-    ///
-    /// Panics if internal ID allocation fails (should never happen in practice).
+    /// Internal mapping races are handled defensively: if a concurrent
+    /// registration race violates the mapping invariant, insertion is skipped.
     pub fn insert(&self, id: u64, vector: &[f32]) {
         // Register ID and get internal index (or get existing)
-        let internal_idx = self.mappings.register(id).unwrap_or_else(|| {
-            self.mappings
-                .get_idx(id)
-                .expect("ID should exist after register attempt")
-        });
+        let internal_idx = self
+            .mappings
+            .register(id)
+            .or_else(|| self.mappings.get_idx(id));
+        let Some(internal_idx) = internal_idx else {
+            debug_assert!(
+                false,
+                "Invariant violated: register returned None but ID missing from mappings"
+            );
+            return;
+        };
         self.inner.read().insert((vector, internal_idx));
 
         if self.enable_vector_storage {
@@ -247,18 +293,24 @@ impl NativeHnswIndex {
 
     /// Batch insert multiple vectors.
     ///
-    /// # Panics
-    ///
-    /// Panics if internal ID allocation fails (should never happen in practice).
+    /// Internal mapping races are handled defensively: if a concurrent
+    /// registration race violates the mapping invariant, insertion is skipped.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) {
         let data: Vec<(Vec<f32>, usize)> = items
             .iter()
-            .map(|(id, vec)| {
+            .filter_map(|(id, vec)| {
                 let idx = self
                     .mappings
                     .register(*id)
-                    .unwrap_or_else(|| self.mappings.get_idx(*id).expect("ID should exist"));
-                (vec.clone(), idx)
+                    .or_else(|| self.mappings.get_idx(*id));
+                let Some(idx) = idx else {
+                    debug_assert!(
+                        false,
+                        "Invariant violated: register returned None but ID missing from mappings"
+                    );
+                    return None;
+                };
+                Some((vec.clone(), idx))
             })
             .collect();
 

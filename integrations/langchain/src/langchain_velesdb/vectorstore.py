@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+import time
 from typing import Any, Iterable, List, Optional, Tuple, Type
 
 from langchain_core.documents import Document
@@ -117,7 +118,6 @@ class VelesDBVectorStore(VectorStore):
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
-        self._next_id = 1
 
     @property
     def embeddings(self) -> Embeddings:
@@ -149,16 +149,70 @@ class VelesDBVectorStore(VectorStore):
                     self._collection_name,
                     dimension=dimension,
                     metric=self._metric,
+                    storage_mode=self._storage_mode,
                 )
                 # Reload to get the collection object
                 self._collection = db.get_collection(self._collection_name)
         return self._collection
 
-    def _generate_id(self) -> int:
-        """Generate a unique ID for a document."""
-        id_val = self._next_id
-        self._next_id += 1
-        return id_val
+    @staticmethod
+    def _to_point_id(id_str: str) -> int:
+        """Convert external id string into the internal numeric point id."""
+        try:
+            parsed = int(id_str)
+            if parsed >= 0:
+                return parsed
+        except ValueError:
+            pass
+        return _stable_hash_id(id_str)
+
+    def _generate_auto_id(self) -> tuple[str, int]:
+        """Generate a process-independent document id and matching point id."""
+        if hasattr(uuid, "uuid7"):
+            token = str(uuid.uuid7())
+        else:
+            token = f"{time.time_ns()}-{uuid.uuid4()}"
+        point_id = _stable_hash_id(token)
+        return str(point_id), point_id
+
+    def _to_document(self, result: dict) -> Document:
+        """Convert a VelesDB search result into a LangChain Document."""
+        payload = result.get("payload", {})
+        text = payload.get("text", "")
+        metadata = {k: v for k, v in payload.items() if k != "text"}
+        return Document(page_content=text, metadata=metadata)
+
+    def _run_vector_search(
+        self,
+        query_embedding: List[float],
+        k: int,
+        *,
+        filter: Optional[dict] = None,
+        ef_search: Optional[int] = None,
+        ids_only: bool = False,
+    ) -> List[dict]:
+        """Run the appropriate core vector search variant."""
+        dimension = len(query_embedding)
+        collection = self._get_collection(dimension)
+
+        if ids_only:
+            if filter is not None:
+                return collection.search_ids(query_embedding, top_k=k, filter=filter)
+            return collection.search_ids(query_embedding, top_k=k)
+
+        if ef_search is not None:
+            if filter is not None:
+                return collection.search_with_ef(
+                    query_embedding,
+                    top_k=k,
+                    ef_search=ef_search,
+                    filter=filter,
+                )
+            return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
+
+        if filter is not None:
+            return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
+        return collection.search(query_embedding, top_k=k)
 
     def add_texts(
         self,
@@ -204,11 +258,9 @@ class VelesDBVectorStore(VectorStore):
             # Generate or use provided ID
             if ids and i < len(ids):
                 doc_id = ids[i]
-                # Convert string ID to int for VelesDB
-                int_id = _stable_hash_id(doc_id)
+                int_id = self._to_point_id(doc_id)
             else:
-                int_id = self._generate_id()
-                doc_id = str(int_id)
+                doc_id, int_id = self._generate_auto_id()
 
             result_ids.append(doc_id)
 
@@ -270,27 +322,10 @@ class VelesDBVectorStore(VectorStore):
         Returns:
             List of (Document, score) tuples.
         """
-        # Generate query embedding
         query_embedding = self._embedding.embed_query(query)
-        dimension = len(query_embedding)
+        results = self._run_vector_search(query_embedding, k)
 
-        # Get collection
-        collection = self._get_collection(dimension)
-
-        # Search
-        results = collection.search(query_embedding, top_k=k)
-
-        # Convert to Documents
-        documents: List[Tuple[Document, float]] = []
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            metadata = {k: v for k, v in payload.items() if k != "text"}
-            doc = Document(page_content=text, metadata=metadata)
-            score = result.get("score", 0.0)
-            documents.append((doc, score))
-
-        return documents
+        return [(self._to_document(result), result.get("score", 0.0)) for result in results]
 
     def similarity_search_with_relevance_scores(
         self,
@@ -346,29 +381,9 @@ class VelesDBVectorStore(VectorStore):
         Returns:
             List of Documents matching the query and filter.
         """
-        # Generate query embedding
         query_embedding = self._embedding.embed_query(query)
-        dimension = len(query_embedding)
-
-        # Get collection
-        collection = self._get_collection(dimension)
-
-        # Search with filter if provided
-        if filter:
-            results = collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-        else:
-            results = collection.search(query_embedding, top_k=k)
-
-        # Convert to Documents
-        documents: List[Document] = []
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            metadata = {k: v for k, v in payload.items() if k != "text"}
-            doc = Document(page_content=text, metadata=metadata)
-            documents.append(doc)
-
-        return documents
+        results = self._run_vector_search(query_embedding, k, filter=filter)
+        return [self._to_document(result) for result in results]
 
     def hybrid_search(
         self,
@@ -483,6 +498,41 @@ class VelesDBVectorStore(VectorStore):
 
         return documents
 
+    def similarity_search_with_ef(
+        self,
+        query: str,
+        k: int = 4,
+        ef_search: int = 64,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Search using the core HNSW ef_search tuning parameter."""
+        validate_text(query)
+        validate_k(k)
+
+        query_embedding = self._embedding.embed_query(query)
+        results = self._run_vector_search(
+            query_embedding,
+            k,
+            ef_search=ef_search,
+            filter=filter,
+        )
+        return [self._to_document(result) for result in results]
+
+    def similarity_search_ids(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[dict]:
+        """Search returning only {id, score} for parity with velesdb-core."""
+        validate_text(query)
+        validate_k(k)
+
+        query_embedding = self._embedding.embed_query(query)
+        return self._run_vector_search(query_embedding, k, filter=filter, ids_only=True)
+
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         """Delete documents by ID.
 
@@ -501,7 +551,7 @@ class VelesDBVectorStore(VectorStore):
             return False
 
         # Convert string IDs to int
-        int_ids = [_stable_hash_id(id_str) for id_str in ids]
+        int_ids = [self._to_point_id(id_str) for id_str in ids]
         self._collection.delete(int_ids)
         return True
 
@@ -681,10 +731,9 @@ class VelesDBVectorStore(VectorStore):
         for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
             if ids and i < len(ids):
                 doc_id = ids[i]
-                int_id = _stable_hash_id(doc_id)
+                int_id = self._to_point_id(doc_id)
             else:
-                int_id = self._generate_id()
-                doc_id = str(int_id)
+                doc_id, int_id = self._generate_auto_id()
 
             result_ids.append(doc_id)
 

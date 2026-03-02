@@ -3,9 +3,22 @@
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
+use crate::index::{JsonValue, SecondaryIndex};
 use crate::point::Point;
-use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
+use crate::quantization::{
+    BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
+};
 use crate::storage::{PayloadStorage, VectorStorage};
+
+const PQ_TRAINING_SAMPLES: usize = 128;
+
+fn auto_num_subspaces(dimension: usize) -> usize {
+    let mut num_subspaces = 8usize;
+    while num_subspaces > 1 && dimension % num_subspaces != 0 {
+        num_subspaces /= 2;
+    }
+    num_subspaces.max(1)
+}
 
 impl Collection {
     /// Inserts or updates points in the collection.
@@ -25,18 +38,15 @@ impl Collection {
         let name = config.name.clone();
         drop(config);
 
-        // Reject vectors on metadata-only collections
         if metadata_only {
             for point in &points {
                 if !point.vector.is_empty() {
                     return Err(Error::VectorNotAllowed(name));
                 }
             }
-            // Delegate to upsert_metadata for metadata-only collections
             return self.upsert_metadata(points);
         }
 
-        // Validate dimensions first
         for point in &points {
             if point.dimension() != dimension {
                 return Err(Error::DimensionMismatch {
@@ -49,7 +59,6 @@ impl Collection {
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
 
-        // Get quantized caches if needed
         let mut sq8_cache = match storage_mode {
             StorageMode::SQ8 => Some(self.sq8_cache.write()),
             _ => None,
@@ -58,31 +67,25 @@ impl Collection {
             StorageMode::Binary => Some(self.binary_cache.write()),
             _ => None,
         };
+        let mut pq_cache = match storage_mode {
+            StorageMode::ProductQuantization => Some(self.pq_cache.write()),
+            _ => None,
+        };
 
         for point in points {
-            // 1. Store Vector
+            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             vector_storage
                 .store(point.id, &point.vector)
                 .map_err(Error::Io)?;
 
-            // 2. Store quantized vector based on storage_mode
-            match storage_mode {
-                StorageMode::SQ8 => {
-                    if let Some(ref mut cache) = sq8_cache {
-                        let quantized = QuantizedVector::from_f32(&point.vector);
-                        cache.insert(point.id, quantized);
-                    }
-                }
-                StorageMode::Binary => {
-                    if let Some(ref mut cache) = binary_cache {
-                        let quantized = BinaryQuantizedVector::from_f32(&point.vector);
-                        cache.insert(point.id, quantized);
-                    }
-                }
-                StorageMode::Full => {}
-            }
+            self.cache_quantized_vector(
+                &point,
+                storage_mode,
+                sq8_cache.as_deref_mut(),
+                binary_cache.as_deref_mut(),
+                pq_cache.as_deref_mut(),
+            );
 
-            // 3. Store Payload (if present)
             if let Some(payload) = &point.payload {
                 payload_storage
                     .store(point.id, payload)
@@ -91,10 +94,14 @@ impl Collection {
                 let _ = payload_storage.delete(point.id);
             }
 
-            // 4. Update Vector Index
+            self.update_secondary_indexes_on_upsert(
+                point.id,
+                old_payload.as_ref(),
+                point.payload.as_ref(),
+            );
+
             self.index.insert(point.id, &point.vector);
 
-            // 5. Update BM25 Text Index
             if let Some(payload) = &point.payload {
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
@@ -117,6 +124,61 @@ impl Collection {
         Ok(())
     }
 
+    fn cache_quantized_vector(
+        &self,
+        point: &Point,
+        storage_mode: StorageMode,
+        sq8_cache: Option<&mut std::collections::HashMap<u64, QuantizedVector>>,
+        binary_cache: Option<&mut std::collections::HashMap<u64, BinaryQuantizedVector>>,
+        pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
+    ) {
+        match storage_mode {
+            StorageMode::SQ8 => {
+                if let Some(cache) = sq8_cache {
+                    let quantized = QuantizedVector::from_f32(&point.vector);
+                    cache.insert(point.id, quantized);
+                }
+            }
+            StorageMode::Binary => {
+                if let Some(cache) = binary_cache {
+                    let quantized = BinaryQuantizedVector::from_f32(&point.vector);
+                    cache.insert(point.id, quantized);
+                }
+            }
+            StorageMode::ProductQuantization => {
+                let mut quantizer_guard = self.pq_quantizer.write();
+                let mut backfill_samples: Vec<(u64, Vec<f32>)> = Vec::new();
+
+                if quantizer_guard.is_none() {
+                    let mut buffer = self.pq_training_buffer.write();
+                    buffer.push_back((point.id, point.vector.clone()));
+                    if buffer.len() >= PQ_TRAINING_SAMPLES {
+                        let training: Vec<Vec<f32>> =
+                            buffer.iter().map(|(_, vector)| vector.clone()).collect();
+                        let num_centroids = 256usize.min(training.len().max(2));
+                        *quantizer_guard = Some(ProductQuantizer::train(
+                            &training,
+                            auto_num_subspaces(point.vector.len()),
+                            num_centroids,
+                        ));
+                        backfill_samples = buffer.drain(..).collect();
+                    }
+                }
+
+                if let (Some(cache), Some(quantizer)) = (pq_cache, quantizer_guard.as_ref()) {
+                    for (id, vector) in backfill_samples {
+                        let code = quantizer.quantize(&vector);
+                        cache.insert(id, code);
+                    }
+
+                    let code = quantizer.quantize(&point.vector);
+                    cache.insert(point.id, code);
+                }
+            }
+            StorageMode::Full => {}
+        }
+    }
+
     /// Inserts or updates metadata-only points (no vectors).
     ///
     /// This method is for metadata-only collections. Points should have
@@ -131,6 +193,7 @@ impl Collection {
         let mut payload_storage = self.payload_storage.write();
 
         for point in &points {
+            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             // Store Payload (metadata-only points must have payload)
             if let Some(payload) = &point.payload {
                 payload_storage
@@ -146,6 +209,12 @@ impl Collection {
                 let _ = payload_storage.delete(point.id);
                 self.text_index.remove_document(point.id);
             }
+
+            self.update_secondary_indexes_on_upsert(
+                point.id,
+                old_payload.as_ref(),
+                point.payload.as_ref(),
+            );
         }
 
         // Update point count
@@ -181,7 +250,6 @@ impl Collection {
         let dimension = config.dimension;
         drop(config);
 
-        // Validate dimensions first
         for point in points {
             if point.dimension() != dimension {
                 return Err(Error::DimensionMismatch {
@@ -298,8 +366,10 @@ impl Collection {
         if is_metadata_only {
             // For metadata-only collections, only delete from payload storage
             for &id in ids {
+                let old_payload = payload_storage.retrieve(id).ok().flatten();
                 payload_storage.delete(id).map_err(Error::Io)?;
                 self.text_index.remove_document(id);
+                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
 
             let mut config = self.config.write();
@@ -309,10 +379,15 @@ impl Collection {
             let mut vector_storage = self.vector_storage.write();
 
             for &id in ids {
+                let old_payload = payload_storage.retrieve(id).ok().flatten();
                 vector_storage.delete(id).map_err(Error::Io)?;
                 payload_storage.delete(id).map_err(Error::Io)?;
                 self.index.remove(id);
+                self.sq8_cache.write().remove(&id);
+                self.binary_cache.write().remove(&id);
+                self.pq_cache.write().remove(&id);
                 self.text_index.remove_document(id);
+                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
 
             let mut config = self.config.write();
@@ -320,6 +395,67 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    fn update_secondary_indexes_on_upsert(
+        &self,
+        id: u64,
+        old_payload: Option<&serde_json::Value>,
+        new_payload: Option<&serde_json::Value>,
+    ) {
+        let indexes = self.secondary_indexes.read();
+        for (field, index) in indexes.iter() {
+            if let Some(old_value) = old_payload
+                .and_then(|p| p.get(field))
+                .and_then(JsonValue::from_json)
+            {
+                self.remove_from_secondary_index(index, &old_value, id);
+            }
+            if let Some(new_value) = new_payload
+                .and_then(|p| p.get(field))
+                .and_then(JsonValue::from_json)
+            {
+                self.insert_into_secondary_index(index, new_value, id);
+            }
+        }
+    }
+
+    fn update_secondary_indexes_on_delete(&self, id: u64, old_payload: Option<&serde_json::Value>) {
+        let Some(payload) = old_payload else {
+            return;
+        };
+        let indexes = self.secondary_indexes.read();
+        for (field, index) in indexes.iter() {
+            if let Some(old_value) = payload.get(field).and_then(JsonValue::from_json) {
+                self.remove_from_secondary_index(index, &old_value, id);
+            }
+        }
+    }
+
+    fn insert_into_secondary_index(&self, index: &SecondaryIndex, key: JsonValue, id: u64) {
+        match index {
+            SecondaryIndex::BTree(tree) => {
+                let mut tree = tree.write();
+                let ids = tree.entry(key).or_default();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+
+    fn remove_from_secondary_index(&self, index: &SecondaryIndex, key: &JsonValue, id: u64) {
+        match index {
+            SecondaryIndex::BTree(tree) => {
+                let mut tree = tree.write();
+                if let Some(ids) = tree.get_mut(key) {
+                    ids.retain(|existing| *existing != id);
+                    if ids.is_empty() {
+                        tree.remove(key);
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the number of points in the collection.

@@ -251,6 +251,9 @@ let point3 = Point::without_payload(3, vector);
 
 VelesQL is a SQL-like query language. The distance metric is **always** the one defined at collection creation.
 
+> **JOIN runtime limit:** `JOIN ... USING (...)` currently supports **one column only**.  
+> Multi-column `USING (a, b, ...)` is parsed but rejected at execution time.
+
 ```sql
 -- Vector similarity search
 SELECT * FROM docs WHERE VECTOR NEAR [0.1, 0.2, ...] LIMIT 5;

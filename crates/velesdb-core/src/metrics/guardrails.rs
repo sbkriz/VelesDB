@@ -6,6 +6,7 @@
 //! - Rate limiting decisions
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 /// Metrics specific to graph traversal operations.
 #[derive(Debug, Default)]
@@ -145,6 +146,14 @@ pub struct GuardRailsMetrics {
     pub rate_limit_allowed: AtomicU64,
     /// Rate limit requests rejected
     pub rate_limit_rejected: AtomicU64,
+    /// LIKE/ILIKE guardrail rejections
+    pub like_guardrail_rejected: AtomicU64,
+    /// Parser condition-depth limit rejections
+    pub parser_depth_limit_rejected: AtomicU64,
+    /// Invalid storage offset read errors
+    pub invalid_offset_read_errors: AtomicU64,
+    /// Query-cache collision fallback counter (reserved for hash-keyed implementations)
+    pub cache_collision_fallback_total: AtomicU64,
 }
 
 impl GuardRailsMetrics {
@@ -172,6 +181,29 @@ impl GuardRailsMetrics {
         } else {
             self.rate_limit_rejected.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Records a LIKE/ILIKE guardrail rejection.
+    pub fn record_like_guardrail_rejected(&self) {
+        self.like_guardrail_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a parser condition-depth rejection.
+    pub fn record_parser_depth_limit_rejected(&self) {
+        self.parser_depth_limit_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records an invalid offset read error in storage.
+    pub fn record_invalid_offset_read_error(&self) {
+        self.invalid_offset_read_errors
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a cache collision fallback event.
+    pub fn record_cache_collision_fallback(&self) {
+        self.cache_collision_fallback_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Exports guard-rails metrics in Prometheus format.
@@ -223,8 +255,76 @@ impl GuardRailsMetrics {
             self.rate_limit_rejected.load(Ordering::Relaxed)
         );
 
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_like_guardrail_rejected_total LIKE/ILIKE guardrail rejections"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_like_guardrail_rejected_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_like_guardrail_rejected_total {}",
+            self.like_guardrail_rejected.load(Ordering::Relaxed)
+        );
+
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_parser_depth_limit_rejected_total Parser depth-limit rejections"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_parser_depth_limit_rejected_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_parser_depth_limit_rejected_total {}",
+            self.parser_depth_limit_rejected.load(Ordering::Relaxed)
+        );
+
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_invalid_offset_read_errors_total Invalid storage offset read errors"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_invalid_offset_read_errors_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_invalid_offset_read_errors_total {}",
+            self.invalid_offset_read_errors.load(Ordering::Relaxed)
+        );
+
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_cache_collision_fallback_total Query-cache collision fallbacks"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_cache_collision_fallback_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_cache_collision_fallback_total {}",
+            self.cache_collision_fallback_total.load(Ordering::Relaxed)
+        );
+
         output
     }
+}
+
+static GUARDRAILS_METRICS: OnceLock<GuardRailsMetrics> = OnceLock::new();
+
+/// Returns process-wide guardrail metrics instance used by runtime hardening paths.
+#[must_use]
+pub fn global_guardrails_metrics() -> &'static GuardRailsMetrics {
+    GUARDRAILS_METRICS.get_or_init(GuardRailsMetrics::default)
 }
 
 #[cfg(test)]
@@ -303,12 +403,20 @@ mod tests {
         let metrics = GuardRailsMetrics::new();
         metrics.record_limit_exceeded(LimitType::Timeout);
         metrics.record_rate_limit(false);
+        metrics.record_like_guardrail_rejected();
+        metrics.record_parser_depth_limit_rejected();
+        metrics.record_invalid_offset_read_error();
+        metrics.record_cache_collision_fallback();
 
         let output = metrics.export_prometheus();
 
         assert!(output.contains("velesdb_limits_exceeded_total"));
         assert!(output.contains("limit_type=\"timeout\""));
         assert!(output.contains("velesdb_rate_limit_requests_total"));
+        assert!(output.contains("velesdb_like_guardrail_rejected_total 1"));
+        assert!(output.contains("velesdb_parser_depth_limit_rejected_total 1"));
+        assert!(output.contains("velesdb_invalid_offset_read_errors_total 1"));
+        assert!(output.contains("velesdb_cache_collision_fallback_total 1"));
     }
 
     #[test]

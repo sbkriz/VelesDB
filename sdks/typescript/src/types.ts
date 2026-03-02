@@ -12,6 +12,9 @@ export type StorageMode = 'full' | 'sq8' | 'binary';
 /** Backend type for VelesDB connection */
 export type BackendType = 'wasm' | 'rest';
 
+/** Numeric point ID required by velesdb-server REST API (`u64`). */
+export type RestPointId = number;
+
 /** Configuration options for VelesDB client */
 export interface VelesDBConfig {
   /** Backend type: 'wasm' for browser/Node.js, 'rest' for server */
@@ -263,9 +266,82 @@ export interface QueryResponse {
   stats: QueryStats;
 }
 
+/** Aggregation query response from VelesQL (`GROUP BY`, `COUNT`, `SUM`, etc.). */
+export interface AggregationQueryResponse {
+  /** Aggregation result payload as returned by server. */
+  result: Record<string, unknown> | unknown[];
+  /** Execution statistics */
+  stats: QueryStats;
+}
+
+/** Unified response type for `query()` (rows or aggregation). */
+export type QueryApiResponse = QueryResponse | AggregationQueryResponse;
+
 // ============================================================================
 // Index Management Types (EPIC-009)
 // ============================================================================
+
+
+
+/** Query explain request/response metadata */
+export interface ExplainPlanStep {
+  step: number;
+  operation: string;
+  description: string;
+  estimatedRows: number | null;
+}
+
+export interface ExplainCost {
+  usesIndex: boolean;
+  indexName: string | null;
+  selectivity: number;
+  complexity: string;
+}
+
+export interface ExplainFeatures {
+  hasVectorSearch: boolean;
+  hasFilter: boolean;
+  hasOrderBy: boolean;
+  hasGroupBy: boolean;
+  hasAggregation: boolean;
+  hasJoin: boolean;
+  hasFusion: boolean;
+  limit: number | null;
+  offset: number | null;
+}
+
+export interface ExplainResponse {
+  query: string;
+  queryType: string;
+  collection: string;
+  plan: ExplainPlanStep[];
+  estimatedCost: ExplainCost;
+  features: ExplainFeatures;
+}
+
+export interface CollectionSanityChecks {
+  hasVectors: boolean;
+  searchReady: boolean;
+  dimensionConfigured: boolean;
+}
+
+export interface CollectionSanityDiagnostics {
+  searchRequestsTotal: number;
+  dimensionMismatchTotal: number;
+  emptySearchResultsTotal: number;
+  filterParseErrorsTotal: number;
+}
+
+export interface CollectionSanityResponse {
+  collection: string;
+  dimension: number;
+  metric: string;
+  pointCount: number;
+  isEmpty: boolean;
+  checks: CollectionSanityChecks;
+  diagnostics: CollectionSanityDiagnostics;
+  hints: string[];
+}
 
 /** Index type for property indexes */
 export type IndexType = 'hash' | 'range';
@@ -364,7 +440,13 @@ export interface IVelesDBBackend {
     queryString: string,
     params?: Record<string, unknown>,
     options?: QueryOptions
-  ): Promise<QueryResponse>;
+  ): Promise<QueryApiResponse>;
+
+  /** Explain a VelesQL query without executing it */
+  queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse>;
+
+  /** Run collection sanity checks */
+  collectionSanity(collection: string): Promise<CollectionSanityResponse>;
 
   /** Multi-query fusion search */
   multiQuerySearch(

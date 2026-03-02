@@ -183,3 +183,69 @@ pub struct IndividualSearchRequest {
     /// Optional metadata filter as JSON string.
     pub filter: Option<String>,
 }
+
+/// Public statistics snapshot for a collection.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileCollectionStats {
+    /// Total number of points currently stored.
+    pub total_points: u64,
+    /// Total payload footprint in bytes.
+    pub payload_size_bytes: u64,
+    /// Number of rows in storage.
+    pub row_count: u64,
+    /// Number of deleted/tombstoned rows.
+    pub deleted_count: u64,
+    /// Mean row size estimate in bytes.
+    pub avg_row_size_bytes: u64,
+    /// Total collection size estimate in bytes.
+    pub total_size_bytes: u64,
+    /// Number of tracked fields.
+    pub field_stats_count: u32,
+    /// Number of tracked columns.
+    pub column_stats_count: u32,
+    /// Number of tracked indexes.
+    pub index_stats_count: u32,
+}
+
+impl From<velesdb_core::collection::stats::CollectionStats> for MobileCollectionStats {
+    fn from(stats: velesdb_core::collection::stats::CollectionStats) -> Self {
+        Self {
+            total_points: stats.total_points,
+            payload_size_bytes: stats.payload_size_bytes,
+            row_count: stats.row_count,
+            deleted_count: stats.deleted_count,
+            avg_row_size_bytes: stats.avg_row_size_bytes,
+            total_size_bytes: stats.total_size_bytes,
+            field_stats_count: u32::try_from(stats.field_stats.len()).unwrap_or(u32::MAX),
+            column_stats_count: u32::try_from(stats.column_stats.len()).unwrap_or(u32::MAX),
+            index_stats_count: u32::try_from(stats.index_stats.len()).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// Metadata and graph index details.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileIndexInfo {
+    /// Node label.
+    pub label: String,
+    /// Property name.
+    pub property: String,
+    /// Index type name.
+    pub index_type: String,
+    /// Number of distinct values.
+    pub cardinality: u64,
+    /// Approximate memory usage in bytes.
+    pub memory_bytes: u64,
+}
+
+impl From<velesdb_core::IndexInfo> for MobileIndexInfo {
+    fn from(value: velesdb_core::IndexInfo) -> Self {
+        Self {
+            label: value.label,
+            property: value.property,
+            index_type: value.index_type,
+            cardinality: u64::try_from(value.cardinality).unwrap_or(u64::MAX),
+            memory_bytes: u64::try_from(value.memory_bytes).unwrap_or(u64::MAX),
+        }
+    }
+}

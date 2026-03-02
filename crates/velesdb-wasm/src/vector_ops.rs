@@ -28,6 +28,10 @@ pub fn compute_scores(
             query, ids, data_sq8, sq8_mins, sq8_scales, dimension, metric,
         ),
         StorageMode::Binary => compute_scores_binary(query, ids, data_binary, dimension, metric),
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => compute_scores_sq8(
+            query, ids, data_sq8, sq8_mins, sq8_scales, dimension, metric,
+        ),
     }
 }
 
@@ -210,6 +214,27 @@ where
                         }
                     }
                     let score = metric.calculate(query, &binary_vec);
+                    Some((id, score, Some(payload)))
+                })
+                .collect()
+        }
+        // ProductQuantization falls back to SQ8 in WASM context
+        StorageMode::ProductQuantization => {
+            let mut dequantized = vec![0.0f32; dimension];
+            ids.iter()
+                .enumerate()
+                .filter_map(|(idx, &id)| {
+                    let payload = payloads[idx].as_ref()?;
+                    if !predicate(payload) {
+                        return None;
+                    }
+                    let start = idx * dimension;
+                    let min = sq8_mins[idx];
+                    let scale = sq8_scales[idx];
+                    for (i, &q) in data_sq8[start..start + dimension].iter().enumerate() {
+                        dequantized[i] = (f32::from(q) / scale) + min;
+                    }
+                    let score = metric.calculate(query, &dequantized);
                     Some((id, score, Some(payload)))
                 })
                 .collect()

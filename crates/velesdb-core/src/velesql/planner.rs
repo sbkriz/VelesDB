@@ -20,6 +20,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::collection::stats::{CollectionStats, Histogram};
+use crate::velesql::ast::Condition;
+
 /// Execution strategy for hybrid queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionStrategy {
@@ -32,6 +35,125 @@ pub enum ExecutionStrategy {
     /// Execute both in parallel and merge results.
     /// Best for medium selectivity (1-10% of data).
     Parallel,
+}
+
+/// Composite cost estimate.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Cost {
+    /// Estimated I/O component (arbitrary units).
+    pub io_cost: f64,
+    /// Estimated CPU component (arbitrary units).
+    pub cpu_cost: f64,
+}
+
+const FILTER_SCAN_IO_WEIGHT: f64 = 0.2;
+const FILTER_SCAN_CPU_WEIGHT: f64 = 0.8;
+const HNSW_IO_WEIGHT: f64 = 0.5;
+const HNSW_CPU_WEIGHT: f64 = 1.0;
+const VECTOR_FIRST_FILTER_PENALTY: f64 = 1.5;
+const PARALLEL_MERGE_OVERHEAD: f64 = 25.0;
+const GRAPH_TO_VECTOR_SCALING: f64 = 100.0;
+
+impl Cost {
+    #[must_use]
+    /// Creates a new cost value from I/O and CPU components.
+    pub const fn new(io_cost: f64, cpu_cost: f64) -> Self {
+        Self { io_cost, cpu_cost }
+    }
+
+    #[must_use]
+    /// Returns the total cost (I/O + CPU).
+    pub const fn total(self) -> f64 {
+        self.io_cost + self.cpu_cost
+    }
+}
+
+/// Cost estimator based on collection statistics.
+#[derive(Debug)]
+pub struct CostEstimator<'a> {
+    stats: &'a CollectionStats,
+}
+
+impl<'a> CostEstimator<'a> {
+    #[must_use]
+    /// Creates a new estimator backed by collection statistics.
+    pub const fn new(stats: &'a CollectionStats) -> Self {
+        Self { stats }
+    }
+
+    #[must_use]
+    /// Estimates filter cost using selectivity derived from stats.
+    pub fn estimate_filter_cost(&self, filter: &Condition) -> Cost {
+        let selectivity = self.estimate_condition_selectivity(filter).clamp(0.0, 1.0);
+        let total = self.stats.total_points.max(self.stats.row_count) as f64;
+        let scan_rows = (total * selectivity).max(1.0);
+        Cost::new(
+            scan_rows * FILTER_SCAN_IO_WEIGHT,
+            scan_rows * FILTER_SCAN_CPU_WEIGHT,
+        )
+    }
+
+    #[must_use]
+    /// Estimates HNSW search cost for top-k retrieval.
+    pub fn estimate_hnsw_search_cost(&self, k: usize) -> Cost {
+        let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
+        let probe = (k.max(1) as f64) * total.log2().max(1.0);
+        Cost::new(probe * HNSW_IO_WEIGHT, probe * HNSW_CPU_WEIGHT)
+    }
+
+    #[must_use]
+    /// Estimates predicate selectivity in the [0.0, 1.0] range.
+    pub fn estimate_condition_selectivity(&self, condition: &Condition) -> f64 {
+        match condition {
+            Condition::Comparison(cmp) => self.estimate_comparison_selectivity(cmp.column.as_str()),
+            Condition::In(cond) => {
+                let base = self.stats.estimate_selectivity(cond.column.as_str());
+                (base * cond.values.len() as f64).clamp(0.0, 1.0)
+            }
+            Condition::Between(cond) => self.estimate_range_selectivity(cond.column.as_str()),
+            Condition::Like(cond) => {
+                (self.stats.estimate_selectivity(cond.column.as_str()) * 2.0).clamp(0.01, 1.0)
+            }
+            Condition::IsNull(cond) => self
+                .stats
+                .field_stats
+                .get(cond.column.as_str())
+                .map_or(0.1, |s| {
+                    s.null_count as f64 / self.stats.total_points.max(1) as f64
+                }),
+            Condition::And(left, right) => {
+                self.estimate_condition_selectivity(left)
+                    * self.estimate_condition_selectivity(right)
+            }
+            Condition::Or(left, right) => {
+                let l = self.estimate_condition_selectivity(left);
+                let r = self.estimate_condition_selectivity(right);
+                (l + r - (l * r)).clamp(0.0, 1.0)
+            }
+            Condition::Not(inner) => 1.0 - self.estimate_condition_selectivity(inner),
+            Condition::Group(inner) => self.estimate_condition_selectivity(inner),
+            _ => 0.5,
+        }
+    }
+
+    fn estimate_comparison_selectivity(&self, column: &str) -> f64 {
+        self.stats.estimate_selectivity(column).clamp(0.001, 1.0)
+    }
+
+    fn estimate_range_selectivity(&self, column: &str) -> f64 {
+        self.stats
+            .field_stats
+            .get(column)
+            .and_then(|s| s.histogram.as_ref())
+            .map_or(0.3, histogram_range_selectivity)
+    }
+}
+
+fn histogram_range_selectivity(histogram: &Histogram) -> f64 {
+    if histogram.buckets.is_empty() {
+        return 0.3;
+    }
+    1.0 / histogram.buckets.len() as f64
 }
 
 /// Statistics for query planning decisions.
@@ -187,6 +309,55 @@ impl QueryPlanner {
         } else {
             ExecutionStrategy::Parallel
         }
+    }
+
+    /// Chooses strategy using CBO with collection statistics and optional filter.
+    #[must_use]
+    pub fn choose_strategy_with_cbo(
+        &self,
+        stats: &CollectionStats,
+        filter: Option<&Condition>,
+        k: usize,
+    ) -> ExecutionStrategy {
+        // Without metadata/graph filter, vector-first is the only meaningful strategy.
+        if filter.is_none() {
+            return ExecutionStrategy::VectorFirst;
+        }
+
+        let estimator = CostEstimator::new(stats);
+        let filter_selectivity = filter.map_or(1.0, |f| {
+            estimator
+                .estimate_condition_selectivity(f)
+                .clamp(0.001, 1.0)
+        });
+        let filter_cost = filter.map_or(Cost::new(0.0, 0.0), |f| estimator.estimate_filter_cost(f));
+        let vector_cost = estimator.estimate_hnsw_search_cost(k.max(1));
+        let total_rows = stats.total_points.max(stats.row_count).max(1) as f64;
+
+        // Vector-first evaluates metadata predicates on over-fetched ANN candidates.
+        // Required over-fetch scales inversely with filter selectivity.
+        let over_fetch = (1.0 / filter_selectivity).clamp(1.0, 64.0);
+        let candidate_rows = ((k.max(1) as f64) * over_fetch).min(total_rows);
+        let candidate_filter_cost = Cost::new(
+            candidate_rows * FILTER_SCAN_IO_WEIGHT,
+            candidate_rows * FILTER_SCAN_CPU_WEIGHT,
+        );
+        let vector_first =
+            vector_cost.total() + (candidate_filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
+        let graph_first = filter_cost.total()
+            + (vector_cost.total() * filter_cost.io_cost.max(1.0) / GRAPH_TO_VECTOR_SCALING);
+        let parallel = vector_cost.total().max(filter_cost.total()) + PARALLEL_MERGE_OVERHEAD;
+
+        let candidates = [
+            (ExecutionStrategy::VectorFirst, vector_first),
+            (ExecutionStrategy::GraphFirst, graph_first),
+            (ExecutionStrategy::Parallel, parallel),
+        ];
+
+        candidates
+            .into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or(ExecutionStrategy::Parallel, |(strategy, _)| strategy)
     }
 
     /// Returns a reference to the query statistics.

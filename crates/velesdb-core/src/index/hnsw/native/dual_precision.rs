@@ -288,8 +288,15 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         ef_search: usize,
         config: &DualPrecisionConfig,
     ) -> Vec<(NodeId, f32)> {
-        let quantizer = self.quantizer.as_ref().expect("quantizer must be trained");
-        let store = self.quantized_store.as_ref().expect("store must exist");
+        let (Some(quantizer), Some(store)) =
+            (self.quantizer.as_ref(), self.quantized_store.as_ref())
+        else {
+            debug_assert!(
+                false,
+                "Invariant violated: int8 traversal requires trained quantizer and store"
+            );
+            return self.inner.search(query, k, ef_search);
+        };
 
         // Quantize query for int8 traversal
         let query_quantized = quantizer.quantize(query);
@@ -375,26 +382,27 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
                 break;
             }
 
-            let neighbors = self.inner.layers.read()[0].get_neighbors(c_node);
+            let layers = self.inner.layers.read();
+            let _ = layers[0].with_neighbors(c_node, |neighbors| {
+                for &neighbor in neighbors {
+                    if visited.insert(neighbor) {
+                        if let Some(neighbor_slice) = store.get_slice(neighbor) {
+                            let dist =
+                                quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
+                            let furthest = results.peek().map_or(u32::MAX, |r| r.0);
 
-            for neighbor in neighbors {
-                if visited.insert(neighbor) {
-                    if let Some(neighbor_slice) = store.get_slice(neighbor) {
-                        let dist =
-                            quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
-                        let furthest = results.peek().map_or(u32::MAX, |r| r.0);
+                            if dist < furthest || results.len() < ef {
+                                candidates.push(Reverse((dist, neighbor)));
+                                results.push((dist, neighbor));
 
-                        if dist < furthest || results.len() < ef {
-                            candidates.push(Reverse((dist, neighbor)));
-                            results.push((dist, neighbor));
-
-                            if results.len() > ef {
-                                results.pop();
+                                if results.len() > ef {
+                                    results.pop();
+                                }
                             }
                         }
                     }
                 }
-            }
+            });
         }
 
         // Convert to sorted vec
@@ -419,19 +427,21 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         });
 
         loop {
-            let neighbors = self.inner.layers.read()[layer].get_neighbors(current);
             let mut improved = false;
-
-            for neighbor in neighbors {
-                if let Some(neighbor_slice) = store.get_slice(neighbor) {
-                    let dist = quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
-                    if dist < current_dist {
-                        current = neighbor;
-                        current_dist = dist;
-                        improved = true;
+            let layers = self.inner.layers.read();
+            let _ = layers[layer].with_neighbors(current, |neighbors| {
+                for &neighbor in neighbors {
+                    if let Some(neighbor_slice) = store.get_slice(neighbor) {
+                        let dist =
+                            quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
+                        if dist < current_dist {
+                            current = neighbor;
+                            current_dist = dist;
+                            improved = true;
+                        }
                     }
                 }
-            }
+            });
 
             if !improved {
                 break;

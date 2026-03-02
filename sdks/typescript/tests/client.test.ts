@@ -118,6 +118,43 @@ describe('VelesDB Client', () => {
     });
   });
 
+  describe('REST ID validation', () => {
+    let db: VelesDB;
+    let mockBackend: any;
+
+    beforeEach(() => {
+      db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+      mockBackend = {
+        insert: vi.fn(),
+        insertBatch: vi.fn(),
+        get: vi.fn(),
+        delete: vi.fn(),
+      };
+      (db as any).backend = mockBackend;
+      (db as any).initialized = true;
+    });
+
+    it('rejects non-numeric IDs for insert on REST backend', async () => {
+      await expect(
+        db.insert('docs', { id: 'doc://alpha', vector: [0.1, 0.2, 0.3] }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('rejects non-numeric IDs for get/delete on REST backend', async () => {
+      await expect(db.get('docs', 'doc://alpha')).rejects.toThrow(ValidationError);
+      await expect(db.delete('docs', 'doc://alpha')).rejects.toThrow(ValidationError);
+    });
+
+    it('rejects IDs above JS safe integer range on REST backend', async () => {
+      const tooLarge = Number.MAX_SAFE_INTEGER + 1;
+      await expect(
+        db.insert('docs', { id: tooLarge, vector: [0.1, 0.2, 0.3] }),
+      ).rejects.toThrow(ValidationError);
+      await expect(db.get('docs', tooLarge)).rejects.toThrow(ValidationError);
+      await expect(db.delete('docs', tooLarge)).rejects.toThrow(ValidationError);
+    });
+  });
+
   describe('operations', () => {
     let db: VelesDB;
     let mockBackend: any;
@@ -204,6 +241,42 @@ describe('VelesDB Client', () => {
       await db.close();
       expect(mockBackend.close).toHaveBeenCalled();
       expect(db.isInitialized()).toBe(false);
+    });
+  });
+
+
+  describe('query diagnostics', () => {
+    let db: VelesDB;
+    let mockBackend: any;
+
+    beforeEach(() => {
+      db = new VelesDB({ backend: 'wasm' });
+      mockBackend = {
+        queryExplain: vi.fn(),
+        collectionSanity: vi.fn(),
+      };
+      (db as any).backend = mockBackend;
+      (db as any).initialized = true;
+    });
+
+    it('should validate queryExplain input', async () => {
+      await expect(db.queryExplain('')).rejects.toThrow(ValidationError);
+    });
+
+    it('should call backend queryExplain', async () => {
+      mockBackend.queryExplain.mockResolvedValue({ queryType: 'SELECT', plan: [] });
+      await db.queryExplain('SELECT * FROM docs', {});
+      expect(mockBackend.queryExplain).toHaveBeenCalledWith('SELECT * FROM docs', {});
+    });
+
+    it('should validate collectionSanity input', async () => {
+      await expect(db.collectionSanity('')).rejects.toThrow(ValidationError);
+    });
+
+    it('should call backend collectionSanity', async () => {
+      mockBackend.collectionSanity.mockResolvedValue({ collection: 'docs' });
+      await db.collectionSanity('docs');
+      expect(mockBackend.collectionSanity).toHaveBeenCalledWith('docs');
     });
   });
 

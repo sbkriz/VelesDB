@@ -2,6 +2,18 @@
 
 This document describes the internal architecture of VelesDB.
 
+## Architecture Status Update (2026-02-26)
+
+VelesDB core architecture is explicitly **hybrid by design**:
+
+- **Vector engine** with 5 metrics (`Cosine`, `Euclidean`, `DotProduct`, `Hamming`, `Jaccard`) and SIMD acceleration.
+- **Graph engine** for nodes/edges/traversal inside collection runtime.
+- **Multi-column engine** (`ColumnStore`) for typed filtering and bitmap operations.
+- **VelesQL control plane** (parser/validation/planning/cache) orchestrating cross-domain execution paths.
+
+For the current expert review and target architecture roadmap, see:
+`docs/reviews/velesdb-core-velesql-expert-review-2026-02-26.md`.
+
 ## High-Level Overview
 
 ```
@@ -492,3 +504,19 @@ Based on the technical audit (January 2026), the following architectural changes
 - Allocations per search: ~10k → 0
 
 See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for full details.
+
+## Code-Truth Matrix (2026-02-26)
+
+| Capability | Runtime module(s) | Notes |
+|-----------|--------------------|-------|
+| VelesQL parser + validation + planning | `crates/velesdb-core/src/velesql/*` | Query control plane and parse cache |
+| Vector engine (5 metrics) | `crates/velesdb-core/src/distance/*`, `simd_native/*`, `index/hnsw/*` | Cosine, Euclidean, DotProduct, Hamming, Jaccard |
+| Graph engine | `crates/velesdb-core/src/collection/graph/*` | Nodes/edges/traversal/property indexes |
+| Multi-column filtering | `crates/velesdb-core/src/column_store/*` | Typed filters + bitmap paths |
+| Hybrid execution / fusion | `crates/velesdb-core/src/collection/search/query/*` | Pushdown + fusion strategies |
+| Storage + WAL/recovery | `crates/velesdb-core/src/storage/*` | mmap storage and recovery tests |
+
+### Governance links
+- Expert architecture review: `docs/reviews/velesdb-core-velesql-expert-review-2026-02-26.md`
+- INVEST user stories backlog: `docs/reviews/velesdb-core-velesql-us-invest-2026-02-26.md`
+- Operations runbook: `docs/reference/OPERATIONS_RUNBOOK.md`

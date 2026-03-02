@@ -575,3 +575,128 @@ fn test_get_multiple_ids() {
     let results = col.get(vec![1, 2, 999]); // 999 doesn't exist
     assert_eq!(results.len(), 2); // Only 2 found
 }
+
+// =========================================================================
+// Core parity tests: stats/index/flush/all_ids
+// =========================================================================
+
+#[test]
+fn test_collection_flush_and_all_ids() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("flush_ids".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db.get_collection("flush_ids".to_string()).unwrap().unwrap();
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 9,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: Some(r#"{"v":1}"#.to_string()),
+        },
+        VelesPoint {
+            id: 4,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: Some(r#"{"v":2}"#.to_string()),
+        },
+    ])
+    .unwrap();
+
+    col.flush().unwrap();
+
+    let mut ids = col.all_ids();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![4, 9]);
+}
+
+#[test]
+fn test_collection_secondary_index_lifecycle() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("secondary_index".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db
+        .get_collection("secondary_index".to_string())
+        .unwrap()
+        .unwrap();
+
+    assert!(!col.has_secondary_index("category".to_string()));
+    col.create_index("category".to_string()).unwrap();
+    assert!(col.has_secondary_index("category".to_string()));
+}
+
+#[test]
+fn test_collection_property_and_range_index_lifecycle() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("graph_indexes".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db
+        .get_collection("graph_indexes".to_string())
+        .unwrap()
+        .unwrap();
+
+    col.create_property_index("Doc".to_string(), "title".to_string())
+        .unwrap();
+    col.create_range_index("Doc".to_string(), "year".to_string())
+        .unwrap();
+
+    assert!(col.has_property_index("Doc".to_string(), "title".to_string()));
+    assert!(col.has_range_index("Doc".to_string(), "year".to_string()));
+
+    let indexes = col.list_indexes();
+    assert!(indexes
+        .iter()
+        .any(|idx| idx.label == "Doc" && idx.property == "title" && idx.index_type == "hash"));
+    assert!(indexes
+        .iter()
+        .any(|idx| idx.label == "Doc" && idx.property == "year" && idx.index_type == "range"));
+
+    let usage = col.indexes_memory_usage();
+    assert!(usage > 0);
+
+    assert!(col
+        .drop_index("Doc".to_string(), "title".to_string())
+        .unwrap());
+    assert!(!col.has_property_index("Doc".to_string(), "title".to_string()));
+}
+
+#[test]
+fn test_collection_analyze_and_get_stats() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("stats".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db.get_collection("stats".to_string()).unwrap().unwrap();
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: Some(r#"{"category":"a"}"#.to_string()),
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: Some(r#"{"category":"b"}"#.to_string()),
+        },
+    ])
+    .unwrap();
+
+    let analyzed = col.analyze().unwrap();
+    assert!(analyzed.total_points >= 2);
+
+    let snapshot = col.get_stats();
+    assert!(snapshot.total_points >= 2);
+    assert!(snapshot.field_stats_count >= 1 || snapshot.column_stats_count >= 1);
+}

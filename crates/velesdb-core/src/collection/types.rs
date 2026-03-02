@@ -2,14 +2,18 @@
 
 use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
 use crate::distance::DistanceMetric;
-use crate::index::{Bm25Index, HnswIndex};
-use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
+use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
+use crate::quantization::{
+    BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
+};
 use crate::storage::{LogPayloadStorage, MmapStorage};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+type PqTrainingSample = (u64, Vec<f32>);
 
 /// Type of collection: Vector-based or Metadata-only.
 ///
@@ -154,6 +158,16 @@ pub struct Collection {
     /// Binary quantized vectors cache (for Binary storage mode).
     pub(super) binary_cache: Arc<RwLock<HashMap<u64, BinaryQuantizedVector>>>,
 
+    /// PQ quantized vectors cache (for ProductQuantization storage mode).
+    pub(super) pq_cache: Arc<RwLock<HashMap<u64, PQVector>>>,
+
+    /// Trained ProductQuantizer (lazy-trained on first inserted vectors).
+    pub(super) pq_quantizer: Arc<RwLock<Option<ProductQuantizer>>>,
+
+    /// Buffer of first vectors used to train PQ codebooks.
+    /// Stores `(point_id, vector)` so trained quantizers can backfill cache entries.
+    pub(super) pq_training_buffer: Arc<RwLock<VecDeque<PqTrainingSample>>>,
+
     /// Property index for O(1) equality lookups on graph nodes (EPIC-009).
     pub(super) property_index: Arc<RwLock<PropertyIndex>>,
 
@@ -162,6 +176,9 @@ pub struct Collection {
 
     /// Edge store for knowledge graph relationships (EPIC-015).
     pub(super) edge_store: Arc<RwLock<EdgeStore>>,
+
+    /// Secondary indexes for metadata payload fields.
+    pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
 }
 
 impl Collection {

@@ -8,6 +8,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use common::create_test_app;
+use futures::stream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -215,6 +216,168 @@ async fn test_upsert_and_search() {
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
 
     assert!(json["results"].is_array());
+}
+
+#[tokio::test]
+async fn test_stream_upsert_ndjson() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "stream_vectors",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let ndjson_lines = vec![
+        r#"{"id": 10, "vector": [1.0, 0.0, 0.0], "payload": {"source":"a"}}
+"#,
+        "not-a-json-line
+",
+        r#"{"id": 11, "vector": [0.0, 1.0, 0.0]}
+"#,
+        r#"{"id": 12, "vector": [0.0, 0.0, 1.0]}
+"#,
+    ];
+
+    let stream_body = Body::from_stream(stream::iter(
+        ndjson_lines
+            .into_iter()
+            .map(|line| Ok::<_, std::io::Error>(line.to_string())),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/stream_vectors/points/stream")
+                .header("Content-Type", "application/x-ndjson")
+                .body(stream_body)
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert_eq!(json["inserted"], 3);
+    assert_eq!(json["malformed"], 1);
+
+    for point_id in [10_u64, 11, 12] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/collections/stream_vectors/points/{point_id}"))
+                    .body(Body::empty())
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn test_stream_upsert_ndjson_chunked_without_trailing_newline() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "stream_chunked",
+                        "dimension": 2,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let chunks = vec![
+        r#"{"id":101,"vector":[1.0,0.0]"#,
+        r#","payload":{"source":"chunk"}}
+{"id":102,"#,
+        r#""vector":[0.0,1.0]}"#,
+    ];
+
+    let stream_body = Body::from_stream(stream::iter(
+        chunks
+            .into_iter()
+            .map(|chunk| Ok::<_, std::io::Error>(chunk.to_string())),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/stream_chunked/points/stream")
+                .header("Content-Type", "application/x-ndjson")
+                .body(stream_body)
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert_eq!(json["inserted"], 2);
+    assert_eq!(json["malformed"], 0);
+
+    for point_id in [101_u64, 102] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/collections/stream_chunked/points/{point_id}"))
+                    .body(Body::empty())
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
 
 #[tokio::test]
@@ -2042,4 +2205,320 @@ async fn test_graph_node_degree() {
 
     assert_eq!(json["in_degree"], 2);
     assert_eq!(json["out_degree"], 1);
+}
+
+#[tokio::test]
+async fn test_search_dimension_mismatch_returns_actionable_error() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "dim_guard",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/dim_guard/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0],
+                        "top_k": 2
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(error.contains("expected 4, got 2"));
+    assert!(error.contains("Hint"));
+}
+
+#[tokio::test]
+async fn test_create_collection_returns_preflight_warnings() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "warn_collection",
+                        "dimension": 128,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["warnings"].is_array());
+    assert!(!json["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn test_create_collection_with_empty_type_returns_preflight_warnings() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "warn_collection_empty_type",
+                        "collection_type": "",
+                        "dimension": 128,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["warnings"].is_array());
+    assert_eq!(json["warnings"].as_array().map_or(0, std::vec::Vec::len), 2);
+}
+
+#[tokio::test]
+async fn test_collection_sanity_reports_empty_collection() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "sanity_collection",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/sanity_collection/sanity")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert_eq!(json["checks"]["has_vectors"], false);
+    assert_eq!(json["is_empty"], true);
+}
+
+#[tokio::test]
+async fn test_collection_sanity_includes_diagnostics_counters() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "diag_collection",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    // Trigger one dimension mismatch
+    let mismatch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/diag_collection/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0],
+                        "top_k": 1
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(mismatch_response.status(), StatusCode::BAD_REQUEST);
+
+    let sanity_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/diag_collection/sanity")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(sanity_response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(sanity_response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(
+        json["diagnostics"]["search_requests_total"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert!(
+        json["diagnostics"]["dimension_mismatch_total"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+}
+
+#[tokio::test]
+async fn test_batch_search_invalid_filter_returns_bad_request() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "batch_filter_validation",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/batch_filter_validation/search/batch")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "searches": [
+                            {
+                                "vector": [1.0, 0.0, 0.0, 0.0],
+                                "top_k": 2,
+                                "filter": {
+                                    "type": "eq",
+                                    "field": "category"
+                                }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let error = json["error"].as_str().unwrap_or_default();
+
+    assert!(error.contains("Invalid filter at index 0"));
+    assert!(error.contains("Hint"));
 }
