@@ -2331,12 +2331,7 @@ async fn test_create_collection_with_empty_type_returns_preflight_warnings() {
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
 
     assert!(json["warnings"].is_array());
-    assert_eq!(
-        json["warnings"]
-            .as_array()
-            .map_or(0, |warnings| warnings.len()),
-        2
-    );
+    assert_eq!(json["warnings"].as_array().map_or(0, std::vec::Vec::len), 2);
 }
 
 #[tokio::test]
