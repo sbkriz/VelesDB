@@ -62,3 +62,13 @@ fn test_cbo_vector_first_cost_scales_with_selectivity() {
     let strategy = planner.choose_strategy_with_cbo(&stats, Some(&selective_filter), 500);
     assert_eq!(strategy, ExecutionStrategy::GraphFirst);
 }
+
+#[test]
+fn test_cbo_without_filter_always_uses_vector_first() {
+    let planner = QueryPlanner::new();
+    let mut stats = CollectionStats::new();
+    stats.total_points = 100_000;
+
+    let strategy = planner.choose_strategy_with_cbo(&stats, None, 20);
+    assert_eq!(strategy, ExecutionStrategy::VectorFirst);
+}

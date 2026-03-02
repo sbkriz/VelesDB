@@ -319,6 +319,11 @@ impl QueryPlanner {
         filter: Option<&Condition>,
         k: usize,
     ) -> ExecutionStrategy {
+        // Without metadata/graph filter, vector-first is the only meaningful strategy.
+        if filter.is_none() {
+            return ExecutionStrategy::VectorFirst;
+        }
+
         let estimator = CostEstimator::new(stats);
         let filter_selectivity = filter.map_or(1.0, |f| {
             estimator
