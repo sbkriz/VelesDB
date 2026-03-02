@@ -471,6 +471,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}` | `DELETE` | Delete a collection |
 | `/collections/{name}/empty` | `POST` | Remove all points from a collection |
 | `/collections/{name}/flush` | `POST` | Flush collection data to disk |
+| `/collections/{name}/sanity` | `GET` | Quick collection diagnostics (readiness and counters) |
 
 ### Points
 
