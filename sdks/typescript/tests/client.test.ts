@@ -118,6 +118,43 @@ describe('VelesDB Client', () => {
     });
   });
 
+  describe('REST ID validation', () => {
+    let db: VelesDB;
+    let mockBackend: any;
+
+    beforeEach(() => {
+      db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+      mockBackend = {
+        insert: vi.fn(),
+        insertBatch: vi.fn(),
+        get: vi.fn(),
+        delete: vi.fn(),
+      };
+      (db as any).backend = mockBackend;
+      (db as any).initialized = true;
+    });
+
+    it('rejects non-numeric IDs for insert on REST backend', async () => {
+      await expect(
+        db.insert('docs', { id: 'doc://alpha', vector: [0.1, 0.2, 0.3] }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('rejects non-numeric IDs for get/delete on REST backend', async () => {
+      await expect(db.get('docs', 'doc://alpha')).rejects.toThrow(ValidationError);
+      await expect(db.delete('docs', 'doc://alpha')).rejects.toThrow(ValidationError);
+    });
+
+    it('rejects IDs above JS safe integer range on REST backend', async () => {
+      const tooLarge = Number.MAX_SAFE_INTEGER + 1;
+      await expect(
+        db.insert('docs', { id: tooLarge, vector: [0.1, 0.2, 0.3] }),
+      ).rejects.toThrow(ValidationError);
+      await expect(db.get('docs', tooLarge)).rejects.toThrow(ValidationError);
+      await expect(db.delete('docs', tooLarge)).rejects.toThrow(ValidationError);
+    });
+  });
+
   describe('operations', () => {
     let db: VelesDB;
     let mockBackend: any;

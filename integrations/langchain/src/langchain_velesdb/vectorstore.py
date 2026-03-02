@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+import time
 from typing import Any, Iterable, List, Optional, Tuple, Type
 
 from langchain_core.documents import Document
@@ -117,7 +118,6 @@ class VelesDBVectorStore(VectorStore):
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
-        self._next_id = 1
 
     @property
     def embeddings(self) -> Embeddings:
@@ -155,11 +155,25 @@ class VelesDBVectorStore(VectorStore):
                 self._collection = db.get_collection(self._collection_name)
         return self._collection
 
-    def _generate_id(self) -> int:
-        """Generate a unique ID for a document."""
-        id_val = self._next_id
-        self._next_id += 1
-        return id_val
+    @staticmethod
+    def _to_point_id(id_str: str) -> int:
+        """Convert external id string into the internal numeric point id."""
+        try:
+            parsed = int(id_str)
+            if parsed >= 0:
+                return parsed
+        except ValueError:
+            pass
+        return _stable_hash_id(id_str)
+
+    def _generate_auto_id(self) -> tuple[str, int]:
+        """Generate a process-independent document id and matching point id."""
+        if hasattr(uuid, "uuid7"):
+            token = str(uuid.uuid7())
+        else:
+            token = f"{time.time_ns()}-{uuid.uuid4()}"
+        point_id = _stable_hash_id(token)
+        return str(point_id), point_id
 
     def _to_document(self, result: dict) -> Document:
         """Convert a VelesDB search result into a LangChain Document."""
@@ -244,11 +258,9 @@ class VelesDBVectorStore(VectorStore):
             # Generate or use provided ID
             if ids and i < len(ids):
                 doc_id = ids[i]
-                # Convert string ID to int for VelesDB
-                int_id = _stable_hash_id(doc_id)
+                int_id = self._to_point_id(doc_id)
             else:
-                int_id = self._generate_id()
-                doc_id = str(int_id)
+                doc_id, int_id = self._generate_auto_id()
 
             result_ids.append(doc_id)
 
@@ -539,7 +551,7 @@ class VelesDBVectorStore(VectorStore):
             return False
 
         # Convert string IDs to int
-        int_ids = [_stable_hash_id(id_str) for id_str in ids]
+        int_ids = [self._to_point_id(id_str) for id_str in ids]
         self._collection.delete(int_ids)
         return True
 
@@ -719,10 +731,9 @@ class VelesDBVectorStore(VectorStore):
         for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
             if ids and i < len(ids):
                 doc_id = ids[i]
-                int_id = _stable_hash_id(doc_id)
+                int_id = self._to_point_id(doc_id)
             else:
-                int_id = self._generate_id()
-                doc_id = str(int_id)
+                doc_id, int_id = self._generate_auto_id()
 
             result_ids.append(doc_id)
 
