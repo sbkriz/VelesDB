@@ -28,20 +28,27 @@ impl Collection {
     ) {
         use crate::velesql::OrderByExpr;
 
-        results.sort_by(|a, b| {
-            for clause in order_by {
+        let sort_columns: Vec<(String, bool)> = order_by
+            .iter()
+            .filter_map(|clause| {
                 let column = match &clause.expr {
-                    OrderByExpr::Field(name) => name.as_str(),
-                    // Similarity and Aggregate ordering not applicable to grouped results
-                    _ => continue,
+                    OrderByExpr::Field(name) => name.clone(),
+                    OrderByExpr::Aggregate(agg) => Self::aggregation_result_key(agg),
+                    // Similarity ordering not applicable to grouped aggregate rows.
+                    OrderByExpr::Similarity(_) => return None,
                 };
+                Some((column, clause.descending))
+            })
+            .collect();
 
+        results.sort_by(|a, b| {
+            for (column, descending) in &sort_columns {
                 let val_a = a.get(column);
                 let val_b = b.get(column);
 
                 let ordering = Self::compare_json_values(val_a, val_b);
 
-                let ordering = if clause.descending {
+                let ordering = if *descending {
                     ordering.reverse()
                 } else {
                     ordering

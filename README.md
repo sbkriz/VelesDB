@@ -519,6 +519,7 @@ curl -X POST http://localhost:8080/query \
 - `GROUP BY` / `HAVING` with AND/OR operators
 - `ORDER BY` multi-column + `similarity()` function
 - `JOIN ... ON` across collections (inner join runtime support)
+- `JOIN ... USING (...)` runtime supports single-column only (`USING (a, b)` rejected)
 - `UNION` / `INTERSECT` / `EXCEPT` set operations
 - `USING FUSION(strategy='rrf')` hybrid search
 - `WITH (max_groups=100)` query-time config

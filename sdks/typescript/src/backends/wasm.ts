@@ -225,13 +225,24 @@ export class WasmBackend implements IVelesDBBackend {
     // Reserve capacity
     collection.store.reserve(docs.length);
 
-    // Batch insert
-    const batch: Array<[bigint, number[]]> = docs.map(doc => [
-      BigInt(this.toNumericId(doc.id)),
-      Array.isArray(doc.vector) ? doc.vector : Array.from(doc.vector),
-    ]);
+    // Batch insert docs without payload; payload-bearing docs use insert_with_payload.
+    const batch: Array<[bigint, number[]]> = [];
+    for (const doc of docs) {
+      const id = BigInt(this.toNumericId(doc.id));
+      const vector = doc.vector instanceof Float32Array
+        ? doc.vector
+        : new Float32Array(doc.vector);
 
-    collection.store.insert_batch(batch);
+      if (doc.payload) {
+        collection.store.insert_with_payload(id, vector, doc.payload);
+      } else {
+        batch.push([id, Array.from(vector)]);
+      }
+    }
+
+    if (batch.length > 0) {
+      collection.store.insert_batch(batch);
+    }
 
     // Store payloads
     for (const doc of docs) {

@@ -195,6 +195,32 @@ fn test_cart_node_growth_node48_to_node256() {
     assert_eq!(tree.len(), 49);
 }
 
+#[test]
+fn test_cart_remove_node4_child_shifts_correctly() {
+    let mut tree = CompressedART::new();
+    for i in 1..=3u64 {
+        tree.insert(i << 56);
+    }
+
+    assert!(tree.remove(2u64 << 56));
+    assert!(!tree.contains(2u64 << 56));
+    assert!(tree.contains(1u64 << 56));
+    assert!(tree.contains(3u64 << 56));
+}
+
+#[test]
+fn test_cart_remove_node16_child_shifts_correctly() {
+    let mut tree = CompressedART::new();
+    for i in 1..=6u64 {
+        tree.insert(i << 56);
+    }
+
+    assert!(tree.remove(4u64 << 56));
+    assert!(!tree.contains(4u64 << 56));
+    assert!(tree.contains(1u64 << 56));
+    assert!(tree.contains(6u64 << 56));
+}
+
 // =========================================================================
 // Stress Tests
 // =========================================================================

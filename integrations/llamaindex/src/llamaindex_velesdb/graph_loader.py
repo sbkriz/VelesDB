@@ -97,17 +97,10 @@ class GraphLoader:
                 "payload": payload,
             }])
         else:
-            info = collection.info()
-            if info.get("metadata_only", False):
-                collection.upsert_metadata([{
-                    "id": id,
-                    "payload": payload,
-                }])
-            else:
-                raise ValueError(
-                    "Collection requires vectors for node insertion. "
-                    "Provide `vector` or initialize a metadata-only collection."
-                )
+            collection.upsert_metadata([{
+                "id": id,
+                "payload": payload,
+            }])
 
     def add_edge(
         self,

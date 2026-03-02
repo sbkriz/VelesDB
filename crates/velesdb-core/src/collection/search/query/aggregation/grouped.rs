@@ -180,7 +180,7 @@ impl Collection {
     }
 
     /// Compute the result key for an aggregation function.
-    fn aggregation_result_key(agg: &AggregateFunction) -> String {
+    pub(super) fn aggregation_result_key(agg: &AggregateFunction) -> String {
         if let Some(ref alias) = agg.alias {
             alias.clone()
         } else {
