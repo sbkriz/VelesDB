@@ -24,15 +24,14 @@ class TestGraphLoader:
 
         mock_store = MagicMock()
         mock_collection = MagicMock()
+        mock_collection.info.return_value = {"metadata_only": True}
         mock_store._collection = mock_collection
 
         loader = GraphLoader(mock_store)
         loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
 
-        mock_collection.add_node.assert_called_once_with(
-            id=1,
-            label="PERSON",
-            metadata={"name": "John"}
+        mock_collection.upsert_metadata.assert_called_once_with(
+            [{"id": 1, "payload": {"label": "PERSON", "name": "John"}}]
         )
 
     def test_add_node_with_vector(self):
@@ -58,27 +57,19 @@ class TestGraphLoader:
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_store._collection = mock_collection
 
         loader = GraphLoader(mock_store)
         loader.add_edge(id=1, source=100, target=200, label="KNOWS")
 
-        mock_collection.add_edge.assert_called_once_with(
-            id=1,
-            source=100,
-            target=200,
-            label="KNOWS",
-            metadata={}
-        )
+        edges = loader.get_edges()
+        assert len(edges) == 1
+        assert edges[0]["label"] == "KNOWS"
 
     def test_add_edge_with_metadata(self):
         """Test adding an edge with properties."""
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_store._collection = mock_collection
 
         loader = GraphLoader(mock_store)
         loader.add_edge(
@@ -89,29 +80,19 @@ class TestGraphLoader:
             metadata={"since": "2024-01-01"}
         )
 
-        mock_collection.add_edge.assert_called_once_with(
-            id=1,
-            source=100,
-            target=200,
-            label="WORKS_AT",
-            metadata={"since": "2024-01-01"}
-        )
+        edges = loader.get_edges(label="WORKS_AT")
+        assert len(edges) == 1
+        assert edges[0]["properties"] == {"since": "2024-01-01"}
 
     def test_get_edges_by_label(self):
         """Test getting edges filtered by label."""
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.get_edges_by_label.return_value = [
-            {"id": 1, "source": 100, "target": 200, "label": "KNOWS", "properties": {}}
-        ]
-        mock_store._collection = mock_collection
-
         loader = GraphLoader(mock_store)
+        loader.add_edge(id=1, source=100, target=200, label="KNOWS")
         edges = loader.get_edges(label="KNOWS")
 
-        mock_collection.get_edges_by_label.assert_called_once_with("KNOWS")
         assert len(edges) == 1
         assert edges[0]["label"] == "KNOWS"
 
@@ -120,17 +101,11 @@ class TestGraphLoader:
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.get_edges.return_value = [
-            {"id": 1, "source": 100, "target": 200, "label": "KNOWS", "properties": {}},
-            {"id": 2, "source": 200, "target": 300, "label": "FOLLOWS", "properties": {}}
-        ]
-        mock_store._collection = mock_collection
-
         loader = GraphLoader(mock_store)
+        loader.add_edge(id=1, source=100, target=200, label="KNOWS")
+        loader.add_edge(id=2, source=200, target=300, label="FOLLOWS")
         edges = loader.get_edges()
 
-        mock_collection.get_edges.assert_called_once()
         assert len(edges) == 2
 
     def test_get_edges_empty_collection(self):
@@ -138,8 +113,6 @@ class TestGraphLoader:
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_store._collection = None
-
         loader = GraphLoader(mock_store)
         edges = loader.get_edges()
 
@@ -151,6 +124,7 @@ class TestGraphLoader:
 
         mock_store = MagicMock()
         mock_collection = MagicMock()
+        mock_collection.info.return_value = {"metadata_only": True}
         mock_store._collection = mock_collection
 
         # Mock LlamaIndex node
@@ -164,7 +138,7 @@ class TestGraphLoader:
 
         assert result["nodes"] == 1
         assert result["edges"] == 0
-        mock_collection.add_node.assert_called_once()
+        mock_collection.upsert_metadata.assert_called_once()
 
     def test_load_from_nodes_with_none_content(self):
         """Test loading nodes when get_content() returns None.
@@ -176,6 +150,7 @@ class TestGraphLoader:
 
         mock_store = MagicMock()
         mock_collection = MagicMock()
+        mock_collection.info.return_value = {"metadata_only": True}
         mock_store._collection = mock_collection
 
         # Mock LlamaIndex node with None content
@@ -190,35 +165,35 @@ class TestGraphLoader:
 
         assert result["nodes"] == 1
         assert result["edges"] == 0
-        mock_collection.add_node.assert_called_once()
+        mock_collection.upsert_metadata.assert_called_once()
         
         # Verify text_preview is empty string, not None slice
-        call_args = mock_collection.add_node.call_args
-        assert call_args[1]["metadata"]["text_preview"] == ""
+        call_args = mock_collection.upsert_metadata.call_args[0][0][0]
+        assert call_args["payload"]["text_preview"] == ""
 
     def test_add_node_no_collection_raises(self):
-        """Test that add_node raises when collection not initialized."""
+        """Test that add_node raises when collection cannot be initialized."""
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
         mock_store._collection = None
+        mock_store._get_collection = None
 
         loader = GraphLoader(mock_store)
 
-        with pytest.raises(ValueError, match="Collection not initialized"):
+        with pytest.raises(ValueError, match="cannot initialize collection"):
             loader.add_node(id=1, label="TEST")
 
     def test_add_edge_no_collection_raises(self):
-        """Test that add_edge raises when collection not initialized."""
+        """Test that add_edge still works without collection initialization."""
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
         mock_store._collection = None
 
         loader = GraphLoader(mock_store)
-
-        with pytest.raises(ValueError, match="Collection not initialized"):
-            loader.add_edge(id=1, source=1, target=2, label="TEST")
+        loader.add_edge(id=1, source=1, target=2, label="TEST")
+        assert len(loader.get_edges()) == 1
 
 
 class TestGraphLoaderIntegration:
@@ -233,9 +208,7 @@ class TestGraphLoaderIntegration:
 
         mock_store = MagicMock()
         mock_collection = MagicMock()
-        mock_collection.get_edges_by_label.return_value = [
-            {"id": 1, "source": 100, "target": 200, "label": "KNOWS", "properties": {}}
-        ]
+        mock_collection.info.return_value = {"metadata_only": True}
         mock_store._collection = mock_collection
 
         loader = GraphLoader(mock_store)
@@ -253,3 +226,36 @@ class TestGraphLoaderIntegration:
         assert len(edges) == 1
         assert edges[0]["source"] == 100
         assert edges[0]["target"] == 200
+
+    def test_get_collection_initializes_from_vector_store(self):
+        from llamaindex_velesdb import GraphLoader
+
+        mock_store = MagicMock()
+        mock_store._collection = None
+        mock_collection = MagicMock()
+        mock_collection.info.return_value = {"metadata_only": True}
+        mock_store._get_collection = MagicMock(return_value=mock_collection)
+
+        loader = GraphLoader(mock_store)
+        loader.add_node(id=1, label="PERSON", metadata={"name": "A"})
+
+        mock_store._get_collection.assert_called_once()
+
+
+class TestGraphRetriever:
+    def test_fetch_node_uses_get_nodes(self):
+        from llamaindex_velesdb import GraphRetriever
+        from llama_index.core.schema import TextNode
+
+        mock_vector_store = MagicMock()
+        expected = TextNode(text="Neighbor", id_="42")
+        mock_vector_store.get_nodes.return_value = [expected]
+
+        mock_index = MagicMock()
+        mock_index._vector_store = mock_vector_store
+
+        retriever = GraphRetriever(index=mock_index)
+        node = retriever._fetch_node(42)
+
+        mock_vector_store.get_nodes.assert_called_once_with(["42"])
+        assert node == expected

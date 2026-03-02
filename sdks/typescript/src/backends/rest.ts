@@ -21,11 +21,12 @@ import type {
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
-  QueryResponse,
+  QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
+  RestPointId,
 } from '../types';
-import { ConnectionError, NotFoundError, VelesDBError } from '../types';
+import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../types';
 
 /** REST API response wrapper */
 interface ApiResponse<T> {
@@ -39,6 +40,10 @@ interface ApiResponse<T> {
 /** Batch search response structure */
 interface BatchSearchResponse {
   results: Array<{ results: SearchResult[] }>;
+}
+
+interface SearchResponse {
+  results: SearchResult[];
 }
 
 interface QueryExplainApiResponse {
@@ -210,6 +215,21 @@ export class RestBackend implements IVelesDBBackend {
     return 0;
   }
 
+  private parseRestPointId(id: string | number): RestPointId {
+    if (
+      typeof id !== 'number' ||
+      !Number.isFinite(id) ||
+      id < 0 ||
+      !Number.isInteger(id) ||
+      id > Number.MAX_SAFE_INTEGER
+    ) {
+      throw new ValidationError(
+        `REST backend requires numeric u64-compatible IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER}). Received: ${String(id)}`
+      );
+    }
+    return id;
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -326,6 +346,7 @@ export class RestBackend implements IVelesDBBackend {
 
   async insert(collection: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
+    const restId = this.parseRestPointId(doc.id);
 
     const vector = doc.vector instanceof Float32Array 
       ? Array.from(doc.vector) 
@@ -336,7 +357,7 @@ export class RestBackend implements IVelesDBBackend {
       `/collections/${encodeURIComponent(collection)}/points`,
       {
         points: [{
-          id: doc.id,
+          id: restId,
           vector,
           payload: doc.payload,
         }],
@@ -355,7 +376,7 @@ export class RestBackend implements IVelesDBBackend {
     this.ensureInitialized();
 
     const vectors = docs.map(doc => ({
-      id: doc.id,
+      id: this.parseRestPointId(doc.id),
       vector: doc.vector instanceof Float32Array ? Array.from(doc.vector) : doc.vector,
       payload: doc.payload,
     }));
@@ -383,12 +404,12 @@ export class RestBackend implements IVelesDBBackend {
 
     const queryVector = query instanceof Float32Array ? Array.from(query) : query;
 
-    const response = await this.request<SearchResult[]>(
+    const response = await this.request<SearchResponse>(
       'POST',
       `/collections/${encodeURIComponent(collection)}/search`,
       {
         vector: queryVector,
-        k: options?.k ?? 10,
+        top_k: options?.k ?? 10,
         filter: options?.filter,
         include_vectors: options?.includeVectors ?? false,
       }
@@ -401,7 +422,7 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    return response.data ?? [];
+    return response.data?.results ?? [];
   }
 
   async searchBatch(
@@ -438,10 +459,11 @@ export class RestBackend implements IVelesDBBackend {
 
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
+    const restId = this.parseRestPointId(id);
 
     const response = await this.request<{ deleted: boolean }>(
       'DELETE',
-      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(id))}`
+      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(restId))}`
     );
 
     if (response.error) {
@@ -456,10 +478,11 @@ export class RestBackend implements IVelesDBBackend {
 
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
+    const restId = this.parseRestPointId(id);
 
     const response = await this.request<VectorDocument>(
       'GET',
-      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(id))}`
+      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(restId))}`
     );
 
     if (response.error) {
@@ -535,20 +558,22 @@ export class RestBackend implements IVelesDBBackend {
     collection: string,
     queryString: string,
     params?: Record<string, unknown>,
-    _options?: QueryOptions
-  ): Promise<QueryResponse> {
+    options?: QueryOptions
+  ): Promise<QueryApiResponse> {
     this.ensureInitialized();
 
     // Note: Server uses POST /query (not /collections/{name}/query)
     // SELECT queries use FROM clause for collection resolution.
     // MATCH top-level queries require `collection` in the request body.
-    const response = await this.request<QueryResponse>(
+    const response = await this.request<Record<string, unknown>>(
       'POST',
       '/query',
       {
         query: queryString,
         params: params ?? {},
         collection,
+        timeout_ms: options?.timeoutMs,
+        stream: options?.stream ?? false,
       }
     );
 
@@ -559,11 +584,22 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    // Map server response to SDK QueryResponse
+    // Map server response to SDK QueryResponse or AggregationQueryResponse
     // Server returns: { results: [{id, score, payload}], timing_ms, rows_returned }
     // SDK expects: { results: [{nodeId, vectorScore, ...}], stats: {...} }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawData = response.data as any;
+    if (rawData && Object.prototype.hasOwnProperty.call(rawData, 'result')) {
+      return {
+        result: rawData.result as Record<string, unknown> | unknown[],
+        stats: {
+          executionTimeMs: rawData.timing_ms ?? 0,
+          strategy: 'aggregation',
+          scannedNodes: 0,
+        },
+      };
+    }
+
     return {
       results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
         // Server returns `id` (u64), map to nodeId with precision handling
@@ -690,6 +726,9 @@ export class RestBackend implements IVelesDBBackend {
         top_k: options?.k ?? 10,
         strategy: options?.fusion ?? 'rrf',
         rrf_k: options?.fusionParams?.k ?? 60,
+        avg_weight: options?.fusionParams?.avgWeight,
+        max_weight: options?.fusionParams?.maxWeight,
+        hit_weight: options?.fusionParams?.hitWeight,
         filter: options?.filter,
       }
     );

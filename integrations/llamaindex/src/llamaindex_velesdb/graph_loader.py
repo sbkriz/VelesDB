@@ -52,6 +52,17 @@ class GraphLoader:
     def __init__(self, vector_store: "VelesDBVectorStore") -> None:
         """Initialize GraphLoader with a VelesDBVectorStore."""
         self._vector_store = vector_store
+        self._default_dimension = 384
+        self._edges: List[Dict[str, Any]] = []
+
+        self._graph_store = getattr(vector_store, "_graph_store", None)
+        if self._graph_store is None:
+            try:
+                import velesdb
+
+                self._graph_store = velesdb.GraphStore()
+            except Exception:
+                self._graph_store = None
 
     def add_node(
         self,
@@ -75,20 +86,28 @@ class GraphLoader:
             ...     metadata={"name": "John", "age": 30}
             ... )
         """
-        collection = self._get_collection()
-        if collection is None:
-            raise ValueError("Collection not initialized")
+        collection = self._get_collection(dimension=len(vector) if vector else None)
 
         payload = {"label": label, **(metadata or {})}
 
-        if vector:
+        if vector is not None:
             collection.upsert([{
                 "id": id,
                 "vector": vector,
                 "payload": payload,
             }])
         else:
-            collection.add_node(id=id, label=label, metadata=metadata or {})
+            info = collection.info()
+            if info.get("metadata_only", False):
+                collection.upsert_metadata([{
+                    "id": id,
+                    "payload": payload,
+                }])
+            else:
+                raise ValueError(
+                    "Collection requires vectors for node insertion. "
+                    "Provide `vector` or initialize a metadata-only collection."
+                )
 
     def add_edge(
         self,
@@ -116,17 +135,16 @@ class GraphLoader:
             ...     metadata={"since": "2024-01-01"}
             ... )
         """
-        collection = self._get_collection()
-        if collection is None:
-            raise ValueError("Collection not initialized")
-
-        collection.add_edge(
-            id=id,
-            source=source,
-            target=target,
-            label=label,
-            metadata=metadata or {},
-        )
+        edge = {
+            "id": id,
+            "source": source,
+            "target": target,
+            "label": label,
+            "properties": metadata or {},
+        }
+        self._edges.append(edge)
+        if self._graph_store is not None:
+            self._graph_store.add_edge(edge)
 
     def get_edges(
         self,
@@ -145,14 +163,10 @@ class GraphLoader:
             >>> for edge in edges:
             ...     print(f"{edge['source']} -> {edge['target']}")
         """
-        collection = self._get_collection()
-        if collection is None:
-            return []
-
         if label:
-            edges = collection.get_edges_by_label(label)
+            edges = [e for e in self._edges if e.get("label") == label]
         else:
-            edges = collection.get_edges()
+            edges = list(self._edges)
 
         return [
             {
@@ -216,6 +230,23 @@ class GraphLoader:
 
         return {"nodes": nodes_added, "edges": 0}
 
-    def _get_collection(self):
-        """Get the underlying collection from the vector store."""
-        return self._vector_store._collection
+    def _get_collection(self, dimension: Optional[int] = None):
+        """Get or lazily initialize the underlying collection."""
+        collection = getattr(self._vector_store, "_collection", None)
+        if collection is not None:
+            return collection
+
+        get_collection = getattr(self._vector_store, "_get_collection", None)
+        if get_collection is None:
+            raise ValueError(
+                "Vector store does not expose _get_collection; cannot initialize collection."
+            )
+
+        resolved_dimension = dimension or getattr(self._vector_store, "_dimension", None)
+        if resolved_dimension is None:
+            resolved_dimension = self._default_dimension
+
+        collection = get_collection(int(resolved_dimension))
+        if collection is None:
+            raise ValueError("Failed to initialize collection from vector store")
+        return collection

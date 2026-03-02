@@ -111,6 +111,8 @@ describe('VelesQL contract fixtures (TypeScript runtime)', () => {
           query: matchCase!.body.query,
           params: matchCase!.body.params ?? {},
           collection: matchCase!.body.collection ?? 'docs_conformance',
+          timeout_ms: undefined,
+          stream: false,
         }),
       })
     );

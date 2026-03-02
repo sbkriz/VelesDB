@@ -21,7 +21,7 @@ import type {
   TraverseResponse,
   DegreeResponse,
   QueryOptions,
-  QueryResponse,
+  QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
 } from '../types';
@@ -77,6 +77,36 @@ export class WasmBackend implements IVelesDBBackend {
     if (!this._initialized || !this.wasmModule) {
       throw new ConnectionError('WASM backend not initialized');
     }
+  }
+
+  private normalizeIdString(id: string): string | null {
+    const trimmed = id.trim();
+    return /^\d+$/.test(trimmed) ? trimmed : null;
+  }
+
+  private canonicalPayloadKeyFromResultId(id: bigint | number | string): string {
+    if (typeof id === 'bigint') {
+      return id.toString();
+    }
+    if (typeof id === 'number') {
+      return String(Math.trunc(id));
+    }
+    const normalized = this.normalizeIdString(id);
+    if (normalized !== null) {
+      return normalized.replace(/^0+(?=\d)/, '');
+    }
+    return String(this.toNumericId(id));
+  }
+
+  private canonicalPayloadKey(id: string | number): string {
+    if (typeof id === 'number') {
+      return String(Math.trunc(id));
+    }
+    const normalized = this.normalizeIdString(id);
+    if (normalized !== null) {
+      return normalized.replace(/^0+(?=\d)/, '');
+    }
+    return String(this.toNumericId(id));
   }
 
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
@@ -162,10 +192,14 @@ export class WasmBackend implements IVelesDBBackend {
       );
     }
 
-    collection.store.insert(BigInt(id), vector);
+    if (doc.payload) {
+      collection.store.insert_with_payload(BigInt(id), vector, doc.payload);
+    } else {
+      collection.store.insert(BigInt(id), vector);
+    }
 
     if (doc.payload) {
-      collection.payloads.set(String(doc.id), doc.payload);
+      collection.payloads.set(this.canonicalPayloadKey(doc.id), doc.payload);
     }
   }
 
@@ -202,7 +236,7 @@ export class WasmBackend implements IVelesDBBackend {
     // Store payloads
     for (const doc of docs) {
       if (doc.payload) {
-        collection.payloads.set(String(doc.id), doc.payload);
+        collection.payloads.set(this.canonicalPayloadKey(doc.id), doc.payload);
       }
     }
   }
@@ -243,7 +277,7 @@ export class WasmBackend implements IVelesDBBackend {
       return results.map(r => ({
         id: String(r.id),
         score: r.score,
-        payload: r.payload || collection.payloads.get(String(r.id)),
+        payload: r.payload || collection.payloads.get(this.canonicalPayloadKeyFromResultId(r.id)),
       }));
     }
 
@@ -256,7 +290,7 @@ export class WasmBackend implements IVelesDBBackend {
         score,
       };
 
-      const payload = collection.payloads.get(stringId);
+      const payload = collection.payloads.get(this.canonicalPayloadKeyFromResultId(id));
       if (payload) {
         result.payload = payload;
       }
@@ -294,7 +328,7 @@ export class WasmBackend implements IVelesDBBackend {
     const removed = collection.store.remove(BigInt(numericId));
     
     if (removed) {
-      collection.payloads.delete(String(id));
+      collection.payloads.delete(this.canonicalPayloadKey(id));
     }
 
     return removed;
@@ -308,16 +342,21 @@ export class WasmBackend implements IVelesDBBackend {
       throw new NotFoundError(`Collection '${collectionName}'`);
     }
 
-    // WASM backend doesn't support direct get by ID
-    // This is a limitation - would need to implement in Rust
-    const payload = collection.payloads.get(String(id));
-    if (!payload) {
+    const numericId = this.toNumericId(id);
+    const point = collection.store.get(BigInt(numericId)) as
+      | { id: bigint | number; vector: number[] | Float32Array; payload?: Record<string, unknown> | null }
+      | null;
+    if (!point) {
       return null;
     }
 
+    const payload =
+      point.payload ??
+      collection.payloads.get(this.canonicalPayloadKey(numericId));
+
     return {
-      id,
-      vector: [], // Not available in current WASM impl
+      id: String(point.id),
+      vector: Array.isArray(point.vector) ? point.vector : Array.from(point.vector),
       payload,
     };
   }
@@ -327,12 +366,23 @@ export class WasmBackend implements IVelesDBBackend {
     _query: string,
     _options?: { k?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]> {
-    // WASM backend doesn't support BM25 text search
-    // Use REST backend for full-text search capabilities
-    throw new VelesDBError(
-      'Text search is not supported in WASM backend. Use REST backend for BM25 search.',
-      'NOT_SUPPORTED'
-    );
+    this.ensureInitialized();
+    const collection = this.collections.get(_collection);
+    if (!collection) {
+      throw new NotFoundError(`Collection '${_collection}'`);
+    }
+    const k = _options?.k ?? 10;
+    const field = undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = collection.store.text_search(_query, k, field) as Array<any>;
+    return raw.map((r: [bigint | number, number] | { id: bigint | number; score: number; payload?: Record<string, unknown> }) => {
+      if (Array.isArray(r)) {
+        const key = this.canonicalPayloadKeyFromResultId(r[0]);
+        return { id: String(r[0]), score: r[1], payload: collection.payloads.get(key) };
+      }
+      const key = this.canonicalPayloadKeyFromResultId(r.id);
+      return { id: String(r.id), score: r.score, payload: r.payload ?? collection.payloads.get(key) };
+    });
   }
 
   async hybridSearch(
@@ -341,12 +391,24 @@ export class WasmBackend implements IVelesDBBackend {
     _textQuery: string,
     _options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]> {
-    // WASM backend doesn't support hybrid search (requires BM25)
-    // Use REST backend for hybrid search capabilities
-    throw new VelesDBError(
-      'Hybrid search is not supported in WASM backend. Use REST backend for hybrid search.',
-      'NOT_SUPPORTED'
-    );
+    this.ensureInitialized();
+    const collection = this.collections.get(_collection);
+    if (!collection) {
+      throw new NotFoundError(`Collection '${_collection}'`);
+    }
+    const queryVector = _vector instanceof Float32Array ? _vector : new Float32Array(_vector);
+    const k = _options?.k ?? 10;
+    const vectorWeight = _options?.vectorWeight ?? 0.5;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = collection.store.hybrid_search(queryVector, _textQuery, k, vectorWeight) as Array<any>;
+    return raw.map((r: { id: bigint | number; score: number; payload?: Record<string, unknown> }) => {
+      const key = this.canonicalPayloadKeyFromResultId(r.id);
+      return {
+        id: String(r.id),
+        score: r.score,
+        payload: r.payload ?? collection.payloads.get(key),
+      };
+    });
   }
 
   async query(
@@ -354,13 +416,45 @@ export class WasmBackend implements IVelesDBBackend {
     _queryString: string,
     _params?: Record<string, unknown>,
     _options?: QueryOptions
-  ): Promise<QueryResponse> {
-    // WASM backend doesn't support VelesQL multi-model queries
-    // Use REST backend for VelesQL queries
-    throw new VelesDBError(
-      'VelesQL queries are not supported in WASM backend. Use REST backend for query support.',
-      'NOT_SUPPORTED'
-    );
+  ): Promise<QueryApiResponse> {
+    this.ensureInitialized();
+    const collection = this.collections.get(_collection);
+    if (!collection) {
+      throw new NotFoundError(`Collection '${_collection}'`);
+    }
+    const paramsVector = _params?.q;
+    if (!Array.isArray(paramsVector) && !(paramsVector instanceof Float32Array)) {
+      throw new VelesDBError(
+        'WASM query() expects params.q to contain the query embedding vector.',
+        'BAD_REQUEST'
+      );
+    }
+    const requestedK = _params?.k;
+    const k =
+      typeof requestedK === 'number' && Number.isInteger(requestedK) && requestedK > 0
+        ? requestedK
+        : 10;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = collection.store.query(
+      paramsVector instanceof Float32Array ? paramsVector : new Float32Array(paramsVector),
+      k
+    ) as Array<any>;
+
+    return {
+      results: raw.map((r: Record<string, unknown>) => ({
+        nodeId: (r.nodeId ?? r.node_id) as bigint | number,
+        vectorScore: ((r.vectorScore ?? r.vector_score) as number | null) ?? null,
+        graphScore: ((r.graphScore ?? r.graph_score) as number | null) ?? null,
+        fusedScore: ((r.fusedScore ?? r.fused_score) as number) ?? 0,
+        bindings: (r.bindings as Record<string, unknown>) ?? {},
+        columnData: ((r.columnData ?? r.column_data) as Record<string, unknown> | null) ?? null,
+      })),
+      stats: {
+        executionTimeMs: 0,
+        strategy: 'wasm-query',
+        scannedNodes: raw.length,
+      },
+    };
   }
 
   async multiQuerySearch(
@@ -368,12 +462,47 @@ export class WasmBackend implements IVelesDBBackend {
     _vectors: Array<number[] | Float32Array>,
     _options?: MultiQuerySearchOptions
   ): Promise<SearchResult[]> {
-    // WASM backend doesn't support multi-query fusion
-    // Use REST backend for MQF capabilities
-    throw new VelesDBError(
-      'Multi-query fusion is not supported in WASM backend. Use REST backend for MQF search.',
-      'NOT_SUPPORTED'
-    );
+    this.ensureInitialized();
+    const collection = this.collections.get(_collection);
+    if (!collection) {
+      throw new NotFoundError(`Collection '${_collection}'`);
+    }
+    if (_vectors.length === 0) {
+      return [];
+    }
+
+    const numVectors = _vectors.length;
+    const dimension = collection.config.dimension ?? 0;
+    const flat = new Float32Array(numVectors * dimension);
+    _vectors.forEach((vector, idx) => {
+      const src = vector instanceof Float32Array ? vector : new Float32Array(vector);
+      flat.set(src, idx * dimension);
+    });
+
+    const strategy = _options?.fusion ?? 'rrf';
+    if (strategy === 'weighted') {
+      throw new VelesDBError(
+        "Fusion strategy 'weighted' is not supported in WASM backend.",
+        'NOT_SUPPORTED'
+      );
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = collection.store.multi_query_search(
+      flat,
+      numVectors,
+      _options?.k ?? 10,
+      strategy,
+      _options?.fusionParams?.k ?? 60
+    ) as Array<any>;
+
+    return raw.map((r: [bigint | number, number] | { id: bigint | number; score: number; payload?: Record<string, unknown> }) => {
+      if (Array.isArray(r)) {
+        const key = this.canonicalPayloadKeyFromResultId(r[0]);
+        return { id: String(r[0]), score: r[1], payload: collection.payloads.get(key) };
+      }
+      const key = this.canonicalPayloadKeyFromResultId(r.id);
+      return { id: String(r.id), score: r.score, payload: r.payload ?? collection.payloads.get(key) };
+    });
   }
 
 
@@ -428,10 +557,13 @@ export class WasmBackend implements IVelesDBBackend {
     if (typeof id === 'number') {
       return id;
     }
-    // Try to parse as number, otherwise use hash
-    const parsed = parseInt(id, 10);
-    if (!isNaN(parsed)) {
-      return parsed;
+    // Parse only canonical numeric strings, avoid parseInt partial parsing ("123abc" -> 123)
+    const normalized = this.normalizeIdString(id);
+    if (normalized !== null) {
+      const parsed = Number(normalized);
+      if (Number.isSafeInteger(parsed)) {
+        return parsed;
+      }
     }
     // Simple string hash for non-numeric IDs
     let hash = 0;

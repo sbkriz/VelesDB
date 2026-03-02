@@ -132,8 +132,8 @@ class GraphRetriever(BaseRetriever):
                 return vs._collection_name
             if hasattr(vs, "collection_name"):
                 return vs.collection_name
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to infer collection name from vector store: %s", exc)
         return "default"
     
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
@@ -240,8 +240,8 @@ class GraphRetriever(BaseRetriever):
                     return int(node.node_id)
                 except (ValueError, TypeError):
                     pass
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to extract node id from node metadata: %s", exc)
         return None
     
     def _traverse_graph(self, source_id: int) -> List[int]:
@@ -289,12 +289,12 @@ class GraphRetriever(BaseRetriever):
         try:
             # Try to get from vector store
             vs = self._index._vector_store
-            if hasattr(vs, "get_by_id"):
-                result = vs.get_by_id(node_id)
-                if result:
-                    return result
-        except Exception:
-            pass
+            if hasattr(vs, "get_nodes"):
+                results = vs.get_nodes([str(node_id)])
+                if results:
+                    return results[0]
+        except Exception as exc:
+            logger.debug("Failed to fetch node %s from vector store: %s", node_id, exc)
         return None
 
 

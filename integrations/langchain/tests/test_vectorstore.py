@@ -152,7 +152,7 @@ class TestVelesDBVectorStore:
         assert retriever is not None
 
     def test_delete(self, temp_db_path, embeddings):
-        """Test deleting documents."""
+        """Test deleting auto-generated numeric IDs."""
         vectorstore = VelesDBVectorStore(
             embedding=embeddings,
             path=temp_db_path,
@@ -161,6 +161,20 @@ class TestVelesDBVectorStore:
 
         ids = vectorstore.add_texts(["To be deleted"])
         
+        result = vectorstore.delete(ids)
+        assert result is True
+
+    def test_delete_custom_string_ids(self, temp_db_path, embeddings):
+        """Test deleting custom string IDs hashed to stable core IDs."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_delete_custom",
+        )
+
+        ids = vectorstore.add_texts(["Custom id doc"], ids=["doc://custom"])
+        assert ids == ["doc://custom"]
+
         result = vectorstore.delete(ids)
         assert result is True
 
@@ -189,6 +203,55 @@ class TestVelesDBVectorStore:
         assert first != other
         assert 0 <= first <= 0x7FFFFFFFFFFFFFFF
         assert first > 0xFFFFFFFF
+
+    def test_delete_uses_same_id_canonicalization_for_numeric_and_string_ids(self, embeddings):
+        """delete() must map IDs with the same strategy used by add_texts()."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="test_delete_mapping",
+        )
+        mock_collection = type("MockCollection", (), {"delete": lambda self, ids: setattr(self, "ids", ids)})()
+        vectorstore._collection = mock_collection
+
+        result = vectorstore.delete(["123", "doc://custom"])
+        assert result is True
+        assert mock_collection.ids[0] == 123
+        assert mock_collection.ids[1] == _stable_hash_id("doc://custom")
+
+    def test_add_texts_with_custom_string_id_uses_stable_hashed_point_id(self, embeddings):
+        """add_texts() should hash non-numeric custom IDs deterministically."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="test_add_mapping",
+        )
+
+        captured_points = []
+
+        class DummyCollection:
+            def upsert(self, points):
+                captured_points.extend(points)
+
+        vectorstore._get_collection = lambda _dimension: DummyCollection()  # type: ignore[method-assign]
+        result_ids = vectorstore.add_texts(["hello"], ids=["doc://custom"])
+
+        assert result_ids == ["doc://custom"]
+        assert len(captured_points) == 1
+        assert captured_points[0]["id"] == _stable_hash_id("doc://custom")
+
+    def test_generate_auto_id_is_process_independent_shape(self, embeddings):
+        """Auto IDs should be numeric strings and map to positive point IDs."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="test_auto_ids",
+        )
+
+        doc_id, point_id = vectorstore._generate_auto_id()
+        assert doc_id.isdigit()
+        assert int(doc_id) == point_id
+        assert point_id > 0
 
 
 class TestVelesDBVectorStoreAdvanced:
