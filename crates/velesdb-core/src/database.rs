@@ -1,5 +1,7 @@
 //! Database facade and orchestration layer for collection lifecycle and query routing.
 
+use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
+use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
 use crate::{
     Collection, CollectionType, ColumnStore, DistanceMetric, Error, Result, SearchResult,
@@ -7,30 +9,70 @@ use crate::{
 };
 
 /// Database instance managing collections and storage.
+///
+/// # Lifecycle
+///
+/// `Database::open()` automatically loads all previously created collections from disk.
+/// There is no need to call `load_collections()` separately.
+///
+/// # Extension (Premium)
+///
+/// Use [`Database::open_with_observer`] to inject a [`DatabaseObserver`] implementation
+/// from `velesdb-premium` without modifying this crate.
 #[cfg(feature = "persistence")]
 pub struct Database {
     /// Path to the data directory
     data_dir: std::path::PathBuf,
-    /// Collections managed by this database
+    /// Legacy registry (Collection god-object) — kept for backward compatibility during migration.
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
+    /// New registry: vector collections.
+    vector_colls: parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
+    /// New registry: graph collections.
+    graph_colls: parking_lot::RwLock<std::collections::HashMap<String, GraphCollection>>,
+    /// New registry: metadata-only collections.
+    metadata_colls: parking_lot::RwLock<std::collections::HashMap<String, MetadataCollection>>,
     /// Cached collection statistics for CBO planning.
     collection_stats: parking_lot::RwLock<
         std::collections::HashMap<String, crate::collection::stats::CollectionStats>,
     >,
+    /// Optional lifecycle observer (used by velesdb-premium for RBAC, audit, multi-tenant).
+    observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
 }
 
 #[cfg(feature = "persistence")]
 impl Database {
-    /// Opens or creates a database at the specified path.
+    /// Opens or creates a database, **automatically loading all existing collections**.
     ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the data directory
+    /// This replaces the previous `open()` + `load_collections()` two-step pattern.
+    /// The new `open()` is a strict auto-load: all `config.json` directories under
+    /// `path` are loaded on startup.
     ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or accessed.
     pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        Self::open_impl(path, None)
+    }
+
+    /// Opens a database with a [`DatabaseObserver`] (used by velesdb-premium).
+    ///
+    /// The observer receives lifecycle hooks for every collection operation,
+    /// enabling RBAC, audit logging, multi-tenant routing, etc.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or accessed.
+    pub fn open_with_observer<P: AsRef<std::path::Path>>(
+        path: P,
+        observer: std::sync::Arc<dyn DatabaseObserver>,
+    ) -> Result<Self> {
+        Self::open_impl(path, Some(observer))
+    }
+
+    fn open_impl<P: AsRef<std::path::Path>>(
+        path: P,
+        observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
+    ) -> Result<Self> {
         let data_dir = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
 
@@ -42,11 +84,20 @@ impl Database {
             "SIMD features detected - direct dispatch enabled"
         );
 
-        Ok(Self {
+        let db = Self {
             data_dir,
             collections: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            vector_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            graph_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            metadata_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             collection_stats: parking_lot::RwLock::new(std::collections::HashMap::new()),
-        })
+            observer,
+        };
+
+        // Auto-load all existing collections from disk (replaces manual load_collections()).
+        db.load_collections()?;
+
+        Ok(db)
     }
 
     /// Creates a new collection with the specified parameters.
@@ -244,6 +295,174 @@ impl Database {
         Ok(())
     }
 
+    // =========================================================================
+    // New typed API (WP-4) — preferred over the legacy `create_collection` methods
+    // =========================================================================
+
+    /// Creates a new vector collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_vector_collection(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+    ) -> Result<()> {
+        self.create_vector_collection_with_options(name, dimension, metric, StorageMode::default())
+    }
+
+    /// Creates a new vector collection with custom storage options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_vector_collection_with_options(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+    ) -> Result<()> {
+        if self.collections.read().contains_key(name) || self.vector_colls.read().contains_key(name)
+        {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+        let path = self.data_dir.join(name);
+        let coll = VectorCollection::create(path, name, dimension, metric, storage_mode)?;
+        self.vector_colls
+            .write()
+            .insert(name.to_string(), coll.clone());
+
+        // Also register in legacy registry for backward compatibility
+        let legacy = Collection::create_with_options(
+            self.data_dir.join(name),
+            dimension,
+            metric,
+            storage_mode,
+        );
+        if let Ok(c) = legacy {
+            self.collections.write().insert(name.to_string(), c);
+        }
+
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Vector {
+                dimension,
+                metric,
+                storage_mode,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+        Ok(())
+    }
+
+    /// Creates a new graph collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_graph_collection(
+        &self,
+        name: &str,
+        schema: crate::collection::GraphSchema,
+    ) -> Result<()> {
+        if self.collections.read().contains_key(name) || self.graph_colls.read().contains_key(name)
+        {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+        let path = self.data_dir.join(name);
+        let coll =
+            GraphCollection::create(path, name, None, DistanceMetric::Cosine, schema.clone())?;
+        self.graph_colls.write().insert(name.to_string(), coll);
+
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Graph {
+                dimension: None,
+                metric: DistanceMetric::Cosine,
+                schema,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+        Ok(())
+    }
+
+    /// Creates a new metadata-only collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_metadata_collection(&self, name: &str) -> Result<()> {
+        if self.collections.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name)
+        {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+        let path = self.data_dir.join(name);
+        let coll = MetadataCollection::create(path, name)?;
+        self.metadata_colls.write().insert(name.to_string(), coll);
+
+        // Also register in legacy registry
+        let legacy = Collection::create_metadata_only(self.data_dir.join(name), name);
+        if let Ok(c) = legacy {
+            self.collections.write().insert(name.to_string(), c);
+        }
+
+        if let Some(ref obs) = self.observer {
+            obs.on_collection_created(name, &CollectionType::MetadataOnly);
+        }
+        Ok(())
+    }
+
+    /// Returns a `VectorCollection` by name.
+    ///
+    /// Checks the new registry first; falls back to casting a legacy `Collection` if found.
+    #[must_use]
+    pub fn get_vector_collection(&self, name: &str) -> Option<VectorCollection> {
+        if let Some(c) = self.vector_colls.read().get(name).cloned() {
+            return Some(c);
+        }
+        // Fallback: open from disk if registered in legacy registry
+        let path = self.data_dir.join(name);
+        if path.join("config.json").exists() {
+            VectorCollection::open(path).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Returns a `GraphCollection` by name.
+    #[must_use]
+    pub fn get_graph_collection(&self, name: &str) -> Option<GraphCollection> {
+        if let Some(c) = self.graph_colls.read().get(name).cloned() {
+            return Some(c);
+        }
+        let path = self.data_dir.join(name);
+        if path.join("config.json").exists() {
+            GraphCollection::open(path).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Returns a `MetadataCollection` by name.
+    #[must_use]
+    pub fn get_metadata_collection(&self, name: &str) -> Option<MetadataCollection> {
+        if let Some(c) = self.metadata_colls.read().get(name).cloned() {
+            return Some(c);
+        }
+        let path = self.data_dir.join(name);
+        if path.join("config.json").exists() {
+            MetadataCollection::open(path).ok()
+        } else {
+            None
+        }
+    }
+
+    // =========================================================================
+    // Legacy typed creation (kept for backward compatibility)
+    // =========================================================================
+
     /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
     ///
     /// # Arguments
@@ -292,7 +511,11 @@ impl Database {
 
     /// Loads existing collections from disk.
     ///
-    /// Call this after opening a database to load previously created collections.
+    /// # Deprecation note
+    ///
+    /// **This method is called automatically by [`Database::open`].**
+    /// There is no need to call it manually. It is kept public only for
+    /// backward compatibility with code that relied on the old two-step pattern.
     ///
     /// # Errors
     ///

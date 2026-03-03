@@ -21,10 +21,13 @@ mod async_ops_tests;
 pub mod auto_reindex;
 mod core;
 pub mod graph;
+mod graph_collection;
+mod metadata_collection;
 pub mod query_cost;
 pub mod search;
 pub mod stats;
 mod types;
+mod vector_collection;
 
 #[cfg(test)]
 mod tests;
@@ -43,4 +46,7 @@ pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, ValueType,
 };
+pub use graph_collection::GraphCollection;
+pub use metadata_collection::MetadataCollection;
 pub use types::{Collection, CollectionConfig, CollectionType};
+pub use vector_collection::VectorCollection;

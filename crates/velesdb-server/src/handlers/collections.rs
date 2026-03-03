@@ -81,11 +81,14 @@ pub async fn create_collection(
     };
 
     let result = match req.collection_type.to_lowercase().as_str() {
-        "metadata_only" | "metadata-only" => {
-            use velesdb_core::CollectionType;
+        "metadata_only" | "metadata-only" | "metadata" => {
+            state.db.create_metadata_collection(&req.name)
+        }
+        "graph" | "knowledge_graph" | "kg" => {
+            use velesdb_core::GraphSchema;
             state
                 .db
-                .create_collection_typed(&req.name, &CollectionType::MetadataOnly)
+                .create_graph_collection(&req.name, GraphSchema::schemaless())
         }
         "vector" | "" => {
             let dimension = match req.dimension {
@@ -100,16 +103,19 @@ pub async fn create_collection(
                         .into_response()
                 }
             };
-            state
-                .db
-                .create_collection_with_options(&req.name, dimension, metric, storage_mode)
+            state.db.create_vector_collection_with_options(
+                &req.name,
+                dimension,
+                metric,
+                storage_mode,
+            )
         }
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!(
-                        "Invalid collection_type: {}. Valid: vector, metadata_only",
+                        "Invalid collection_type: {}. Valid: vector, graph, metadata_only",
                         req.collection_type
                     ),
                 }),

@@ -77,6 +77,8 @@ mod config_tests;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod engine;
 pub mod error;
 #[cfg(test)]
 mod error_tests;
@@ -148,8 +150,26 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
 pub use collection::{
-    Collection, CollectionType, ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge,
-    GraphNode, GraphSchema, IndexInfo, NodeType, TraversalResult, ValueType,
+    // Public user-facing types
+    Collection,
+    CollectionType,
+    // ConcurrentEdgeStore still needed by server handlers — remove in WP-6
+    ConcurrentEdgeStore,
+    // EdgeStore kept public (used by server GraphService + Python SDK)
+    // Reason: server GraphService still uses EdgeStore directly — demote to pub(crate) after server migration
+    EdgeStore,
+    // Graph API types (user-visible)
+    EdgeType,
+    GraphCollection,
+    GraphEdge,
+    GraphNode,
+    GraphSchema,
+    IndexInfo,
+    MetadataCollection,
+    NodeType,
+    TraversalResult,
+    ValueType,
+    VectorCollection,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
@@ -180,6 +200,10 @@ pub use metrics::{
 
 #[cfg(feature = "persistence")]
 mod database;
+#[cfg(feature = "persistence")]
+pub mod observer;
 
 #[cfg(feature = "persistence")]
 pub use database::Database;
+#[cfg(feature = "persistence")]
+pub use observer::DatabaseObserver;
