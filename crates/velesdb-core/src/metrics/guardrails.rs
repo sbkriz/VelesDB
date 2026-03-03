@@ -209,113 +209,55 @@ impl GuardRailsMetrics {
     /// Exports guard-rails metrics in Prometheus format.
     #[must_use]
     pub fn export_prometheus(&self) -> String {
-        use std::fmt::Write;
         let mut output = String::new();
-
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_limits_exceeded_total Guard-rail limits exceeded"
-        );
-        let _ = writeln!(output, "# TYPE velesdb_limits_exceeded_total counter");
-        let _ = writeln!(
-            output,
-            "velesdb_limits_exceeded_total{{limit_type=\"timeout\"}} {}",
-            self.timeout_exceeded.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_limits_exceeded_total{{limit_type=\"depth\"}} {}",
-            self.depth_exceeded.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_limits_exceeded_total{{limit_type=\"cardinality\"}} {}",
-            self.cardinality_exceeded.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_limits_exceeded_total{{limit_type=\"memory\"}} {}",
-            self.memory_exceeded.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(output);
-
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_rate_limit_requests_total Rate limit decisions"
-        );
-        let _ = writeln!(output, "# TYPE velesdb_rate_limit_requests_total counter");
-        let _ = writeln!(
-            output,
-            "velesdb_rate_limit_requests_total{{decision=\"allowed\"}} {}",
-            self.rate_limit_allowed.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_rate_limit_requests_total{{decision=\"rejected\"}} {}",
-            self.rate_limit_rejected.load(Ordering::Relaxed)
-        );
-
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_like_guardrail_rejected_total LIKE/ILIKE guardrail rejections"
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_like_guardrail_rejected_total counter"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_like_guardrail_rejected_total {}",
-            self.like_guardrail_rejected.load(Ordering::Relaxed)
-        );
-
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_parser_depth_limit_rejected_total Parser depth-limit rejections"
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_parser_depth_limit_rejected_total counter"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_parser_depth_limit_rejected_total {}",
-            self.parser_depth_limit_rejected.load(Ordering::Relaxed)
-        );
-
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_invalid_offset_read_errors_total Invalid storage offset read errors"
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_invalid_offset_read_errors_total counter"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_invalid_offset_read_errors_total {}",
-            self.invalid_offset_read_errors.load(Ordering::Relaxed)
-        );
-
-        let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_cache_collision_fallback_total Query-cache collision fallbacks"
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_cache_collision_fallback_total counter"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_cache_collision_fallback_total {}",
-            self.cache_collision_fallback_total.load(Ordering::Relaxed)
-        );
-
+        self.write_limits_metrics(&mut output);
+        self.write_rate_limit_metrics(&mut output);
+        self.write_specialized_metrics(&mut output);
+        self.write_storage_metrics(&mut output);
         output
+    }
+
+    fn write_limits_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
+        let _ = writeln!(output, "# HELP velesdb_limits_exceeded_total Guard-rail limits exceeded");
+        let _ = writeln!(output, "# TYPE velesdb_limits_exceeded_total counter");
+        let _ = writeln!(output, "velesdb_limits_exceeded_total{{limit_type=\"timeout\"}} {}", self.timeout_exceeded.load(Ordering::Relaxed));
+        let _ = writeln!(output, "velesdb_limits_exceeded_total{{limit_type=\"depth\"}} {}", self.depth_exceeded.load(Ordering::Relaxed));
+        let _ = writeln!(output, "velesdb_limits_exceeded_total{{limit_type=\"cardinality\"}} {}", self.cardinality_exceeded.load(Ordering::Relaxed));
+        let _ = writeln!(output, "velesdb_limits_exceeded_total{{limit_type=\"memory\"}} {}", self.memory_exceeded.load(Ordering::Relaxed));
+        let _ = writeln!(output);
+    }
+
+    fn write_rate_limit_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
+        let _ = writeln!(output, "# HELP velesdb_rate_limit_requests_total Rate limit decisions");
+        let _ = writeln!(output, "# TYPE velesdb_rate_limit_requests_total counter");
+        let _ = writeln!(output, "velesdb_rate_limit_requests_total{{decision=\"allowed\"}} {}", self.rate_limit_allowed.load(Ordering::Relaxed));
+        let _ = writeln!(output, "velesdb_rate_limit_requests_total{{decision=\"rejected\"}} {}", self.rate_limit_rejected.load(Ordering::Relaxed));
+        let _ = writeln!(output);
+    }
+
+    fn write_specialized_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
+        let _ = writeln!(output, "# HELP velesdb_like_guardrail_rejected_total LIKE/ILIKE guardrail rejections");
+        let _ = writeln!(output, "# TYPE velesdb_like_guardrail_rejected_total counter");
+        let _ = writeln!(output, "velesdb_like_guardrail_rejected_total {}", self.like_guardrail_rejected.load(Ordering::Relaxed));
+        let _ = writeln!(output);
+        let _ = writeln!(output, "# HELP velesdb_parser_depth_limit_rejected_total Parser depth-limit rejections");
+        let _ = writeln!(output, "# TYPE velesdb_parser_depth_limit_rejected_total counter");
+        let _ = writeln!(output, "velesdb_parser_depth_limit_rejected_total {}", self.parser_depth_limit_rejected.load(Ordering::Relaxed));
+        let _ = writeln!(output);
+    }
+
+    fn write_storage_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
+        let _ = writeln!(output, "# HELP velesdb_invalid_offset_read_errors_total Invalid storage offset read errors");
+        let _ = writeln!(output, "# TYPE velesdb_invalid_offset_read_errors_total counter");
+        let _ = writeln!(output, "velesdb_invalid_offset_read_errors_total {}", self.invalid_offset_read_errors.load(Ordering::Relaxed));
+        let _ = writeln!(output);
+        let _ = writeln!(output, "# HELP velesdb_cache_collision_fallback_total Query-cache collision fallbacks");
+        let _ = writeln!(output, "# TYPE velesdb_cache_collision_fallback_total counter");
+        let _ = writeln!(output, "velesdb_cache_collision_fallback_total {}", self.cache_collision_fallback_total.load(Ordering::Relaxed));
     }
 }
 

@@ -270,28 +270,34 @@ impl Collection {
             .map(|(id, v)| (*id, v.as_slice()))
             .collect();
 
-        let mut vector_storage = self.vector_storage.write();
-        vector_storage
-            .store_batch(&vectors_for_storage)
-            .map_err(Error::Io)?;
-        drop(vector_storage);
+        {
+            let mut vector_storage = self.vector_storage.write();
+            vector_storage
+                .store_batch(&vectors_for_storage)
+                .map_err(Error::Io)?;
+            // Perf: Flush while lock is already held — avoids a second write() acquisition
+            vector_storage.flush().map_err(Error::Io)?;
+        }
 
         // Store payloads and update BM25 (still sequential for now)
-        let mut payload_storage = self.payload_storage.write();
-        for point in points {
-            if let Some(payload) = &point.payload {
-                payload_storage
-                    .store(point.id, payload)
-                    .map_err(Error::Io)?;
+        {
+            let mut payload_storage = self.payload_storage.write();
+            for point in points {
+                if let Some(payload) = &point.payload {
+                    payload_storage
+                        .store(point.id, payload)
+                        .map_err(Error::Io)?;
 
-                // Update BM25 text index
-                let text = Self::extract_text_from_payload(payload);
-                if !text.is_empty() {
-                    self.text_index.add_document(point.id, &text);
+                    // Update BM25 text index
+                    let text = Self::extract_text_from_payload(payload);
+                    if !text.is_empty() {
+                        self.text_index.add_document(point.id, &text);
+                    }
                 }
             }
+            // Perf: Flush while lock is already held — avoids a second write() acquisition
+            payload_storage.flush().map_err(Error::Io)?;
         }
-        drop(payload_storage);
 
         // Perf: Parallel HNSW insertion (CPU bound - benefits from parallelism)
         let inserted = self.index.insert_batch_parallel(vectors_for_hnsw);
@@ -301,12 +307,6 @@ impl Collection {
         let mut config = self.config.write();
         config.point_count = self.vector_storage.read().len();
         drop(config);
-
-        // Perf: Only flush vector/payload storage (fast mmap sync)
-        // Skip expensive HNSW index save - will be saved on collection close/explicit flush
-        // This is safe: HNSW is in-memory and rebuilt from vector storage on restart
-        self.vector_storage.write().flush().map_err(Error::Io)?;
-        self.payload_storage.write().flush().map_err(Error::Io)?;
         // NOTE: index.save() removed - too slow for batch operations
         // Call collection.flush() explicitly if durability is critical
 
@@ -377,15 +377,19 @@ impl Collection {
         } else {
             // For vector collections, delete from all stores
             let mut vector_storage = self.vector_storage.write();
+            // Acquire cache locks once outside the loop (was N×3 lock acquisitions)
+            let mut sq8_cache = self.sq8_cache.write();
+            let mut binary_cache = self.binary_cache.write();
+            let mut pq_cache = self.pq_cache.write();
 
             for &id in ids {
                 let old_payload = payload_storage.retrieve(id).ok().flatten();
                 vector_storage.delete(id).map_err(Error::Io)?;
                 payload_storage.delete(id).map_err(Error::Io)?;
                 self.index.remove(id);
-                self.sq8_cache.write().remove(&id);
-                self.binary_cache.write().remove(&id);
-                self.pq_cache.write().remove(&id);
+                sq8_cache.remove(&id);
+                binary_cache.remove(&id);
+                pq_cache.remove(&id);
                 self.text_index.remove_document(id);
                 self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }

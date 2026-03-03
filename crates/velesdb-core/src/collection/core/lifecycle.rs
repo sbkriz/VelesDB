@@ -238,45 +238,9 @@ impl Collection {
             }
         }
 
-        // Load PropertyIndex if it exists (EPIC-009 US-005)
-        let property_index = {
-            let index_path = path.join("property_index.bin");
-            if index_path.exists() {
-                match PropertyIndex::load_from_file(&index_path) {
-                    Ok(idx) => idx,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
-                            index_path,
-                            e
-                        );
-                        PropertyIndex::new()
-                    }
-                }
-            } else {
-                PropertyIndex::new()
-            }
-        };
-
-        // Load RangeIndex if it exists (EPIC-009 US-005)
-        let range_index = {
-            let index_path = path.join("range_index.bin");
-            if index_path.exists() {
-                match RangeIndex::load_from_file(&index_path) {
-                    Ok(idx) => idx,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
-                            index_path,
-                            e
-                        );
-                        RangeIndex::new()
-                    }
-                }
-            } else {
-                RangeIndex::new()
-            }
-        };
+        // Load PropertyIndex and RangeIndex if they exist (EPIC-009 US-005)
+        let property_index = Self::load_property_index(&path);
+        let range_index = Self::load_range_index(&path);
 
         Ok(Self {
             path,
@@ -295,6 +259,34 @@ impl Collection {
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    fn load_property_index(path: &std::path::Path) -> PropertyIndex {
+        let index_path = path.join("property_index.bin");
+        if index_path.exists() {
+            match PropertyIndex::load_from_file(&index_path) {
+                Ok(idx) => return idx,
+                Err(e) => tracing::warn!(
+                    "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
+                    index_path, e
+                ),
+            }
+        }
+        PropertyIndex::new()
+    }
+
+    fn load_range_index(path: &std::path::Path) -> RangeIndex {
+        let index_path = path.join("range_index.bin");
+        if index_path.exists() {
+            match RangeIndex::load_from_file(&index_path) {
+                Ok(idx) => return idx,
+                Err(e) => tracing::warn!(
+                    "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
+                    index_path, e
+                ),
+            }
+        }
+        RangeIndex::new()
     }
 
     /// Returns the collection configuration.

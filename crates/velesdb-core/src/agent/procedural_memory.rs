@@ -25,6 +25,35 @@ use super::error::AgentMemoryError;
 use super::reinforcement::{FixedRate, ReinforcementContext, ReinforcementStrategy};
 use super::ttl::MemoryTtl;
 
+struct ProcedureState {
+    name: String,
+    steps: Vec<String>,
+    confidence: f32,
+    usage_count: u64,
+    created_at: i64,
+    success_count: u64,
+    failure_count: u64,
+}
+
+impl ProcedureState {
+    fn build_reinforcement_context(&self, now: i64) -> ReinforcementContext {
+        let total_uses = self.success_count + self.failure_count;
+        let success_rate = if total_uses > 0 {
+            self.success_count as f32 / total_uses as f32
+        } else {
+            0.5
+        };
+        ReinforcementContext {
+            usage_count: self.usage_count,
+            created_at: self.created_at as u64,
+            last_used: now as u64,
+            current_time: now as u64,
+            recent_success_rate: Some(success_rate),
+            custom: std::collections::HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProcedureMatch {
     pub id: u64,
@@ -273,84 +302,29 @@ impl<'a> ProceduralMemory<'a> {
             .next()
             .ok_or_else(|| AgentMemoryError::NotFound(format!("Procedure {procedure_id}")))?;
 
-        let payload = point
-            .payload
-            .as_ref()
-            .ok_or_else(|| AgentMemoryError::CollectionError("Missing payload".to_string()))?;
-
-        let name = payload
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let steps: Vec<String> = payload
-            .get("steps")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let old_confidence = payload
-            .get("confidence")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.5) as f32;
-        let usage_count = payload
-            .get("usage_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let created_at = payload
-            .get("created_at")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
-        let success_count = payload
-            .get("success_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let failure_count = payload
-            .get("failure_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-
+        let state = Self::extract_procedure_state(&point)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        let total_uses = success_count + failure_count;
-        let success_rate = if total_uses > 0 {
-            success_count as f32 / total_uses as f32
-        } else {
-            0.5
-        };
-
-        let context = ReinforcementContext {
-            usage_count,
-            created_at: created_at as u64,
-            last_used: now as u64,
-            current_time: now as u64,
-            recent_success_rate: Some(success_rate),
-            custom: std::collections::HashMap::new(),
-        };
-
-        let new_confidence = strategy.update_confidence(old_confidence, success, &context);
-
+        let context = state.build_reinforcement_context(now);
+        let new_confidence = strategy.update_confidence(state.confidence, success, &context);
         let (new_success, new_failure) = if success {
-            (success_count + 1, failure_count)
+            (state.success_count + 1, state.failure_count)
         } else {
-            (success_count, failure_count + 1)
+            (state.success_count, state.failure_count + 1)
         };
 
         let updated_point = Point::new(
             procedure_id,
             point.vector.clone(),
             Some(json!({
-                "name": name,
-                "steps": steps,
+                "name": state.name,
+                "steps": state.steps,
                 "confidence": new_confidence,
-                "usage_count": usage_count + 1,
-                "created_at": created_at,
+                "usage_count": state.usage_count + 1,
+                "created_at": state.created_at,
                 "last_used_at": now,
                 "success_count": new_success,
                 "failure_count": new_failure
@@ -362,6 +336,27 @@ impl<'a> ProceduralMemory<'a> {
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
         Ok(())
+    }
+
+    fn extract_procedure_state(point: &Point) -> Result<ProcedureState, AgentMemoryError> {
+        let payload = point
+            .payload
+            .as_ref()
+            .ok_or_else(|| AgentMemoryError::CollectionError("Missing payload".to_string()))?;
+
+        Ok(ProcedureState {
+            name: payload.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            steps: payload
+                .get("steps")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+            confidence: payload.get("confidence").and_then(serde_json::Value::as_f64).unwrap_or(0.5) as f32,
+            usage_count: payload.get("usage_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+            created_at: payload.get("created_at").and_then(serde_json::Value::as_i64).unwrap_or(0),
+            success_count: payload.get("success_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+            failure_count: payload.get("failure_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        })
     }
 
     /// Lists all tracked procedures.
