@@ -1,24 +1,13 @@
 //! CRUD operations for Collection (upsert, get, delete).
+//!
+//! Quantization caching helpers and secondary-index update helpers are in `crud_helpers.rs`.
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
-use crate::index::{JsonValue, SecondaryIndex};
 use crate::point::Point;
-use crate::quantization::{
-    BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
-};
+use crate::quantization::StorageMode;
 use crate::storage::{PayloadStorage, VectorStorage};
-
-const PQ_TRAINING_SAMPLES: usize = 128;
-
-fn auto_num_subspaces(dimension: usize) -> usize {
-    let mut num_subspaces = 8usize;
-    while num_subspaces > 1 && dimension % num_subspaces != 0 {
-        num_subspaces /= 2;
-    }
-    num_subspaces.max(1)
-}
 
 impl Collection {
     /// Inserts or updates points in the collection.
@@ -29,23 +18,25 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension, or if
     /// attempting to insert vectors into a metadata-only collection.
+    #[allow(clippy::too_many_lines)] // Monolithic for coherent lock-ordering; refactor tracked separately.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
         let dimension = config.dimension;
         let storage_mode = config.storage_mode;
         let metadata_only = config.metadata_only;
-        let name = config.name.clone();
-        drop(config);
 
         if metadata_only {
             for point in &points {
                 if !point.vector.is_empty() {
-                    return Err(Error::VectorNotAllowed(name));
+                    // Lazy clone: name only allocated on this error path.
+                    return Err(Error::VectorNotAllowed(config.name.clone()));
                 }
             }
+            drop(config);
             return self.upsert_metadata(points);
         }
+        drop(config);
 
         for point in &points {
             if point.dimension() != dimension {
@@ -112,71 +103,25 @@ impl Collection {
             }
         }
 
-        // Update point count
-        let mut config = self.config.write();
-        config.point_count = vector_storage.len();
-
-        // Auto-flush for durability
+        // LOCK ORDER: flush while vector_storage(2) + payload_storage(3) still held,
+        // then drop both before acquiring config(1) alone to avoid inversion.
+        let point_count = vector_storage.len();
         vector_storage.flush().map_err(Error::Io)?;
         payload_storage.flush().map_err(Error::Io)?;
+        drop(vector_storage);
+        drop(payload_storage);
+
+        // config(1) only — all higher-numbered locks released above.
+        let mut config = self.config.write();
+        config.point_count = point_count;
+        drop(config);
+
         self.index.save(&self.path).map_err(Error::Io)?;
 
+        // Invalidate stats cache so the next get_stats() recomputes fresh data.
+        *self.cached_stats.lock() = None;
+
         Ok(())
-    }
-
-    fn cache_quantized_vector(
-        &self,
-        point: &Point,
-        storage_mode: StorageMode,
-        sq8_cache: Option<&mut std::collections::HashMap<u64, QuantizedVector>>,
-        binary_cache: Option<&mut std::collections::HashMap<u64, BinaryQuantizedVector>>,
-        pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
-    ) {
-        match storage_mode {
-            StorageMode::SQ8 => {
-                if let Some(cache) = sq8_cache {
-                    let quantized = QuantizedVector::from_f32(&point.vector);
-                    cache.insert(point.id, quantized);
-                }
-            }
-            StorageMode::Binary => {
-                if let Some(cache) = binary_cache {
-                    let quantized = BinaryQuantizedVector::from_f32(&point.vector);
-                    cache.insert(point.id, quantized);
-                }
-            }
-            StorageMode::ProductQuantization => {
-                let mut quantizer_guard = self.pq_quantizer.write();
-                let mut backfill_samples: Vec<(u64, Vec<f32>)> = Vec::new();
-
-                if quantizer_guard.is_none() {
-                    let mut buffer = self.pq_training_buffer.write();
-                    buffer.push_back((point.id, point.vector.clone()));
-                    if buffer.len() >= PQ_TRAINING_SAMPLES {
-                        let training: Vec<Vec<f32>> =
-                            buffer.iter().map(|(_, vector)| vector.clone()).collect();
-                        let num_centroids = 256usize.min(training.len().max(2));
-                        *quantizer_guard = Some(ProductQuantizer::train(
-                            &training,
-                            auto_num_subspaces(point.vector.len()),
-                            num_centroids,
-                        ));
-                        backfill_samples = buffer.drain(..).collect();
-                    }
-                }
-
-                if let (Some(cache), Some(quantizer)) = (pq_cache, quantizer_guard.as_ref()) {
-                    for (id, vector) in backfill_samples {
-                        let code = quantizer.quantize(&vector);
-                        cache.insert(id, code);
-                    }
-
-                    let code = quantizer.quantize(&point.vector);
-                    cache.insert(point.id, code);
-                }
-            }
-            StorageMode::Full => {}
-        }
     }
 
     /// Inserts or updates metadata-only points (no vectors).
@@ -217,12 +162,18 @@ impl Collection {
             );
         }
 
-        // Update point count
-        let mut config = self.config.write();
-        config.point_count = payload_storage.ids().len();
-
-        // Auto-flush for durability
+        // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
+        let point_count = payload_storage.ids().len();
         payload_storage.flush().map_err(Error::Io)?;
+        drop(payload_storage);
+
+        // config(1) only — all higher-numbered locks released above.
+        let mut config = self.config.write();
+        config.point_count = point_count;
+        drop(config);
+
+        // Invalidate stats cache so the next get_stats() recomputes fresh data.
+        *self.cached_stats.lock() = None;
 
         Ok(())
     }
@@ -310,6 +261,9 @@ impl Collection {
         // NOTE: index.save() removed - too slow for batch operations
         // Call collection.flush() explicitly if durability is critical
 
+        // Invalidate stats cache so the next get_stats() recomputes fresh data.
+        *self.cached_stats.lock() = None;
+
         Ok(inserted)
     }
 
@@ -372,8 +326,13 @@ impl Collection {
                 self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
 
+            // LOCK ORDER: drop payload_storage(3) before acquiring config(1).
+            let point_count = payload_storage.ids().len();
+            drop(payload_storage);
+            // config(1) only — all higher-numbered locks released above.
             let mut config = self.config.write();
-            config.point_count = payload_storage.ids().len();
+            config.point_count = point_count;
+            drop(config);
         } else {
             // For vector collections, delete from all stores
             let mut vector_storage = self.vector_storage.write();
@@ -394,72 +353,23 @@ impl Collection {
                 self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
 
+            // LOCK ORDER: drop vector_storage(2), payload_storage(3), caches before acquiring config(1).
+            let point_count = vector_storage.len();
+            drop(vector_storage);
+            drop(payload_storage);
+            drop(sq8_cache);
+            drop(binary_cache);
+            drop(pq_cache);
+            // config(1) only — all higher-numbered locks released above.
             let mut config = self.config.write();
-            config.point_count = vector_storage.len();
+            config.point_count = point_count;
+            drop(config);
         }
+
+        // Invalidate stats cache so the next get_stats() recomputes fresh data.
+        *self.cached_stats.lock() = None;
 
         Ok(())
-    }
-
-    fn update_secondary_indexes_on_upsert(
-        &self,
-        id: u64,
-        old_payload: Option<&serde_json::Value>,
-        new_payload: Option<&serde_json::Value>,
-    ) {
-        let indexes = self.secondary_indexes.read();
-        for (field, index) in indexes.iter() {
-            if let Some(old_value) = old_payload
-                .and_then(|p| p.get(field))
-                .and_then(JsonValue::from_json)
-            {
-                self.remove_from_secondary_index(index, &old_value, id);
-            }
-            if let Some(new_value) = new_payload
-                .and_then(|p| p.get(field))
-                .and_then(JsonValue::from_json)
-            {
-                self.insert_into_secondary_index(index, new_value, id);
-            }
-        }
-    }
-
-    fn update_secondary_indexes_on_delete(&self, id: u64, old_payload: Option<&serde_json::Value>) {
-        let Some(payload) = old_payload else {
-            return;
-        };
-        let indexes = self.secondary_indexes.read();
-        for (field, index) in indexes.iter() {
-            if let Some(old_value) = payload.get(field).and_then(JsonValue::from_json) {
-                self.remove_from_secondary_index(index, &old_value, id);
-            }
-        }
-    }
-
-    fn insert_into_secondary_index(&self, index: &SecondaryIndex, key: JsonValue, id: u64) {
-        match index {
-            SecondaryIndex::BTree(tree) => {
-                let mut tree = tree.write();
-                let ids = tree.entry(key).or_default();
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-        }
-    }
-
-    fn remove_from_secondary_index(&self, index: &SecondaryIndex, key: &JsonValue, id: u64) {
-        match index {
-            SecondaryIndex::BTree(tree) => {
-                let mut tree = tree.write();
-                if let Some(ids) = tree.get_mut(key) {
-                    ids.retain(|existing| *existing != id);
-                    if ids.is_empty() {
-                        tree.remove(key);
-                    }
-                }
-            }
-        }
     }
 
     /// Returns the number of points in the collection.
