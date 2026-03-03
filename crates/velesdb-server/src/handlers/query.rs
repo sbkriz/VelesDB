@@ -125,10 +125,7 @@ pub async fn query(
         };
         // Route to aggregation execution
         let result =
-            match collection
-                .as_collection()
-                .execute_aggregate(&parsed, &req.params)
-            {
+            match collection.execute_aggregate(&parsed, &req.params) {
                 Ok(r) => r,
                 Err(e) => return (
                     StatusCode::UNPROCESSABLE_ENTITY,

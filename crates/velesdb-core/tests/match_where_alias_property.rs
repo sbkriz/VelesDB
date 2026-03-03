@@ -37,7 +37,6 @@ fn test_match_where_alias_property_filters_results() {
     let match_clause = query.match_clause.as_ref().expect("match clause");
 
     let results = collection
-        .as_collection()
         .execute_match(match_clause, &HashMap::new())
         .expect("execute match");
 

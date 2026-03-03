@@ -150,10 +150,10 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
 pub use collection::{
-    // Collection kept for backward compatibility with external crates
-    // that still access it directly (velesdb-cli repl, async_ops docs, etc.)
+    // Collection: internal executor kept pub for backward compat and internal modules.
+    // Suppression de l'export = PR dédiée (requiert ~40 corrections de références internes).
     Collection,
-    // Public user-facing types
+    // Public user-facing types — 3 typed collections replace Collection as primary API
     CollectionType,
     // Graph API types (user-visible)
     EdgeType,

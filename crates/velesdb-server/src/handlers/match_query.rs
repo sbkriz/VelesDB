@@ -185,7 +185,6 @@ pub async fn match_query(
     let results = if let Some(ref vector) = request.vector {
         let threshold = request.threshold.unwrap_or(0.0);
         collection
-            .as_collection()
             .execute_match_with_similarity(&match_clause, vector, threshold, &request.params)
             .map_err(|e| {
                 (
@@ -200,7 +199,6 @@ pub async fn match_query(
             })?
     } else {
         collection
-            .as_collection()
             .execute_match(&match_clause, &request.params)
             .map_err(|e| {
                 (

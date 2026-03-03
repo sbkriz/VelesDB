@@ -17,7 +17,7 @@ fn secondary_index_accelerates_metadata_query_and_explain() -> Result<()> {
         DistanceMetric::Cosine,
         StorageMode::Full,
     )?;
-    collection.as_collection().create_index("category")?;
+    collection.create_index("category")?;
 
     collection.upsert(vec![
         Point::new(
@@ -62,7 +62,7 @@ fn secondary_index_is_updated_on_delete() -> Result<()> {
         DistanceMetric::Cosine,
         StorageMode::Full,
     )?;
-    collection.as_collection().create_index("category")?;
+    collection.create_index("category")?;
 
     collection.upsert(vec![
         Point::new(10, vec![1.0, 0.0], Some(json!({"category": "books"}))),

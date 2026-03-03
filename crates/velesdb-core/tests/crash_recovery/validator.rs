@@ -223,14 +223,21 @@ mod tests {
     use tempfile::TempDir;
     use velesdb_core::distance::DistanceMetric;
     use velesdb_core::point::Point;
+    use velesdb_core::VectorCollection;
 
     #[test]
     fn test_validator_on_valid_collection() {
         let temp = TempDir::new().expect("Failed to create temp dir");
 
         // Create a valid collection
-        let collection = Collection::create(temp.path().to_path_buf(), 64, DistanceMetric::Cosine)
-            .expect("Create failed");
+        let collection = VectorCollection::create(
+            temp.path().to_path_buf(),
+            "validator_test",
+            64,
+            DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
+        )
+        .expect("Create failed");
 
         for i in 0..10 {
             #[allow(clippy::cast_precision_loss)]
@@ -258,8 +265,14 @@ mod tests {
         let temp = TempDir::new().expect("Failed to create temp dir");
 
         // Create empty collection
-        let collection = Collection::create(temp.path().to_path_buf(), 64, DistanceMetric::Cosine)
-            .expect("Create failed");
+        let collection = VectorCollection::create(
+            temp.path().to_path_buf(),
+            "validator_test",
+            64,
+            DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
+        )
+        .expect("Create failed");
         collection.flush().expect("Flush failed");
 
         // Validate

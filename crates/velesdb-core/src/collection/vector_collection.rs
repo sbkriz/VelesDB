@@ -281,6 +281,129 @@ impl VectorCollection {
         self.inner.multi_query_search(queries, k, strategy, filter)
     }
 
+    /// Multi-query search returning only IDs and fused scores.
+    /// # Errors
+    pub fn multi_query_search_ids(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        strategy: crate::fusion::FusionStrategy,
+    ) -> Result<Vec<(u64, f32)>> {
+        self.inner.multi_query_search_ids(queries, k, strategy)
+    }
+
+    // -------------------------------------------------------------------------
+    // Data mutations (metadata)
+    // -------------------------------------------------------------------------
+
+    /// Inserts or updates metadata-only points (no vectors).
+    /// # Errors
+    pub fn upsert_metadata(
+        &self,
+        points: impl IntoIterator<Item = crate::point::Point>,
+    ) -> Result<()> {
+        self.inner.upsert_metadata(points)
+    }
+
+    // -------------------------------------------------------------------------
+    // Index management
+    // -------------------------------------------------------------------------
+
+    /// Creates a secondary metadata index on a payload field.
+    /// # Errors
+    pub fn create_index(&self, field: &str) -> Result<()> {
+        self.inner.create_index(field)
+    }
+
+    /// Returns `true` if a secondary index exists on `field`.
+    #[must_use]
+    pub fn has_secondary_index(&self, field: &str) -> bool {
+        self.inner.has_secondary_index(field)
+    }
+
+    /// Creates a property index for O(1) equality lookups.
+    /// # Errors
+    pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
+        self.inner.create_property_index(label, property)
+    }
+
+    /// Creates a range index for O(log n) range queries.
+    /// # Errors
+    pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
+        self.inner.create_range_index(label, property)
+    }
+
+    /// Returns `true` if a property index exists.
+    #[must_use]
+    pub fn has_property_index(&self, label: &str, property: &str) -> bool {
+        self.inner.has_property_index(label, property)
+    }
+
+    /// Returns `true` if a range index exists.
+    #[must_use]
+    pub fn has_range_index(&self, label: &str, property: &str) -> bool {
+        self.inner.has_range_index(label, property)
+    }
+
+    /// Lists all index definitions on this collection.
+    #[must_use]
+    pub fn list_indexes(&self) -> Vec<crate::collection::IndexInfo> {
+        self.inner.list_indexes()
+    }
+
+    /// Drops an index. Returns `true` if an index was removed.
+    /// # Errors
+    pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
+        self.inner.drop_index(label, property)
+    }
+
+    /// Returns total memory usage of all indexes in bytes.
+    #[must_use]
+    pub fn indexes_memory_usage(&self) -> usize {
+        self.inner.indexes_memory_usage()
+    }
+
+    // -------------------------------------------------------------------------
+    // Match (graph pattern)
+    // -------------------------------------------------------------------------
+
+    /// Executes a graph MATCH query.
+    /// # Errors
+    pub fn execute_match(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
+        self.inner.execute_match(match_clause, params)
+    }
+
+    /// Executes a MATCH query with vector similarity filtering.
+    /// # Errors
+    pub fn execute_match_with_similarity(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        query_vector: &[f32],
+        threshold: f32,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
+        self.inner
+            .execute_match_with_similarity(match_clause, query_vector, threshold, params)
+    }
+
+    // -------------------------------------------------------------------------
+    // Aggregation
+    // -------------------------------------------------------------------------
+
+    /// Executes an aggregation query (GROUP BY / COUNT / SUM / AVG / MIN / MAX).
+    /// # Errors
+    pub fn execute_aggregate(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        self.inner.execute_aggregate(query, params)
+    }
+
     // -------------------------------------------------------------------------
     // Statistics / misc
     // -------------------------------------------------------------------------
@@ -297,13 +420,10 @@ impl VectorCollection {
         self.inner.is_metadata_only()
     }
 
-    /// Returns a reference to the inner `Collection`.
-    ///
-    /// Provides access to methods not yet promoted to `VectorCollection`'s public API.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn as_collection(&self) -> &crate::collection::Collection {
-        &self.inner
+    /// Analyzes the collection and returns fresh statistics.
+    /// # Errors
+    pub fn analyze(&self) -> Result<crate::collection::stats::CollectionStats> {
+        self.inner.analyze()
     }
 
     // -------------------------------------------------------------------------

@@ -164,7 +164,6 @@ impl Collection {
 
             let count = core_points.len();
             self.inner
-                .as_collection()
                 .upsert_metadata(core_points)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_metadata: {e}")))?;
 
@@ -497,7 +496,6 @@ impl Collection {
             let results = if let Some(vector_obj) = vector {
                 let query_vector = extract_vector(py, &vector_obj)?;
                 self.inner
-                    .as_collection()
                     .execute_match_with_similarity(
                         match_clause,
                         &query_vector,
@@ -507,7 +505,6 @@ impl Collection {
                     .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
             } else {
                 self.inner
-                    .as_collection()
                     .execute_match(match_clause, &rust_params)
                     .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
             };
@@ -613,7 +610,6 @@ impl Collection {
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
             let results = self
                 .inner
-                .as_collection()
                 .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Multi-query search IDs failed: {e}"))
@@ -630,7 +626,6 @@ impl Collection {
     #[pyo3(signature = (label, property))]
     fn create_property_index(&self, label: &str, property: &str) -> PyResult<()> {
         self.inner
-            .as_collection()
             .create_property_index(label, property)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create property index: {e}")))
     }
@@ -639,7 +634,6 @@ impl Collection {
     #[pyo3(signature = (label, property))]
     fn create_range_index(&self, label: &str, property: &str) -> PyResult<()> {
         self.inner
-            .as_collection()
             .create_range_index(label, property)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create range index: {e}")))
     }
@@ -647,15 +641,13 @@ impl Collection {
     /// Check if a property index exists.
     #[pyo3(signature = (label, property))]
     fn has_property_index(&self, label: &str, property: &str) -> bool {
-        self.inner
-            .as_collection()
-            .has_property_index(label, property)
+        self.inner.has_property_index(label, property)
     }
 
     /// Check if a range index exists.
     #[pyo3(signature = (label, property))]
     fn has_range_index(&self, label: &str, property: &str) -> bool {
-        self.inner.as_collection().has_range_index(label, property)
+        self.inner.has_range_index(label, property)
     }
 
     /// List all indexes on this collection.
@@ -669,7 +661,7 @@ impl Collection {
     ///     ...     print(f"{idx['label']}.{idx['property']} ({idx['index_type']})")
     fn list_indexes(&self) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let indexes = self.inner.as_collection().list_indexes();
+            let indexes = self.inner.list_indexes();
             let py_indexes: Vec<HashMap<String, PyObject>> = indexes
                 .into_iter()
                 .map(|idx| {
@@ -703,7 +695,6 @@ impl Collection {
     #[pyo3(signature = (label, property))]
     fn drop_index(&self, label: &str, property: &str) -> PyResult<bool> {
         self.inner
-            .as_collection()
             .drop_index(label, property)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to drop index: {e}")))
     }
