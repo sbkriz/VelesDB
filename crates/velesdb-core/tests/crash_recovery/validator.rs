@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 use velesdb_core::error::Result;
-use velesdb_core::Collection;
+use velesdb_core::VectorCollection;
 
 /// Report of integrity validation results.
 #[derive(Debug, Clone)]
@@ -115,7 +115,7 @@ impl IntegrityValidator {
 
         // Step 1: Try to open the collection (this triggers WAL replay)
         eprintln!("Opening collection for validation...");
-        let collection = match Collection::open(self.data_dir.clone()) {
+        let collection = match VectorCollection::open(self.data_dir.clone()) {
             Ok(c) => c,
             Err(e) => {
                 report.add_error(format!("Failed to open collection: {e}"));
@@ -136,7 +136,7 @@ impl IntegrityValidator {
 
     /// Validates data using public Collection API.
     #[allow(clippy::unused_self)]
-    fn validate_data(&self, collection: &Collection, report: &mut IntegrityReport) {
+    fn validate_data(&self, collection: &VectorCollection, report: &mut IntegrityReport) {
         eprintln!("Validating data...");
 
         let count = collection.len();

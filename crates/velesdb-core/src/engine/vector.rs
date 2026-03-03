@@ -25,8 +25,11 @@ use crate::quantization::{
 };
 use crate::storage::{MmapStorage, VectorStorage};
 
+// Reason: PqSample and PQ_TRAINING_SAMPLES are reserved for future quantization integration
+#[allow(dead_code)]
 type PqSample = (u64, Vec<f32>);
 
+#[allow(dead_code)]
 const PQ_TRAINING_SAMPLES: usize = 128;
 
 /// Encapsulates HNSW index, mmap vector storage, and all quantization caches.
@@ -38,15 +41,20 @@ pub(crate) struct VectorEngine {
     pub(crate) storage: Arc<RwLock<MmapStorage>>,
     /// HNSW approximate nearest-neighbor index.
     pub(crate) index: Arc<HnswIndex>,
-    /// SQ8 quantized vectors cache.
+    /// SQ8 quantized vectors cache (reserved for future quantized VectorCollection).
+    #[allow(dead_code)]
     pub(crate) sq8_cache: Arc<RwLock<HashMap<u64, QuantizedVector>>>,
-    /// Binary quantized vectors cache.
+    /// Binary quantized vectors cache (reserved for future use).
+    #[allow(dead_code)]
     pub(crate) binary_cache: Arc<RwLock<HashMap<u64, BinaryQuantizedVector>>>,
-    /// Product-quantized vectors cache.
+    /// Product-quantized vectors cache (reserved for future use).
+    #[allow(dead_code)]
     pub(crate) pq_cache: Arc<RwLock<HashMap<u64, PQVector>>>,
-    /// Trained ProductQuantizer (lazy-trained).
+    /// Trained ProductQuantizer (reserved for future use).
+    #[allow(dead_code)]
     pub(crate) pq_quantizer: Arc<RwLock<Option<ProductQuantizer>>>,
-    /// Buffer of samples used to train the PQ codebook.
+    /// Buffer of samples used to train PQ codebooks (reserved for future use).
+    #[allow(dead_code)]
     pub(crate) pq_training_buffer: Arc<RwLock<VecDeque<PqSample>>>,
     /// Vector dimension (stored for re-open, accessed via config).
     #[allow(dead_code)]
@@ -54,7 +62,8 @@ pub(crate) struct VectorEngine {
     /// Distance metric (stored for re-open, accessed via config).
     #[allow(dead_code)]
     pub(crate) metric: DistanceMetric,
-    /// Storage mode (Full / SQ8 / Binary / ProductQuantization).
+    /// Storage mode (Full / SQ8 / Binary / ProductQuantization — reserved for future use).
+    #[allow(dead_code)]
     pub(crate) storage_mode: StorageMode,
 }
 
@@ -124,15 +133,13 @@ impl VectorEngine {
     }
 
     /// Returns the number of stored vectors.
+    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.storage.read().len()
     }
 
     /// Stores a vector and updates the HNSW index.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the dimension mismatches or storage fails.
+    #[allow(dead_code)]
     pub(crate) fn store_vector(&self, id: u64, vector: &[f32]) -> Result<()> {
         self.storage.write().store(id, vector).map_err(Error::Io)?;
         self.index.insert(id, vector);
@@ -141,11 +148,13 @@ impl VectorEngine {
     }
 
     /// Retrieves a raw vector by ID.
+    #[allow(dead_code)]
     pub(crate) fn retrieve_vector(&self, id: u64) -> Option<Vec<f32>> {
         self.storage.read().retrieve(id).ok().flatten()
     }
 
     /// Performs kNN vector search, returning `(id, score)` pairs.
+    #[allow(dead_code)]
     pub(crate) fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
         self.index.search(query, k)
     }
@@ -164,7 +173,8 @@ impl VectorEngine {
         Ok(())
     }
 
-    /// Deletes a vector from storage caches (HNSW soft-delete not available).
+    /// Deletes a vector from storage caches.
+    #[allow(dead_code)]
     pub(crate) fn delete_vector(&self, id: u64) {
         let _ = self.storage.write().delete(id);
         self.sq8_cache.write().remove(&id);
