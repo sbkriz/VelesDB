@@ -102,7 +102,9 @@ impl TraversalMetrics {
     }
 }
 
-/// Types of limits that can be exceeded.
+/// Types of resource limits that can be exceeded.
+///
+/// Note: rate-limit rejections are tracked separately via [`GuardRailsMetrics::record_rate_limit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimitType {
     /// Query timeout exceeded
@@ -113,8 +115,6 @@ pub enum LimitType {
     Cardinality,
     /// Memory limit exceeded
     Memory,
-    /// Rate limit exceeded
-    RateLimit,
 }
 
 impl LimitType {
@@ -126,7 +126,6 @@ impl LimitType {
             Self::Depth => "depth",
             Self::Cardinality => "cardinality",
             Self::Memory => "memory",
-            Self::RateLimit => "rate_limit",
         }
     }
 }
@@ -163,23 +162,20 @@ impl GuardRailsMetrics {
         Self::default()
     }
 
-    /// Records a limit exceeded event.
+    /// Records a resource limit exceeded event.
     pub fn record_limit_exceeded(&self, limit_type: LimitType) {
         match limit_type {
             LimitType::Timeout => self.timeout_exceeded.fetch_add(1, Ordering::Relaxed),
             LimitType::Depth => self.depth_exceeded.fetch_add(1, Ordering::Relaxed),
             LimitType::Cardinality => self.cardinality_exceeded.fetch_add(1, Ordering::Relaxed),
             LimitType::Memory => self.memory_exceeded.fetch_add(1, Ordering::Relaxed),
-            // Reason: RateLimit rejections are counted exclusively via record_rate_limit(false)
-            // to avoid double-counting rate_limit_rejected. Use record_rate_limit() instead.
-            LimitType::RateLimit => self.rate_limit_rejected.fetch_add(1, Ordering::Relaxed),
         };
     }
 
     /// Records a rate limit decision.
     ///
-    /// **Prefer this method** over `record_limit_exceeded(LimitType::RateLimit)` to avoid
-    /// double-counting `rate_limit_rejected`. Do not call both for the same event.
+    /// Use this (not `record_limit_exceeded`) for rate-limit events to avoid double-counting
+    /// `rate_limit_rejected`.
     pub fn record_rate_limit(&self, allowed: bool) {
         if allowed {
             self.rate_limit_allowed.fetch_add(1, Ordering::Relaxed);
@@ -442,6 +438,5 @@ mod tests {
         assert_eq!(LimitType::Depth.as_str(), "depth");
         assert_eq!(LimitType::Cardinality.as_str(), "cardinality");
         assert_eq!(LimitType::Memory.as_str(), "memory");
-        assert_eq!(LimitType::RateLimit.as_str(), "rate_limit");
     }
 }
