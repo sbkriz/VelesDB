@@ -28,13 +28,13 @@ use crate::velesql::QueryPlanner;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use velesdb_core::{GraphCollection, GraphSchema, GraphEdge};
+/// use velesdb_core::{GraphCollection, GraphSchema, GraphEdge, DistanceMetric};
 ///
 /// let coll = GraphCollection::create(
 ///     "./data/kg".into(),
 ///     "knowledge",
-///     None,            // no embeddings
-///     Default::default(), // Cosine (unused)
+///     None,                    // no embeddings
+///     DistanceMetric::Cosine,  // unused when no embeddings
 ///     GraphSchema::schemaless(),
 /// )?;
 ///
