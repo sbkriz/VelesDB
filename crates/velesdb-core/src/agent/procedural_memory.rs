@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Procedural Memory - Learned patterns storage (US-004)
 //!
 //! Stores action sequences and learned procedures with confidence scoring.
@@ -54,38 +53,54 @@ impl ProcedureState {
     }
 }
 
+/// A procedure match result returned by [`ProceduralMemory::recall`].
 #[derive(Debug, Clone)]
 pub struct ProcedureMatch {
+    /// Unique identifier for the procedure.
     pub id: u64,
+    /// Human-readable name for the procedure.
     pub name: String,
+    /// Ordered sequence of steps that constitute the procedure.
     pub steps: Vec<String>,
+    /// Confidence score of this procedure (0.0 - 1.0).
     pub confidence: f32,
+    /// Similarity score from the vector search.
     pub score: f32,
 }
 
-pub struct ProceduralMemory<'a> {
+/// Procedural memory for storing learned action sequences with confidence scoring.
+///
+/// Stores procedures as embedding vectors with associated metadata.
+/// Supports confidence-based recall, reinforcement learning, and TTL expiration.
+pub struct ProceduralMemory {
     collection_name: String,
-    db: &'a Database,
+    db: Arc<Database>,
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     reinforcement_strategy: Arc<dyn ReinforcementStrategy>,
     stored_ids: RwLock<HashSet<u64>>,
 }
 
-impl<'a> ProceduralMemory<'a> {
+impl ProceduralMemory {
     const COLLECTION_NAME: &'static str = "_procedural_memory";
+
+    /// Returns the name of the underlying VelesDB collection.
+    #[must_use]
+    pub fn collection_name(&self) -> &str {
+        &self.collection_name
+    }
 
     /// Creates or opens procedural memory.
     ///
     /// # Errors
     ///
     /// Returns an error when collection creation/opening fails or dimensions mismatch.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
+    pub fn new_from_db(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
 
     pub(crate) fn new(
-        db: &'a Database,
+        db: Arc<Database>,
         dimension: usize,
         ttl: Arc<MemoryTtl>,
     ) -> Result<Self, AgentMemoryError> {
@@ -125,15 +140,11 @@ impl<'a> ProceduralMemory<'a> {
         })
     }
 
+    /// Overrides the default reinforcement strategy with a custom implementation.
     #[must_use]
     pub fn with_reinforcement_strategy(mut self, strategy: Arc<dyn ReinforcementStrategy>) -> Self {
         self.reinforcement_strategy = strategy;
         self
-    }
-
-    #[must_use]
-    pub fn collection_name(&self) -> &str {
-        &self.collection_name
     }
 
     /// Learns a procedure and stores it in memory.
