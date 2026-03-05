@@ -527,7 +527,7 @@ impl Database {
         }
         // Fallback: open from disk (e.g. collections created via legacy API).
         // Intentional: supports mixed-mode databases that were not fully migrated.
-        // BUG-3: verify this is actually a vector collection before caching it.
+        // Type is verified via config.json before caching (graph_schema / metadata_only checks).
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if config_path.exists() {
@@ -561,7 +561,7 @@ impl Database {
             return Some(c);
         }
         // Fallback: open from disk and cache to avoid repeated I/O.
-        // BUG-3: verify this is actually a graph collection before caching it.
+        // Type is verified via config.json: graph_schema must be Some (cfg.graph_schema.as_ref()?).
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if config_path.exists() {
@@ -591,7 +591,7 @@ impl Database {
             return Some(c);
         }
         // Fallback: open from disk and cache.
-        // BUG-3: verify this is actually a metadata-only collection before caching it.
+        // Type is verified via config.json: metadata_only must be true before caching.
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if config_path.exists() {
