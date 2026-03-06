@@ -435,6 +435,33 @@ impl Collection {
         Ok(())
     }
 
+    /// Returns a reference to the collection's data path.
+    #[must_use]
+    pub(crate) fn data_path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Returns a write guard on the collection config for mutation.
+    pub(crate) fn config_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, crate::collection::types::CollectionConfig> {
+        self.config.write()
+    }
+
+    /// Returns a write guard on the PQ quantizer slot.
+    pub(crate) fn pq_quantizer_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+        self.pq_quantizer.write()
+    }
+
+    /// Returns a read guard on the PQ quantizer slot.
+    pub(crate) fn pq_quantizer_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+        self.pq_quantizer.read()
+    }
+
     /// Saves the collection configuration to disk.
     pub(crate) fn save_config(&self) -> Result<()> {
         let config = self.config.read();

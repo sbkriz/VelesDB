@@ -263,6 +263,10 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
+        if let Some(train) = query.train.as_ref() {
+            return self.execute_train(train);
+        }
+
         if let Some(dml) = query.dml.as_ref() {
             return self.execute_dml(dml, params);
         }
@@ -924,6 +928,238 @@ impl Database {
             .collect();
         collection.upsert(updated_points)?;
         Ok(results)
+    }
+
+    /// Executes a `TRAIN QUANTIZER` statement.
+    ///
+    /// Trains a PQ/OPQ/RaBitQ codebook on the collection's vectors, stores the
+    /// resulting quantizer, updates storage mode, and persists the codebook to disk.
+    ///
+    /// # Lock Ordering
+    ///
+    /// Vectors are extracted under `vector_storage` read lock, which is released
+    /// before acquiring `pq_quantizer` write lock (respects canonical lock order).
+    ///
+    /// # Errors
+    ///
+    /// - `Error::CollectionNotFound` if the target collection does not exist.
+    /// - `Error::InvalidQuantizerConfig` for invalid params (m=0, dim%m!=0, already trained).
+    /// - `Error::TrainingFailed` if the underlying training algorithm errors.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    fn execute_train(&self, stmt: &crate::velesql::TrainStatement) -> Result<Vec<SearchResult>> {
+        use crate::velesql::WithValue;
+
+        // 1. Look up collection
+        let collection = self
+            .get_collection(&stmt.collection)
+            .or_else(|| {
+                self.get_vector_collection(&stmt.collection)
+                    .map(|vc| vc.inner)
+            })
+            .ok_or_else(|| Error::CollectionNotFound(stmt.collection.clone()))?;
+
+        // 2. Extract parameters from stmt.params
+        let m = stmt
+            .params
+            .get("m")
+            .and_then(WithValue::as_integer)
+            .map_or(0_usize, |v| v.max(0) as usize);
+        let k = stmt
+            .params
+            .get("k")
+            .and_then(WithValue::as_integer)
+            .map_or(256_usize, |v| v.max(0) as usize);
+        let train_type = stmt
+            .params
+            .get("type")
+            .and_then(WithValue::as_str)
+            .unwrap_or("pq")
+            .to_lowercase();
+        let oversampling = stmt
+            .params
+            .get("oversampling")
+            .and_then(WithValue::as_integer)
+            .map_or(4_u32, |v| v.max(0) as u32);
+        let sample_limit = stmt
+            .params
+            .get("sample")
+            .and_then(WithValue::as_integer)
+            .map(|v| v.max(0) as usize);
+        let force = stmt
+            .params
+            .get("force")
+            .and_then(WithValue::as_bool)
+            .unwrap_or(false);
+
+        // 3. Validate m and k (basic checks before dimension check)
+        if m == 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "m (num_subspaces) must be > 0".into(),
+            ));
+        }
+        if k == 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "k (num_centroids) must be > 0".into(),
+            ));
+        }
+
+        // 4. Read dimension from config (no heavy lock)
+        let config = collection.config();
+        let dim = config.dimension;
+
+        // RaBitQ doesn't need dimension % m check
+        if train_type != "rabitq" && dim % m != 0 {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "dimension {dim} is not divisible by m={m}"
+            )));
+        }
+
+        // 5. Check if already trained (unless force)
+        {
+            let quantizer = collection.pq_quantizer_read();
+            if quantizer.is_some() && !force {
+                return Err(Error::InvalidQuantizerConfig(
+                    "Quantizer already trained. Use force=true to retrain.".into(),
+                ));
+            }
+        }
+
+        // 6. Extract vectors (read lock on storage, released before pq_quantizer write)
+        let all_ids = collection.all_ids();
+        let points = collection.get(&all_ids);
+        let mut vectors: Vec<Vec<f32>> = points
+            .into_iter()
+            .flatten()
+            .filter(|p| !p.vector.is_empty())
+            .map(|p| p.vector)
+            .collect();
+
+        // Optional sampling
+        if let Some(limit) = sample_limit {
+            if vectors.len() > limit {
+                vectors.truncate(limit);
+            }
+        }
+
+        if vectors.is_empty() {
+            return Err(Error::TrainingFailed(
+                "no vectors available for training".into(),
+            ));
+        }
+
+        // 7. Train based on type
+        match train_type.as_str() {
+            "pq" => {
+                let pq = crate::quantization::ProductQuantizer::train(&vectors, m, k)
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+                let codebook_size = pq.codebook.num_subspaces * pq.codebook.num_centroids;
+                let n_train = vectors.len();
+
+                // Persist codebook
+                pq.save_codebook(collection.data_path())
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+                // Store quantizer (write lock)
+                *collection.pq_quantizer_write() = Some(pq);
+
+                // Update config
+                {
+                    let mut cfg = collection.config_write();
+                    cfg.storage_mode = StorageMode::ProductQuantization;
+                    cfg.pq_rescore_oversampling = Some(oversampling);
+                }
+                collection.save_config()?;
+
+                Ok(vec![SearchResult::new(
+                    crate::Point::metadata_only(
+                        0,
+                        serde_json::json!({
+                            "status": "trained",
+                            "type": "pq",
+                            "m": m,
+                            "k": k,
+                            "codebook_size": codebook_size,
+                            "training_vectors": n_train
+                        }),
+                    ),
+                    0.0,
+                )])
+            }
+            "opq" => {
+                let pq = crate::quantization::train_opq(&vectors, m, k, true, 10)
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+                let codebook_size = pq.codebook.num_subspaces * pq.codebook.num_centroids;
+                let n_train = vectors.len();
+
+                // Persist codebook + rotation
+                pq.save_codebook(collection.data_path())
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+                pq.save_rotation(collection.data_path())
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+                *collection.pq_quantizer_write() = Some(pq);
+
+                {
+                    let mut cfg = collection.config_write();
+                    cfg.storage_mode = StorageMode::ProductQuantization;
+                    cfg.pq_rescore_oversampling = Some(oversampling);
+                }
+                collection.save_config()?;
+
+                Ok(vec![SearchResult::new(
+                    crate::Point::metadata_only(
+                        0,
+                        serde_json::json!({
+                            "status": "trained",
+                            "type": "opq",
+                            "m": m,
+                            "k": k,
+                            "codebook_size": codebook_size,
+                            "training_vectors": n_train
+                        }),
+                    ),
+                    0.0,
+                )])
+            }
+            "rabitq" => {
+                let rbq = crate::quantization::RaBitQIndex::train(&vectors, 42)
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+                // Persist
+                rbq.save(collection.data_path())
+                    .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+                // RaBitQ doesn't use pq_quantizer Arc, but update storage_mode
+                {
+                    let mut cfg = collection.config_write();
+                    cfg.storage_mode = StorageMode::RaBitQ;
+                    cfg.pq_rescore_oversampling = Some(oversampling);
+                }
+                collection.save_config()?;
+
+                Ok(vec![SearchResult::new(
+                    crate::Point::metadata_only(
+                        0,
+                        serde_json::json!({
+                            "status": "trained",
+                            "type": "rabitq",
+                            "dimension": dim,
+                            "training_vectors": vectors.len()
+                        }),
+                    ),
+                    0.0,
+                )])
+            }
+            other => Err(Error::InvalidQuantizerConfig(format!(
+                "unknown quantizer type: '{other}'. Supported: pq, opq, rabitq"
+            ))),
+        }
     }
 }
 
