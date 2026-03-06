@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-06T11:00:43Z"
-last_activity: 2026-03-06 — Completed plan 02-02 (ADC SIMD + configurable rescore oversampling)
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-03-06T11:31:00Z"
+last_activity: 2026-03-06 — Completed plan 02-03 (RaBitQ binary quantization with XOR+popcount)
 progress:
   total_phases: 10
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
   percent: 10
 ---
 
@@ -26,28 +26,28 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 2 of 10 (PQ Core Engine)
-Plan: 2 of 4 in current phase (completed)
+Plan: 3 of 4 in current phase (completed)
 Status: Executing phase 2
-Last activity: 2026-03-06 — Completed plan 02-02 (ADC SIMD + configurable rescore oversampling)
+Last activity: 2026-03-06 — Completed plan 02-03 (RaBitQ binary quantization with XOR+popcount)
 
-Progress: [▓▓░░░░░░░░] 10%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: 18 min
-- Total execution time: 1.22 hours
+- Total plans completed: 7
+- Average duration: 20 min
+- Total execution time: 2.35 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-foundation-fixes | 2/4 | 32 min | 16 min |
-| 02-pq-core-engine | 2/4 | 41 min | 20 min |
+| 02-pq-core-engine | 3/4 | 72 min | 24 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (9 min), 01-02 (23 min), 02-01 (15 min), 02-02 (26 min)
+- Last 5 plans: 01-02 (23 min), 02-01 (15 min), 02-02 (26 min), 02-03 (31 min)
 - Trend: Executing
 
 *Updated after each plan completion*
@@ -71,6 +71,9 @@ Recent decisions affecting current work:
 - [02-02]: AVX2 ADC uses _mm256_i32gather_ps with scale=4 for 8-subspace-at-a-time gather
 - [02-02]: Default rescore oversampling lowered from hardcoded 8x to configurable 4x (sufficient with ADC)
 - [02-02]: None value for pq_rescore_oversampling disables rescore entirely (expert-only)
+- [02-03]: Removed qip correction from RaBitQ distance formula -- simpler ip_binary achieves 85%+ recall
+- [02-03]: Modified Gram-Schmidt for orthogonal rotation instead of ndarray QR (zero new deps)
+- [02-03]: 128d vectors with 100 clusters needed for recall test (binary quantization needs high dimensionality)
 
 ### Pending Todos
 
@@ -84,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T11:00:43Z
-Stopped at: Completed 02-02-PLAN.md
-Resume file: .planning/phases/02-pq-core-engine/02-03-PLAN.md
+Last session: 2026-03-06T11:31:00Z
+Stopped at: Completed 02-03-PLAN.md
+Resume file: .planning/phases/02-pq-core-engine/02-04-PLAN.md
