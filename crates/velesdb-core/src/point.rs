@@ -3,23 +3,30 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use crate::index::sparse::SparseVector;
+
 /// A point in the vector database.
 ///
 /// A point consists of:
 /// - A unique identifier
-/// - A vector (embedding)
+/// - A dense vector (embedding)
 /// - Optional payload (metadata)
+/// - Optional sparse vector (e.g., SPLADE, BM25 term weights)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     /// Unique identifier for the point.
     pub id: u64,
 
-    /// The vector embedding.
+    /// The dense vector embedding.
     pub vector: Vec<f32>,
 
     /// Optional JSON payload containing metadata.
     #[serde(default)]
     pub payload: Option<JsonValue>,
+
+    /// Optional sparse vector for hybrid dense+sparse search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparse_vector: Option<SparseVector>,
 }
 
 impl Point {
@@ -36,6 +43,7 @@ impl Point {
             id,
             vector,
             payload,
+            sparse_vector: None,
         }
     }
 
@@ -59,7 +67,54 @@ impl Point {
             id,
             vector: Vec::new(), // Empty vector
             payload: Some(payload),
+            sparse_vector: None,
         }
+    }
+
+    /// Creates a point with both dense and sparse vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier
+    /// * `vector` - Dense vector embedding
+    /// * `payload` - Optional metadata
+    /// * `sparse_vector` - Optional sparse vector
+    #[must_use]
+    pub fn with_sparse(
+        id: u64,
+        vector: Vec<f32>,
+        payload: Option<JsonValue>,
+        sparse_vector: Option<SparseVector>,
+    ) -> Self {
+        Self {
+            id,
+            vector,
+            payload,
+            sparse_vector,
+        }
+    }
+
+    /// Creates a sparse-only point (no dense vector).
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier
+    /// * `sparse_vector` - The sparse vector
+    /// * `payload` - Optional metadata
+    #[must_use]
+    pub fn sparse_only(id: u64, sparse_vector: SparseVector, payload: Option<JsonValue>) -> Self {
+        Self {
+            id,
+            vector: Vec::new(),
+            payload,
+            sparse_vector: Some(sparse_vector),
+        }
+    }
+
+    /// Returns `true` if this point has a sparse vector.
+    #[must_use]
+    pub const fn has_sparse_vector(&self) -> bool {
+        self.sparse_vector.is_some()
     }
 
     /// Returns the dimension of the vector.

@@ -85,6 +85,7 @@ impl Collection {
                             id,
                             vector,
                             payload,
+                            sparse_vector: None,
                         },
                         score,
                     })
@@ -192,6 +193,7 @@ impl Collection {
                                 id,
                                 vector,
                                 payload,
+                                sparse_vector: None,
                             },
                             score,
                         })
@@ -321,6 +323,7 @@ impl Collection {
                     id,
                     vector,
                     payload,
+                    sparse_vector: None,
                 };
 
                 Some(SearchResult::new(point, score))

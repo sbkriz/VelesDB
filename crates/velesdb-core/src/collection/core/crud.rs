@@ -285,6 +285,7 @@ impl Collection {
                         id,
                         vector: Vec::new(),
                         payload: Some(payload),
+                        sparse_vector: None,
                     })
                 })
                 .collect()
@@ -299,6 +300,7 @@ impl Collection {
                         id,
                         vector,
                         payload,
+                        sparse_vector: None,
                     })
                 })
                 .collect()

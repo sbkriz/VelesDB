@@ -71,21 +71,25 @@ fn test_executor_distinct_single_column() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "electronics", "brand": "Apple"})),
+            sparse_vector: None,
         },
         Point {
             id: 2,
             vector: vec![0.2; 4],
             payload: Some(serde_json::json!({"category": "electronics", "brand": "Samsung"})),
+            sparse_vector: None,
         },
         Point {
             id: 3,
             vector: vec![0.3; 4],
             payload: Some(serde_json::json!({"category": "clothing", "brand": "Nike"})),
+            sparse_vector: None,
         },
         Point {
             id: 4,
             vector: vec![0.4; 4],
             payload: Some(serde_json::json!({"category": "electronics", "brand": "Apple"})),
+            sparse_vector: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -120,21 +124,25 @@ fn test_executor_distinct_multiple_columns() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "electronics", "brand": "Apple"})),
+            sparse_vector: None,
         },
         Point {
             id: 2,
             vector: vec![0.2; 4],
             payload: Some(serde_json::json!({"category": "electronics", "brand": "Apple"})),
+            sparse_vector: None,
         },
         Point {
             id: 3,
             vector: vec![0.3; 4],
             payload: Some(serde_json::json!({"category": "electronics", "brand": "Samsung"})),
+            sparse_vector: None,
         },
         Point {
             id: 4,
             vector: vec![0.4; 4],
             payload: Some(serde_json::json!({"category": "clothing", "brand": "Nike"})),
+            sparse_vector: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -156,21 +164,25 @@ fn test_executor_distinct_preserves_order() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
         Point {
             id: 2,
             vector: vec![0.2; 4],
             payload: Some(serde_json::json!({"category": "B"})),
+            sparse_vector: None,
         },
         Point {
             id: 3,
             vector: vec![0.3; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
         Point {
             id: 4,
             vector: vec![0.4; 4],
             payload: Some(serde_json::json!({"category": "C"})),
+            sparse_vector: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -208,21 +220,25 @@ fn test_executor_distinct_with_null() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
         Point {
             id: 2,
             vector: vec![0.2; 4],
             payload: Some(serde_json::json!({})), // No category
+            sparse_vector: None,
         },
         Point {
             id: 3,
             vector: vec![0.3; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
         Point {
             id: 4,
             vector: vec![0.4; 4],
             payload: None, // No payload
+            sparse_vector: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -243,6 +259,7 @@ fn test_executor_distinct_empty_result() {
         id: 1,
         vector: vec![0.1; 4],
         payload: Some(serde_json::json!({"category": "A", "price": 100})),
+        sparse_vector: None,
     }];
     collection.upsert(points).unwrap();
 
@@ -262,16 +279,19 @@ fn test_executor_no_distinct_returns_all() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
         Point {
             id: 2,
             vector: vec![0.2; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
         Point {
             id: 3,
             vector: vec![0.3; 4],
             payload: Some(serde_json::json!({"category": "A"})),
+            sparse_vector: None,
         },
     ];
     collection.upsert(points).unwrap();

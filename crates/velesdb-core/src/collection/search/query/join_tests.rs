@@ -12,6 +12,7 @@ fn make_search_result(id: u64, payload_id: i64) -> SearchResult {
             id,
             vector: vec![0.1, 0.2, 0.3],
             payload: Some(serde_json::json!({"id": payload_id, "name": format!("item_{}", id)})),
+            sparse_vector: None,
         },
         score: 0.9,
     }
@@ -23,6 +24,7 @@ fn make_search_result_with_payload(id: u64, payload: serde_json::Value) -> Searc
             id,
             vector: vec![0.1, 0.2, 0.3],
             payload: Some(payload),
+            sparse_vector: None,
         },
         score: 0.9,
     }
@@ -181,6 +183,7 @@ fn test_extract_join_keys_u64_overflow_safety() {
             id: large_id,
             vector: vec![0.1, 0.2, 0.3],
             payload: None,
+            sparse_vector: None,
         },
         score: 0.9,
     };
@@ -213,6 +216,7 @@ fn test_extract_join_keys_i64_max_boundary() {
             id: max_safe_id,
             vector: vec![0.1, 0.2, 0.3],
             payload: None,
+            sparse_vector: None,
         },
         score: 0.9,
     };
@@ -241,6 +245,7 @@ fn test_extract_join_keys_just_above_i64_max() {
             id: just_over,
             vector: vec![0.1, 0.2, 0.3],
             payload: None,
+            sparse_vector: None,
         },
         score: 0.9,
     };

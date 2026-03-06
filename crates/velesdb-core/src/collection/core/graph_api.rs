@@ -465,6 +465,7 @@ impl Collection {
                             id,
                             vector,
                             payload,
+                            sparse_vector: None,
                         },
                         score,
                     ))

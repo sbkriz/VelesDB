@@ -20,26 +20,31 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"name": "point_1"})),
+                sparse_vector: None,
             },
             Point {
                 id: 2,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"name": "point_2"})),
+                sparse_vector: None,
             },
             Point {
                 id: 3,
                 vector: vec![0.7, 0.7, 0.0, 0.0],
                 payload: Some(serde_json::json!({"name": "point_3"})),
+                sparse_vector: None,
             },
             Point {
                 id: 4,
                 vector: vec![0.5, 0.5, 0.5, 0.5],
                 payload: Some(serde_json::json!({"name": "point_4"})),
+                sparse_vector: None,
             },
             Point {
                 id: 5,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"name": "point_5"})),
+                sparse_vector: None,
             },
         ];
 
@@ -174,21 +179,25 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech", "name": "tech_1"})),
+                sparse_vector: None,
             },
             Point {
                 id: 2,
                 vector: vec![0.95, 0.05, 0.0, 0.0], // Very similar to query vector
                 payload: Some(serde_json::json!({"category": "sports", "name": "sports_1"})),
+                sparse_vector: None,
             },
             Point {
                 id: 3,
                 vector: vec![0.9, 0.1, 0.0, 0.0], // Also similar
                 payload: Some(serde_json::json!({"category": "tech", "name": "tech_2"})),
+                sparse_vector: None,
             },
             Point {
                 id: 4,
                 vector: vec![0.5, 0.5, 0.5, 0.5], // Less similar
                 payload: Some(serde_json::json!({"category": "tech", "name": "tech_3"})),
+                sparse_vector: None,
             },
         ];
 
@@ -301,16 +310,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech", "name": "tech_1"})),
+                sparse_vector: None,
             },
             Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech", "name": "tech_2"})),
+                sparse_vector: None,
             },
             Point {
                 id: 3,
                 vector: vec![0.8, 0.2, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "sports", "name": "sports_1"})),
+                sparse_vector: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -371,6 +383,7 @@ mod tests {
                     "category": "tech",
                     "status": "active"
                 })),
+                sparse_vector: None,
             },
             Point {
                 id: 2,
@@ -379,6 +392,7 @@ mod tests {
                     "category": "tech",
                     "status": "active"  // Matches metadata AND outer filter
                 })),
+                sparse_vector: None,
             },
             Point {
                 id: 3,
@@ -387,6 +401,7 @@ mod tests {
                     "category": "tech",
                     "status": "inactive"  // Does NOT match outer filter
                 })),
+                sparse_vector: None,
             },
             Point {
                 id: 4,
@@ -395,6 +410,7 @@ mod tests {
                     "category": "sports",
                     "status": "inactive"  // Does NOT match outer filter
                 })),
+                sparse_vector: None,
             },
         ];
 
