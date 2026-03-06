@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 05-01-PLAN.md (Named sparse vectors data model + CRUD wiring)
-last_updated: "2026-03-06T21:50:47.629Z"
-last_activity: 2026-03-06 — Completed plan 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
+stopped_at: Completed 05-03-PLAN.md (Hybrid dense+sparse fusion execution)
+last_updated: "2026-03-06T22:17:57.726Z"
+last_activity: 2026-03-06 — Completed plan 05-03 (Hybrid dense+sparse fusion execution)
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 18
-  completed_plans: 16
-  percent: 83
+  completed_plans: 17
+  percent: 94
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 5 of 10 (Sparse Integration)
-Plan: 2 of 4 in current phase
-Status: Completed plan 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
-Last activity: 2026-03-06 — Completed plan 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
+Plan: 3 of 4 in current phase
+Status: Completed plan 05-03 (Hybrid dense+sparse fusion execution)
+Last activity: 2026-03-06 — Completed plan 05-03 (Hybrid dense+sparse fusion execution)
 
-Progress: [████████░░] 83% (14 prior + 1 phase 5)
+Progress: [█████████░] 94% (14 prior + 3 phase 5)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [████████░░] 83% (14 prior + 1 phase 5)
 | Phase 04 P03 | 24 min | 2 tasks | 7 files |
 | Phase 05 P02 | 26 min | 2 tasks | 12 files |
 | Phase 05 P01 | 28 | 2 tasks | 24 files |
+| Phase 05 P03 | 24 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -109,6 +110,9 @@ Recent decisions affecting current work:
 - [Phase 05]: Custom Deserialize impl on Point for backward-compat named sparse vectors (old sparse_vector wraps in BTreeMap)
 - [Phase 05]: Prefix-based file naming for named sparse indexes (sparse-{name}.*) with backward compat (sparse.* for default)
 - [Phase 05]: Buffered sparse batch insert after releasing storage locks to maintain lock ordering (sparse_indexes at position 9)
+- [Phase 05]: RSF uses min-max normalization per branch then weighted sum (dense_weight + sparse_weight must equal 1.0)
+- [Phase 05]: Filtered sparse search uses 4x/8x oversampling with on-the-fly payload predicate
+- [Phase 05]: Parallel branch execution via rayon::join gated on cfg(feature=persistence) with sequential fallback
 
 ### Pending Todos
 
@@ -122,6 +126,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T21:50:47.626Z
-Stopped at: Completed 05-01-PLAN.md (Named sparse vectors data model + CRUD wiring)
+Last session: 2026-03-06T22:17:57.723Z
+Stopped at: Completed 05-03-PLAN.md (Hybrid dense+sparse fusion execution)
 Resume file: None
