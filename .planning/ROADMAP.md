@@ -169,7 +169,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
 | 3. PQ Integration | 2/3 | In Progress|  |
 | 4. Sparse Vector Engine | 3/3 | Complete   | 2026-03-06 |
-| 5. Sparse Integration | 1/4 | In Progress |  |
+| 5. Sparse Integration | 2/4 | In Progress|  |
 | 6. Query Plan Cache | 0/TBD | Not started | - |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
 | 8. SDK Parity | 0/TBD | Not started | - |
