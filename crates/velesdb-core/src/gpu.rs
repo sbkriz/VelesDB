@@ -29,7 +29,20 @@ mod gpu_backend;
 mod gpu_backend_tests;
 
 #[cfg(feature = "gpu")]
+#[path = "gpu/pq_gpu.rs"]
+pub mod pq_gpu;
+
+#[cfg(feature = "gpu")]
 pub use gpu_backend::GpuAccelerator;
+#[cfg(feature = "gpu")]
+pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu};
+
+/// Check if GPU dispatch is worthwhile (always false without gpu feature).
+#[cfg(not(feature = "gpu"))]
+#[must_use]
+pub fn should_use_gpu(_n: usize, _k: usize, _subspace_dim: usize) -> bool {
+    false
+}
 
 /// Compute backend selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

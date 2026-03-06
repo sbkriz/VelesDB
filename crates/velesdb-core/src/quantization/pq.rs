@@ -698,6 +698,7 @@ fn kmeans_plusplus_init(samples: &[Vec<f32>], k: usize, rng: &mut impl Rng) -> V
     centroids
 }
 
+#[allow(clippy::too_many_lines)]
 fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32>> {
     // Internal invariant: callers validate non-empty samples and k > 0.
     debug_assert!(!samples.is_empty());
@@ -717,12 +718,37 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
     for _iter in 0..max_iters {
         let mut changed = false;
 
-        // Assignment step
-        for (i, sample) in samples.iter().enumerate() {
-            let new_assignment = nearest_centroid(sample, &centroids);
-            if assignments[i] != new_assignment {
-                assignments[i] = new_assignment;
-                changed = true;
+        // Assignment step: try GPU acceleration if beneficial
+        #[cfg(feature = "gpu")]
+        let gpu_used = {
+            use crate::gpu;
+            if gpu::should_use_gpu(samples.len(), k, dim) {
+                if let Some(gpu_assignments) = gpu::gpu_kmeans_assign(samples, &centroids, dim) {
+                    for (i, &new_assignment) in gpu_assignments.iter().enumerate() {
+                        if assignments[i] != new_assignment {
+                            assignments[i] = new_assignment;
+                            changed = true;
+                        }
+                    }
+                    true
+                } else {
+                    false // GPU failed, fall through to CPU
+                }
+            } else {
+                false // Below threshold, use CPU
+            }
+        };
+        #[cfg(not(feature = "gpu"))]
+        let gpu_used = false;
+
+        // CPU fallback assignment
+        if !gpu_used {
+            for (i, sample) in samples.iter().enumerate() {
+                let new_assignment = nearest_centroid(sample, &centroids);
+                if assignments[i] != new_assignment {
+                    assignments[i] = new_assignment;
+                    changed = true;
+                }
             }
         }
 
