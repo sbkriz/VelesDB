@@ -38,15 +38,23 @@ Plans:
 - [ ] 01-04-PLAN.md — Criterion baseline + coverage enforcement (QUAL-06, QUAL-07)
 
 ### Phase 2: PQ Core Engine
-**Goal**: Product quantization is production-quality internally — k-means++ codebook training, ADC SIMD lookup-table kernels, and OPQ pre-rotation are all implemented with no changes to any public-facing API
+**Goal**: Product quantization is production-quality internally — k-means++ codebook training, ADC SIMD lookup-table kernels, OPQ pre-rotation, RaBitQ quantization, and GPU-accelerated training are all implemented with no changes to any public-facing API
 **Depends on**: Phase 1
-**Requirements**: PQ-01, PQ-02, PQ-03, PQ-04
+**Requirements**: PQ-01, PQ-02, PQ-03, PQ-04, PQ-ADV-01, QUANT-ADV-01
 **Success Criteria** (what must be TRUE):
   1. A codebook trained on 10K real embedding vectors with m=8 k=256 produces no degenerate centroids (no two centroids closer than 1e-6) and achieves recall@10 >= 85% in the property test harness
-  2. ADC distance computation uses the SIMD dispatch path (AVX2/NEON/scalar fallback) and the lookup table fits in L1 cache (m × k × 4 bytes <= 8KB for m=8 k=256)
+  2. ADC distance computation uses the SIMD dispatch path (AVX2/NEON/scalar fallback) and the lookup table fits in L1 cache (m x k x 4 bytes <= 8KB for m=8 k=256)
   3. OPQ pre-rotation can be enabled via config flag — when enabled on a clustered dataset, recall@10 improves by at least 3% over standard PQ on the same data
   4. Rescore oversampling is active by default — silent recall collapse is not possible when using PQ-compressed HNSW search
-**Plans**: TBD
+  5. RaBitQ encodes vectors as binary codes with 32x compression and achieves recall@10 >= 85% on clustered test data
+  6. GPU k-means assignment accelerates training when dataset exceeds FLOP threshold, with silent CPU fallback
+**Plans**: 4 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — PQ training hardening + codebook persistence (PQ-01)
+- [ ] 02-02-PLAN.md — ADC SIMD + LUT precompute + rescore config (PQ-02, PQ-04)
+- [ ] 02-03-PLAN.md — RaBitQ quantization strategy (PQ-ADV-01)
+- [ ] 02-04-PLAN.md — OPQ pre-rotation + GPU k-means acceleration (PQ-03, QUANT-ADV-01)
 
 ### Phase 3: PQ Integration
 **Goal**: Users can configure and use product quantization through VelesQL and the standard collection config — PQ behaves as a first-class peer to SQ8 and Binary quantization
@@ -63,7 +71,7 @@ Plans:
 **Depends on**: Phase 3
 **Requirements**: SPARSE-01, SPARSE-02, SPARSE-03
 **Success Criteria** (what must be TRUE):
-  1. A sparse vector in `{term_id: u32 → weight: f32}` format can be upserted into a collection and the data is recoverable after process restart (sparse.idx survives restart)
+  1. A sparse vector in `{term_id: u32 -> weight: f32}` format can be upserted into a collection and the data is recoverable after process restart (sparse.idx survives restart)
   2. A sparse ANN search by inner product returns results with correct relative ordering on a corpus of 1K SPLADE-format documents
   3. The sparse index write path uses 64-shard partitioning by `term_id % 64` — a concurrent insert benchmark at 16 threads shows no single-lock contention bottleneck
 **Plans**: TBD
@@ -120,7 +128,7 @@ Plans:
   1. The README shows real v1.5 benchmark numbers (PQ recall, sparse search latency, streaming throughput) — no placeholder values from v1.4
   2. Every public type and function in `velesdb-core` has a rustdoc comment — `cargo doc --no-deps` produces zero "missing documentation" warnings for public items
   3. The OpenAPI spec includes all new v1.5 endpoints (sparse upsert, sparse search, stream insert) and passes the OpenAPI round-trip CI check
-  4. The migration guide covers all breaking changes: `QuantizationConfig` wire format, VelesQL `SPARSE_NEAR` syntax, bincode → postcard on-disk format
+  4. The migration guide covers all breaking changes: `QuantizationConfig` wire format, VelesQL `SPARSE_NEAR` syntax, bincode -> postcard on-disk format
 **Plans**: TBD
 
 ### Phase 10: Release Readiness
@@ -137,12 +145,12 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Quality Baseline & Security | 3/4 | In Progress|  |
-| 2. PQ Core Engine | 0/TBD | Not started | - |
+| 2. PQ Core Engine | 0/4 | Not started | - |
 | 3. PQ Integration | 0/TBD | Not started | - |
 | 4. Sparse Vector Engine | 0/TBD | Not started | - |
 | 5. Sparse Integration | 0/TBD | Not started | - |
