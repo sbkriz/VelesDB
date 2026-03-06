@@ -19,9 +19,10 @@ mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
+pub(crate) use pq::distance_pq_l2;
 #[cfg(feature = "persistence")]
 pub use pq::train_opq;
-pub use pq::{distance_pq, distance_pq_l2, PQCodebook, PQVector, ProductQuantizer};
+pub use pq::{PQCodebook, PQVector, ProductQuantizer};
 
 // Re-export RaBitQ quantization
 pub use rabitq::{RaBitQIndex, RaBitQVector};

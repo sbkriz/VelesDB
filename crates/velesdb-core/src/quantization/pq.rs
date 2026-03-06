@@ -166,6 +166,10 @@ impl ProductQuantizer {
 
     /// Quantize a full-precision vector into PQ codes.
     ///
+    /// Applies OPQ rotation (if present) before encoding, so that codebook
+    /// centroids — which were trained on rotated vectors — remain consistent
+    /// with the encoded representation.
+    ///
     /// # Errors
     ///
     /// Returns `Error::InvalidQuantizerConfig` if `vector.len()` does not match
@@ -179,11 +183,15 @@ impl ProductQuantizer {
             )));
         }
 
+        // Apply rotation so codes are computed in the same space as the codebook.
+        let rotated = self.apply_rotation(vector);
+        let effective = rotated.as_slice();
+
         let mut codes = Vec::with_capacity(self.codebook.num_subspaces);
         for subspace in 0..self.codebook.num_subspaces {
             let start = subspace * self.codebook.subspace_dim;
             let end = start + self.codebook.subspace_dim;
-            let code = nearest_centroid(&vector[start..end], &self.codebook.centroids[subspace]);
+            let code = nearest_centroid(&effective[start..end], &self.codebook.centroids[subspace]);
             // SAFETY: `num_centroids` is validated to fit in u16 during `train()`.
             // `nearest_centroid` returns an index < num_centroids, so it always fits.
             #[allow(clippy::cast_possible_truncation)]
@@ -315,15 +323,21 @@ impl ProductQuantizer {
     }
 }
 
-/// Train a PQ codebook with optional OPQ pre-rotation using the IPQ algorithm.
+/// Train a PQ codebook with optional PCA pre-rotation.
 ///
-/// When `opq_enabled` is true, the function learns an orthogonal rotation matrix
-/// that reduces inter-subspace correlation, improving recall by 3-15% on clustered data.
-/// The IPQ algorithm alternates between:
-///   1. Applying the current rotation and training PQ on rotated vectors
-///   2. Solving the Procrustes problem to find a better rotation
+/// When `opq_enabled` is true, the function computes the top-D principal components
+/// of the training data via power iteration and uses them as an orthogonal rotation
+/// matrix. This reduces inter-subspace correlation and improves recall by 3-15% on
+/// correlated data. The rotation is a single PCA pass (not iterative IPQ); the
+/// quality of the eigenvectors improves with `power_iterations`.
 ///
 /// When `opq_enabled` is false, delegates to `ProductQuantizer::train()` with no rotation.
+///
+/// # Arguments
+///
+/// - `power_iterations`: number of power-iteration steps per eigenvector. Higher
+///   values produce more accurate principal components at the cost of training time.
+///   Values in the range 5–20 are typical; 10 is a good default.
 ///
 /// # Errors
 ///
@@ -335,7 +349,7 @@ pub fn train_opq(
     num_subspaces: usize,
     num_centroids: usize,
     opq_enabled: bool,
-    opq_iterations: usize,
+    power_iterations: usize,
 ) -> Result<ProductQuantizer, Error> {
     if !opq_enabled {
         return ProductQuantizer::train(vectors, num_subspaces, num_centroids);
@@ -424,7 +438,7 @@ pub fn train_opq(
     // Extract principal components via power iteration.
     // We compute the top-d eigenvectors to form the rotation matrix.
     // Using iterative deflation: find top eigenvector, subtract, repeat.
-    let max_power_iters = opq_iterations * 20; // More iterations for convergence
+    let max_power_iters = power_iterations * 20; // Scale to get adequate convergence per eigenvector
     let mut eigenvectors: Vec<Vec<f64>> = Vec::with_capacity(d);
 
     let mut deflated_cov = cov.clone();
@@ -575,15 +589,18 @@ impl ProductQuantizer {
 
 /// Asymmetric distance computation (ADC): query is f32, candidate is PQ-coded.
 ///
-/// # Panics
-///
-/// Panics if `query_vector.len() != codebook.dimension` or
-/// `pq_vector.codes.len() != codebook.num_subspaces`. These are internal
-/// invariant checks (not user-facing).
+/// This is a crate-internal function. Inputs are expected to be valid by
+/// construction: `query_vector.len() == codebook.dimension` and
+/// `pq_vector.codes.len() == codebook.num_subspaces`. These invariants are
+/// enforced at insert/train time and asserted only in debug builds.
 #[must_use]
-pub fn distance_pq_l2(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCodebook) -> f32 {
-    assert_eq!(query_vector.len(), codebook.dimension);
-    assert_eq!(pq_vector.codes.len(), codebook.num_subspaces);
+pub(crate) fn distance_pq_l2(
+    query_vector: &[f32],
+    pq_vector: &PQVector,
+    codebook: &PQCodebook,
+) -> f32 {
+    debug_assert_eq!(query_vector.len(), codebook.dimension);
+    debug_assert_eq!(pq_vector.codes.len(), codebook.num_subspaces);
 
     let mut lookup_tables = Vec::with_capacity(codebook.num_subspaces);
     for subspace in 0..codebook.num_subspaces {
@@ -605,12 +622,6 @@ pub fn distance_pq_l2(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQC
         .map(|(subspace, &code)| lookup_tables[subspace][usize::from(code)])
         .sum::<f32>()
         .sqrt()
-}
-
-/// Backward-compatible alias for L2 ADC distance.
-#[must_use]
-pub fn distance_pq(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCodebook) -> f32 {
-    distance_pq_l2(query_vector, pq_vector, codebook)
 }
 
 fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
@@ -1662,14 +1673,8 @@ mod tests {
         let n = vectors.len();
         let mut total_recall = 0.0_f64;
 
-        // Pre-encode all vectors (applying rotation if present)
-        let codes: Vec<super::PQVector> = vectors
-            .iter()
-            .map(|v| {
-                let rv = pq.apply_rotation(v);
-                pq.quantize(&rv).unwrap()
-            })
-            .collect();
+        // Pre-encode all vectors. `quantize` applies rotation internally when present.
+        let codes: Vec<super::PQVector> = vectors.iter().map(|v| pq.quantize(v).unwrap()).collect();
 
         for qi in 0..num_queries {
             let query_idx = qi * (n / num_queries);

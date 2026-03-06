@@ -83,6 +83,15 @@ fn lane_index(code: &[u16], subspace: usize, k: usize) -> i32 {
 }
 
 /// AVX2 ADC distance using `_mm256_i32gather_ps` for 8 subspaces at a time.
+///
+/// # Safety
+///
+/// Preconditions (must be upheld by caller):
+/// - CPU AVX2 feature must be available (verified by `simd_level()` dispatch).
+/// - `code.len() == m`: every subspace must have an associated code entry.
+/// - `usize::from(code[i]) < k` for all `i in 0..m`: each code must be a
+///   valid centroid index so that `subspace * k + code[subspace]` stays
+///   within the bounds of `lut` (length `m * k`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 {
@@ -91,6 +100,11 @@ unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
         _mm256_setr_epi32, _mm256_setzero_ps, _mm_add_ps, _mm_add_ss, _mm_cvtss_f32,
         _mm_movehdup_ps, _mm_movehl_ps,
     };
+    debug_assert_eq!(code.len(), m, "code length must equal m");
+    debug_assert!(
+        code.iter().all(|&c| usize::from(c) < k),
+        "PQ code out of range: all codes must be < k ({k})"
+    );
 
     let full_chunks = m / 8;
 
@@ -143,10 +157,26 @@ unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
 }
 
 /// NEON ADC distance using 4-wide accumulation.
+///
+/// # Safety
+///
+/// Preconditions (must be upheld by caller):
+/// - CPU NEON feature must be available on an aarch64 target (verified by
+///   `simd_level()` dispatch).
+/// - `code.len() == m`: every subspace must have an associated code entry.
+/// - `usize::from(code[i]) < k` for all `i in 0..m`: each code must be a
+///   valid centroid index so that `base * k + code[base]` stays within the
+///   bounds of `lut` (length `m * k`), making the `get_unchecked` calls
+///   well-defined.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn adc_single_neon(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 {
     use std::arch::aarch64::*;
+    debug_assert_eq!(code.len(), m, "code length must equal m");
+    debug_assert!(
+        code.iter().all(|&c| usize::from(c) < k),
+        "PQ code out of range: all codes must be < k ({k})"
+    );
 
     let full_chunks = m / 4;
     let tail = m % 4;
@@ -155,8 +185,9 @@ unsafe fn adc_single_neon(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
 
     for chunk in 0..full_chunks {
         let base = chunk * 4;
-        // SAFETY: `base + 0..3` are all < m because `chunk < full_chunks = m / 4`.
-        // Each index = subspace * k + code[subspace] is within lut bounds.
+        // SAFETY: `base + 0..3` are all < m (guaranteed by loop bound `chunk < m / 4`).
+        // `code[base + i] < k` is verified by the `debug_assert!` at function entry,
+        // so each index `(base + i) * k + code[base + i]` is within `lut` bounds.
         let vals: [f32; 4] = [
             *lut.get_unchecked((base) * k + usize::from(*code.get_unchecked(base))),
             *lut.get_unchecked((base + 1) * k + usize::from(*code.get_unchecked(base + 1))),

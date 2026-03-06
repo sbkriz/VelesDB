@@ -472,8 +472,8 @@ mod tests {
     #[test]
     fn rabitq_xor_popcount_correct_on_known_patterns() {
         // All bits set vs no bits set: maximum Hamming distance
-        let all_set = vec![u64::MAX];
-        let none_set = vec![0u64];
+        let all_set = [u64::MAX];
+        let none_set = [0u64];
 
         let xor = all_set[0] ^ none_set[0];
         assert_eq!(xor.count_ones(), 64);
@@ -490,10 +490,10 @@ mod tests {
 
     #[test]
     fn rabitq_distance_non_negative() {
+        use rand::{Rng, SeedableRng};
         let dim = 128;
         let index = identity_index(dim);
 
-        use rand::{Rng, SeedableRng};
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
         for _ in 0..50 {
@@ -537,12 +537,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn rabitq_recall_at_10_identity_rotation() {
         // With identity rotation (no training), RaBitQ is essentially binary
         // quantization. Test that it correctly ranks cross-cluster neighbors
         // (coarse ranking). The 85% recall threshold with trained rotation
         // is validated in Task 2's tests after `RaBitQIndex::train` is available.
         use rand::{Rng, SeedableRng};
+
         let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
 
         let dim = 64;
@@ -579,7 +581,9 @@ mod tests {
             }
             #[allow(clippy::cast_precision_loss)]
             let inv = 1.0 / n as f32;
-            c.iter_mut().for_each(|x| *x *= inv);
+            for x in &mut c {
+                *x *= inv;
+            }
             c
         };
 
@@ -651,10 +655,10 @@ mod tests {
 
     #[test]
     fn rabitq_batch_distance_matches_individual() {
+        use rand::{Rng, SeedableRng};
         let dim = 64;
         let index = identity_index(dim);
 
-        use rand::{Rng, SeedableRng};
         let mut rng = rand::rngs::StdRng::seed_from_u64(99);
 
         let vectors: Vec<Vec<f32>> = (0..20)
@@ -689,7 +693,7 @@ mod tests {
             vec![6.0, 8.0, 10.0, 12.0],
         ];
         let index = RaBitQIndex::train(&vectors, 42).unwrap();
-        let expected = vec![4.0, 6.0, 8.0, 10.0];
+        let expected = [4.0_f32, 6.0, 8.0, 10.0];
         for (i, (&c, &e)) in index.centroid.iter().zip(expected.iter()).enumerate() {
             assert!((c - e).abs() < 1e-5, "centroid[{i}] = {c}, expected {e}");
         }

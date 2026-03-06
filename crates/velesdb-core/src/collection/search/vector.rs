@@ -285,7 +285,6 @@ impl Collection {
 
                 Some(SearchResult::new(point, score))
             })
-            .take(k)
             .collect();
 
         // Sort results by similarity (most similar first)
@@ -308,6 +307,7 @@ impl Collection {
                     .unwrap_or(std::cmp::Ordering::Equal)
             }
         });
+        results.truncate(k);
 
         Ok(results)
     }
