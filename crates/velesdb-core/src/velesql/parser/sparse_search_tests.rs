@@ -30,7 +30,7 @@ fn test_parse_sparse_near_literal() {
                     assert!((sv.values[0] - 0.8).abs() < 1e-5);
                     assert!((sv.values[1] - 0.3).abs() < 1e-5);
                 }
-                other => panic!("Expected Literal, got {other:?}"),
+                other @ SparseVectorExpr::Parameter(_) => panic!("Expected Literal, got {other:?}"),
             }
             assert!(svs.index_name.is_none());
         }

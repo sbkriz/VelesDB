@@ -25,6 +25,9 @@ mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
+mod hybrid_sparse;
+#[cfg(test)]
+mod hybrid_sparse_tests;
 pub mod join;
 #[cfg(test)]
 mod join_tests;
@@ -182,10 +185,16 @@ impl Collection {
             false
         };
 
+        // Extract sparse vector search condition (Phase 5 hybrid support).
+        let mut sparse_vector_search = None;
+
         if let Some(ref cond) = stmt.where_clause {
             // Validate query structure before extraction
             Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
+
+            // Check for SPARSE_NEAR before cloning for dense extraction.
+            sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
 
             // Reason: extract_vector_search mutates the condition in-place to remove the NEAR node;
             // the original cond is still needed for similarity/filter extraction below.
@@ -301,6 +310,71 @@ impl Collection {
                 self.guard_rails.circuit_breaker.record_success();
                 return Ok(results);
             }
+        }
+
+        // Phase 5: Sparse-only or hybrid dense+sparse execution.
+        if let Some(ref svs) = sparse_vector_search {
+            let mut results = if let Some(ref dense_vec) = vector_search {
+                // Hybrid: dense NEAR + SPARSE_NEAR -> parallel execution + fusion.
+                let fusion_strategy = stmt.fusion_clause.as_ref().map_or_else(
+                    crate::fusion::FusionStrategy::rrf_default,
+                    |fc| {
+                        use crate::velesql::FusionStrategyType;
+                        match fc.strategy {
+                            FusionStrategyType::Rsf => {
+                                let dw = fc.dense_weight.unwrap_or(0.5);
+                                let sw = fc.sparse_weight.unwrap_or(0.5);
+                                crate::fusion::FusionStrategy::relative_score(dw, sw)
+                                    .unwrap_or_else(|_| {
+                                        crate::fusion::FusionStrategy::rrf_default()
+                                    })
+                            }
+                            FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
+                                k: fc.k.unwrap_or(60),
+                            },
+                            _ => crate::fusion::FusionStrategy::rrf_default(),
+                        }
+                    },
+                );
+                self.execute_hybrid_search_with_strategy(
+                    dense_vec,
+                    svs,
+                    params,
+                    filter_condition.as_ref(),
+                    execution_limit,
+                    &fusion_strategy,
+                )
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?
+            } else {
+                // Sparse-only: no dense NEAR.
+                self.execute_sparse_search(svs, params, filter_condition.as_ref(), execution_limit)
+                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?
+            };
+
+            if has_graph_predicates {
+                if let Some(cond) = stmt.where_clause.as_ref() {
+                    results = self
+                        .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
+                        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+                }
+            }
+
+            ctx.check_timeout()
+                .map_err(crate::error::Error::from)
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            ctx.check_cardinality(results.len())
+                .map_err(crate::error::Error::from)
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+
+            if stmt.distinct == crate::velesql::DistinctMode::All {
+                results = distinct::apply_distinct(results, &stmt.columns);
+            }
+            if let Some(ref order_by) = stmt.order_by {
+                self.apply_order_by(&mut results, order_by, params)?;
+            }
+            results.truncate(limit);
+            self.guard_rails.circuit_breaker.record_success();
+            return Ok(results);
         }
 
         // EPIC-044 US-001: Support multiple similarity() with AND (cascade filtering).
