@@ -1,16 +1,16 @@
 //! PQ recall accuracy benchmark suite.
 //!
-//! Measures recall@10 for PQ, OPQ, and RaBitQ quantization methods
+//! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods
 //! against brute-force exact L2 search ground truth.
 
-#![allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#![allow(clippy::cast_precision_loss)]
 
 use std::collections::HashSet;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use tempfile::tempdir;
+use tempfile::{tempdir, TempDir};
 use velesdb_core::{Collection, DistanceMetric, Point, StorageMode};
 
 const DIMENSION: usize = 128;
@@ -59,30 +59,39 @@ fn brute_force_topk(query: &[f32], dataset: &[Vec<f32>], k: usize) -> Vec<u64> {
     let mut dists: Vec<(u64, f32)> = dataset
         .iter()
         .enumerate()
-        .map(|(i, v)| (i as u64, l2_distance(query, v)))
+        .map(|(i, v)| {
+            #[allow(clippy::cast_possible_truncation)]
+            let id = i as u64;
+            (id, l2_distance(query, v))
+        })
         .collect();
-    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    dists.sort_by(|a, b| a.1.total_cmp(&b.1));
     dists.iter().take(k).map(|(id, _)| *id).collect()
 }
 
 /// Compute recall@k: fraction of ground truth IDs present in results.
 fn recall_at_k(ground_truth: &[u64], results: &[u64], k: usize) -> f64 {
+    assert!(k > 0, "recall@k requires k > 0");
     let gt_set: HashSet<u64> = ground_truth.iter().take(k).copied().collect();
     let result_set: HashSet<u64> = results.iter().take(k).copied().collect();
     let intersection = gt_set.intersection(&result_set).count();
-    intersection as f64 / k as f64
+    #[allow(clippy::cast_precision_loss)]
+    let recall = intersection as f64 / k as f64;
+    recall
 }
 
 /// Build a collection with given storage mode and data.
+///
+/// Returns the `TempDir` alongside the `Collection` so the directory stays
+/// alive for the benchmark duration and is cleaned up on drop.
 fn build_pq_collection(
     storage_mode: StorageMode,
     dataset: &[Vec<f32>],
     dimension: usize,
     name: &str,
-) -> Collection {
+) -> (Collection, TempDir) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join(name);
-    std::mem::forget(dir); // keep for bench duration
 
     let collection =
         Collection::create_with_options(path, dimension, DistanceMetric::Euclidean, storage_mode)
@@ -91,10 +100,14 @@ fn build_pq_collection(
     let points: Vec<Point> = dataset
         .iter()
         .enumerate()
-        .map(|(id, v)| Point::new(id as u64, v.clone(), Some(serde_json::json!({}))))
+        .map(|(id, v)| {
+            #[allow(clippy::cast_possible_truncation)]
+            let pid = id as u64;
+            Point::new(pid, v.clone(), Some(serde_json::json!({})))
+        })
         .collect();
     collection.upsert(points).expect("upsert");
-    collection
+    (collection, dir)
 }
 
 /// Measure average recall@k for a collection against brute-force ground truth.
@@ -104,6 +117,10 @@ fn measure_recall(
     dataset: &[Vec<f32>],
     k: usize,
 ) -> f64 {
+    assert!(
+        !queries.is_empty(),
+        "measure_recall requires non-empty queries"
+    );
     let mut total_recall = 0.0;
     for query in queries {
         let gt = brute_force_topk(query, dataset, k);
@@ -111,7 +128,9 @@ fn measure_recall(
         let result_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
         total_recall += recall_at_k(&gt, &result_ids, k);
     }
-    total_recall / queries.len() as f64
+    #[allow(clippy::cast_precision_loss)]
+    let avg = total_recall / queries.len() as f64;
+    avg
 }
 
 fn pq_recall_benchmarks(c: &mut Criterion) {
@@ -120,10 +139,11 @@ fn pq_recall_benchmarks(c: &mut Criterion) {
     let queries = generate_clustered_data(NUM_QUERIES, DIMENSION, NUM_CLUSTERS, 123);
 
     // Build full-precision reference collection
-    let full_collection = build_pq_collection(StorageMode::Full, &dataset, DIMENSION, "full_ref");
+    let (full_collection, _full_dir) =
+        build_pq_collection(StorageMode::Full, &dataset, DIMENSION, "full_ref");
 
     // Build PQ collection (auto-trains on upsert)
-    let pq_collection = build_pq_collection(
+    let (pq_collection, _pq_dir) = build_pq_collection(
         StorageMode::ProductQuantization,
         &dataset,
         DIMENSION,

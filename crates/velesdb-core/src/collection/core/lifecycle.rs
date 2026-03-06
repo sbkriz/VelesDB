@@ -94,6 +94,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_index: Arc::new(RwLock::new(None)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -192,6 +193,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_index: Arc::new(RwLock::new(None)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -257,8 +259,10 @@ impl Collection {
         // Load PropertyIndex and RangeIndex if they exist (EPIC-009 US-005)
         let property_index = Self::load_property_index(&path);
         let range_index = Self::load_range_index(&path);
-        // Load EdgeStore if present (graph collections — D-02)
+        // Load EdgeStore if present (graph collections -- D-02)
         let edge_store = Self::load_edge_store(&path);
+        // Load SparseInvertedIndex if present (EPIC-062)
+        let sparse_index = Self::load_sparse_index(&path);
 
         Ok(Self {
             path,
@@ -275,6 +279,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(edge_store)),
+            sparse_index: Arc::new(RwLock::new(sparse_index)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -336,6 +341,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_index: Arc::new(RwLock::new(None)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -345,6 +351,23 @@ impl Collection {
 
         collection.save_config()?;
         Ok(collection)
+    }
+
+    /// Loads a sparse inverted index from disk if sparse files exist.
+    fn load_sparse_index(
+        path: &std::path::Path,
+    ) -> Option<crate::index::sparse::SparseInvertedIndex> {
+        match crate::index::sparse::persistence::load_from_disk(path) {
+            Ok(idx) => idx,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load sparse index from {:?}: {}. Starting without sparse index.",
+                    path,
+                    e
+                );
+                None
+            }
+        }
     }
 
     fn load_edge_store(path: &std::path::Path) -> EdgeStore {
@@ -430,6 +453,11 @@ impl Collection {
                 .read()
                 .save_to_file(&edge_store_path)
                 .map_err(Error::Io)?;
+        }
+
+        // Compact sparse index to disk if present (EPIC-062)
+        if let Some(ref idx) = *self.sparse_index.read() {
+            crate::index::sparse::persistence::compact(&self.path, idx)?;
         }
 
         Ok(())

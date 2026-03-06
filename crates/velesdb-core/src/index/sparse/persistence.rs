@@ -44,7 +44,7 @@ struct SparseMeta {
     term_count: u32,
 }
 
-/// Term dictionary entry mapping term_id to its posting range in sparse.idx.
+/// Term dictionary entry mapping `term_id` to its posting range in `sparse.idx`.
 #[derive(Debug, Serialize, Deserialize)]
 struct TermEntry {
     term_id: u32,
@@ -57,7 +57,7 @@ struct TermEntry {
 // WAL operations
 // ---------------------------------------------------------------------------
 
-/// Size of a single `PostingEntry` on disk (u64 doc_id + f32 weight, no padding).
+/// Size of a single `PostingEntry` on disk (`u64` `doc_id` + `f32` weight, no padding).
 const POSTING_DISK_SIZE: usize = 12; // 8 + 4, packed
 
 /// Appends an upsert entry to the sparse WAL.
@@ -236,6 +236,11 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
 /// Uses atomic temp-file + rename to avoid partial writes on crash.
 /// Truncates the WAL after successful compaction.
 ///
+/// # Panics
+///
+/// Panics if a term ID from the sorted key set is missing from the merged map
+/// (internal invariant -- should never happen).
+///
 /// # Errors
 ///
 /// Returns an error if disk writes fail.
@@ -335,6 +340,12 @@ pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
 /// Returns `Ok(None)` if no `sparse.meta` file is found (empty collection).
 /// If `sparse.wal` exists, replays it after loading compacted data.
 /// If replayed entries exceed the compaction threshold, triggers automatic compaction.
+///
+/// # Panics
+///
+/// Panics if a term dictionary entry references data that passed the size check
+/// but the byte slice cannot be converted to the expected fixed-size array
+/// (internal invariant -- should never happen).
 ///
 /// # Errors
 ///
@@ -441,6 +452,7 @@ pub fn load_from_disk(dir: &Path) -> Result<Option<SparseInvertedIndex>> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use tempfile::tempdir;

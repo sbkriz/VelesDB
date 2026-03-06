@@ -560,3 +560,167 @@ fn test_execute_train_dim_not_divisible_by_m() {
         "Expected InvalidQuantizerConfig or TrainingFailed, got: {err:?}"
     );
 }
+
+#[test]
+fn test_execute_train_rejects_retrain_without_force() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 300);
+
+    // First training succeeds
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    // Second training without force=true should fail
+    let query2 = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    let err = db
+        .execute_query(&query2, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+    assert!(err.to_string().contains("already trained"));
+}
+
+#[test]
+fn test_execute_train_force_retrain_succeeds() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 300);
+
+    // First training
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    // Retrain with force=true
+    let query2 = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16, force=true)").unwrap();
+    let results = db
+        .execute_query(&query2, &std::collections::HashMap::new())
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["status"], serde_json::json!("trained"));
+}
+
+#[test]
+fn test_execute_train_with_sample_limit() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 500);
+
+    // Train with sample=100 (fewer than the 500 vectors available)
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16, sample=100)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["training_vectors"], serde_json::json!(100));
+}
+
+#[test]
+fn test_execute_train_sample_larger_than_dataset() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 200);
+
+    // sample=9999 but only 200 vectors — should use all 200
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16, sample=9999)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["training_vectors"], serde_json::json!(200));
+}
+
+#[test]
+fn test_execute_train_missing_m_is_required() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 100);
+
+    // No m parameter at all
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (k=16)").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+    assert!(err.to_string().contains("required"));
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation)]
+fn test_database_open_loads_sparse_index() {
+    use crate::index::sparse::persistence::{compact, wal_append_upsert};
+    use crate::index::sparse::types::SparseVector;
+    use crate::index::sparse::SparseInvertedIndex;
+
+    let dir = tempdir().unwrap();
+
+    // Step 1: Create a collection via Database API
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("sparse_test", 4, DistanceMetric::Cosine)
+            .unwrap();
+    }
+
+    // Step 2: Manually write sparse index files into collection directory
+    let coll_dir = dir.path().join("sparse_test");
+    {
+        let idx = SparseInvertedIndex::new();
+        for i in 0..20u64 {
+            let v = SparseVector::new(vec![(1, 1.0), (2 + i as u32 % 5, 0.5)]);
+            idx.insert(i, &v);
+        }
+        compact(&coll_dir, &idx).unwrap();
+    }
+
+    // Step 3: Reopen database and verify sparse index is loaded
+    {
+        let db = Database::open(dir.path()).unwrap();
+        let coll = db.get_collection("sparse_test").unwrap();
+        let guard = coll.sparse_index().read();
+        assert!(
+            guard.is_some(),
+            "Sparse index should be loaded from disk on Database::open()"
+        );
+        let sparse = guard.as_ref().unwrap();
+        assert_eq!(sparse.doc_count(), 20);
+    }
+
+    // Step 4: Test with WAL-only scenario (no compacted files)
+    let dir2 = tempdir().unwrap();
+    {
+        let db = Database::open(dir2.path()).unwrap();
+        db.create_collection("wal_only", 4, DistanceMetric::Cosine)
+            .unwrap();
+    }
+    let coll_dir2 = dir2.path().join("wal_only");
+    {
+        let wal_path = coll_dir2.join("sparse.wal");
+        for i in 0..5u64 {
+            let v = SparseVector::new(vec![(1, 1.0)]);
+            wal_append_upsert(&wal_path, i, &v).unwrap();
+        }
+    }
+    {
+        let db = Database::open(dir2.path()).unwrap();
+        let coll = db.get_collection("wal_only").unwrap();
+        let guard = coll.sparse_index().read();
+        assert!(
+            guard.is_some(),
+            "WAL-only sparse index should be loaded on Database::open()"
+        );
+        assert_eq!(guard.as_ref().unwrap().doc_count(), 5);
+    }
+}
