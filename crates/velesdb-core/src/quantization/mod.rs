@@ -19,6 +19,8 @@ mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
+#[cfg(feature = "persistence")]
+pub use pq::train_opq;
 pub use pq::{distance_pq, distance_pq_l2, PQCodebook, PQVector, ProductQuantizer};
 
 // Re-export RaBitQ quantization
