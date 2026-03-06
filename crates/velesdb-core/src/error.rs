@@ -159,6 +159,10 @@ pub enum Error {
     /// data, etc.).
     #[error("[VELES-029] Training failed: {0}")]
     TrainingFailed(String),
+
+    /// Sparse index error (VELES-030).
+    #[error("[VELES-030] Sparse index error: {0}")]
+    SparseIndexError(String),
 }
 
 impl Error {
@@ -195,6 +199,7 @@ impl Error {
             Self::GuardRail(_) => "VELES-027",
             Self::InvalidQuantizerConfig(_) => "VELES-028",
             Self::TrainingFailed(_) => "VELES-029",
+            Self::SparseIndexError(_) => "VELES-030",
         }
     }
 

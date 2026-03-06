@@ -78,8 +78,13 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. A sparse vector in `{term_id: u32 -> weight: f32}` format can be upserted into a collection and the data is recoverable after process restart (sparse.idx survives restart)
   2. A sparse ANN search by inner product returns results with correct relative ordering on a corpus of 1K SPLADE-format documents
-  3. The sparse index write path uses 64-shard partitioning by `term_id % 64` — a concurrent insert benchmark at 16 threads shows no single-lock contention bottleneck
-**Plans**: TBD
+  3. The sparse index write path uses segment-level isolation (single RwLock mutable buffer + immutable frozen segments) — a concurrent insert benchmark at 16 threads shows no single-lock contention bottleneck (research: segment isolation outperforms term_id sharding for SPLADE workloads where a single insert touches ~120 posting lists)
+**Plans**: 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — SparseVector types + SparseInvertedIndex segment isolation + Point integration (SPARSE-01)
+- [ ] 04-02-PLAN.md — MaxScore DAAT search + linear scan fallback + Criterion benchmark (SPARSE-03)
+- [ ] 04-03-PLAN.md — WAL persistence + compaction + Collection/Database integration (SPARSE-02)
 
 ### Phase 5: Sparse Integration
 **Goal**: Hybrid dense+sparse search is fully accessible through VelesQL, the REST API, and the existing RRF fusion path — users can query sparse and hybrid from day one
@@ -157,7 +162,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 1. Quality Baseline & Security | 3/4 | In Progress|  |
 | 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
 | 3. PQ Integration | 2/3 | In Progress|  |
-| 4. Sparse Vector Engine | 0/TBD | Not started | - |
+| 4. Sparse Vector Engine | 0/3 | Not started | - |
 | 5. Sparse Integration | 0/TBD | Not started | - |
 | 6. Query Plan Cache | 0/TBD | Not started | - |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
