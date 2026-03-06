@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-06T14:55:10Z"
-last_activity: 2026-03-06 — Completed plan 03-01 (QuantizationType enum + TrainingFailed error)
+stopped_at: Completed 03-03-PLAN.md (Phase 03 complete)
+last_updated: "2026-03-06T15:16:40Z"
+last_activity: 2026-03-06 — Completed plan 03-03 (TRAIN QUANTIZER executor + recall benchmark)
 progress:
   total_phases: 10
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 11
-  completed_plans: 9
-  percent: 82
+  completed_plans: 11
+  percent: 100
 ---
 
 # Project State
@@ -25,19 +25,19 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 
 ## Current Position
 
-Phase: 3 of 10 (PQ Integration)
-Plan: 1 of 3 in current phase (completed)
-Status: Plan 03-01 complete, ready for Plan 03-02
-Last activity: 2026-03-06 — Completed plan 03-01 (QuantizationType enum + TrainingFailed error)
+Phase: 3 of 10 (PQ Integration) -- COMPLETE
+Plan: 3 of 3 in current phase (all completed)
+Status: Phase 03 complete, ready for Phase 04 (Sparse Engine)
+Last activity: 2026-03-06 — Completed plan 03-03 (TRAIN QUANTIZER executor + recall benchmark)
 
-Progress: [████████░░] 82% (8 prior + 1 phase 3)
+Progress: [██████████] 100% (8 prior + 3 phase 3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 20 min
-- Total execution time: 2.9 hours
+- Total plans completed: 11
+- Average duration: 19 min
+- Total execution time: 3.5 hours
 
 **By Phase:**
 
@@ -45,11 +45,11 @@ Progress: [████████░░] 82% (8 prior + 1 phase 3)
 |-------|-------|-------|----------|
 | 01-foundation-fixes | 2/4 | 32 min | 16 min |
 | 02-pq-core-engine | 4/4 | 93 min | 23 min |
-| 03-pq-integration | 1/3 | 19 min | 19 min |
+| 03-pq-integration | 3/3 | 55 min | 18 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-02 (26 min), 02-03 (31 min), 02-04 (21 min), 03-02 (19 min)
-- Trend: Stable ~20-25 min per plan
+- Last 5 plans: 02-04 (21 min), 03-01 (19 min), 03-02 (19 min), 03-03 (17 min)
+- Trend: Improving ~18-19 min per plan
 
 *Updated after each plan completion*
 
@@ -82,6 +82,9 @@ Recent decisions affecting current work:
 - [03-01]: QuantizationType (not QuantizationMode) to avoid collision with velesql/ast/with_clause.rs
 - [03-01]: TrainingFailed classified as recoverable error (user can adjust params and retry)
 - [03-01]: PQ defaults: k=256, oversampling=Some(4), opq_enabled=false
+- [03-03]: pub(crate) accessors on Collection (data_path, config_write, pq_quantizer) to avoid widening field visibility
+- [03-03]: PQ recall threshold 20% for auto-trained PQ on synthetic data (HNSW only reaches 87.6%)
+- [03-03]: RaBitQ stores index to disk but does not use pq_quantizer Arc slot
 
 ### Pending Todos
 
@@ -95,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T14:55:10Z
-Stopped at: Completed 03-01-PLAN.md
-Resume file: .planning/phases/03-pq-integration/03-02-PLAN.md
+Last session: 2026-03-06T15:16:40Z
+Stopped at: Completed 03-03-PLAN.md (Phase 03 complete)
+Resume file: Next phase (04)

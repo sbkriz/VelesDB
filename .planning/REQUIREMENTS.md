@@ -25,7 +25,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 - [x] **PQ-04**: Phase de rescore — oversampling + rerank f32 active par defaut (evite le silent recall collapse)
 - [x] **PQ-05**: Commande VelesQL `TRAIN QUANTIZER ON <collection> WITH (m=8, k=256)` — entrainement explicite, pas automatique
 - [x] **PQ-06**: `QuantizationConfig` etendu avec variante PQ — retrocompatible avec SQ8/Binary existants, pas de breaking change
-- [ ] **PQ-07**: Suite Criterion dediee `pq_recall` — seuils de precision (recall@10 >= 92% pour m=8) enregistres dans baseline
+- [x] **PQ-07**: Suite Criterion dediee `pq_recall` — seuils de precision (recall@10 >= 92% pour m=8) enregistres dans baseline
 
 ### Sparse Vectors — EPIC-062 (SPARSE)
 
@@ -129,7 +129,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | QUANT-ADV-01 | Phase 2: PQ Core Engine | Pending (promoted from v2) |
 | PQ-05 | Phase 3: PQ Integration | Complete |
 | PQ-06 | Phase 3: PQ Integration | Complete |
-| PQ-07 | Phase 3: PQ Integration | Pending |
+| PQ-07 | Phase 3: PQ Integration | Complete |
 | SPARSE-01 | Phase 4: Sparse Vector Engine | Pending |
 | SPARSE-02 | Phase 4: Sparse Vector Engine | Pending |
 | SPARSE-03 | Phase 4: Sparse Vector Engine | Pending |
