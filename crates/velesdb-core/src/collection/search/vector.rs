@@ -14,13 +14,20 @@ impl Collection {
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
         let metric = config.metric;
+        let oversampling = config.pq_rescore_oversampling.unwrap_or(0) as usize;
         drop(config);
 
         if !is_pq {
             return self.index.search(query, k);
         }
 
-        let candidates_k = k.saturating_mul(8).max(k + 32);
+        // When oversampling is disabled (None or Some(0)), skip rescore entirely
+        // and return raw index results truncated to k.
+        if oversampling == 0 {
+            return self.index.search(query, k);
+        }
+
+        let candidates_k = k.saturating_mul(oversampling).max(k + 32);
         let index_results = self.index.search(query, candidates_k);
 
         let pq_cache = self.pq_cache.read();

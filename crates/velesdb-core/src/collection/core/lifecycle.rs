@@ -61,6 +61,7 @@ impl Collection {
             metadata_only: false,
             graph_schema: None,
             embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
         };
 
         // Initialize persistent storages
@@ -159,6 +160,7 @@ impl Collection {
             metadata_only: true,
             graph_schema: None,
             embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
         };
 
         // For metadata-only, we only need payload storage
@@ -307,6 +309,7 @@ impl Collection {
             metadata_only: false,
             graph_schema: Some(schema),
             embedding_dimension: embedding_dim,
+            pq_rescore_oversampling: Some(4),
         };
 
         let vector_storage = Arc::new(RwLock::new(
