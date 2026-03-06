@@ -54,6 +54,22 @@ pub struct ScoreBreakdown {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub custom_boosts: HashMap<String, f32>,
 
+    /// Sparse vector relevance score (inner product).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse_score: Option<f32>,
+
+    /// Rank of this result in the sparse search branch (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse_rank: Option<u32>,
+
+    /// Rank of this result in the dense search branch (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense_rank: Option<u32>,
+
+    /// Fusion method used to combine scores (e.g., "rrf", "rsf").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fusion_method: Option<String>,
+
     /// Final combined score after fusion.
     pub final_score: f32,
 }
@@ -127,6 +143,13 @@ impl ScoreBreakdown {
         self
     }
 
+    /// Builder: set sparse score.
+    #[must_use]
+    pub fn with_sparse(mut self, score: f32) -> Self {
+        self.sparse_score = Some(score);
+        self
+    }
+
     /// Compute final score using the specified strategy.
     pub fn compute_final(&mut self, strategy: &FusionStrategy) {
         self.final_score = strategy.combine(self);
@@ -151,6 +174,9 @@ impl ScoreBreakdown {
         }
         if let Some(r) = self.recency_boost {
             components.push(("recency_boost", r));
+        }
+        if let Some(s) = self.sparse_score {
+            components.push(("sparse_score", s));
         }
 
         components
@@ -188,6 +214,7 @@ impl FusionStrategy {
             breakdown.vector_similarity,
             breakdown.graph_distance,
             breakdown.path_score,
+            breakdown.sparse_score,
         ]
         .into_iter()
         .flatten()

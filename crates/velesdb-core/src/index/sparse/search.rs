@@ -56,6 +56,45 @@ pub fn sparse_search(
     }
 }
 
+/// Searches the sparse inverted index with an optional post-filter.
+///
+/// If `filter` is `None`, delegates to [`sparse_search`]. Otherwise,
+/// retrieves `k * 4` candidates, applies the filter, and retries with
+/// `k * 8` if fewer than `k` results survive. Returns the top-k filtered
+/// results.
+#[must_use]
+pub fn sparse_search_filtered(
+    index: &SparseInvertedIndex,
+    query: &SparseVector,
+    k: usize,
+    filter: Option<&dyn Fn(u64) -> bool>,
+) -> Vec<ScoredDoc> {
+    let Some(filter) = filter else {
+        return sparse_search(index, query, k);
+    };
+
+    // First pass: 4x oversampling
+    let candidates = sparse_search(index, query, k.saturating_mul(4).max(k + 10));
+    let mut filtered: Vec<ScoredDoc> = candidates
+        .into_iter()
+        .filter(|doc| filter(doc.doc_id))
+        .collect();
+
+    if filtered.len() >= k {
+        filtered.truncate(k);
+        return filtered;
+    }
+
+    // Second pass: 8x oversampling
+    let candidates = sparse_search(index, query, k.saturating_mul(8).max(k + 20));
+    filtered = candidates
+        .into_iter()
+        .filter(|doc| filter(doc.doc_id))
+        .collect();
+    filtered.truncate(k);
+    filtered
+}
+
 /// Collects posting lists for each query term, along with query weight and
 /// the global max document weight for that term.
 struct TermPostings {
@@ -521,6 +560,46 @@ mod tests {
     }
 
     // --- Negative weight correctness ---
+
+    // --- Filtered sparse search tests ---
+
+    #[test]
+    fn test_sparse_search_filtered_basic() {
+        let index = SparseInvertedIndex::new();
+        for i in 0..20_u64 {
+            index.insert(i, &make_vector(vec![(1, 1.0 + i as f32)]));
+        }
+
+        let query = make_vector(vec![(1, 1.0)]);
+
+        // Filter: only even doc IDs
+        let filter = |id: u64| id % 2 == 0;
+        let results = sparse_search_filtered(&index, &query, 5, Some(&filter));
+
+        assert_eq!(results.len(), 5);
+        for r in &results {
+            assert_eq!(r.doc_id % 2, 0, "doc {} should be even", r.doc_id);
+        }
+    }
+
+    #[test]
+    fn test_sparse_search_filtered_none() {
+        let index = SparseInvertedIndex::new();
+        for i in 0..10_u64 {
+            index.insert(i, &make_vector(vec![(1, 1.0 + i as f32)]));
+        }
+
+        let query = make_vector(vec![(1, 1.0)]);
+
+        let unfiltered = sparse_search(&index, &query, 5);
+        let filtered_none = sparse_search_filtered(&index, &query, 5, None);
+
+        assert_eq!(unfiltered.len(), filtered_none.len());
+        for (a, b) in unfiltered.iter().zip(filtered_none.iter()) {
+            assert_eq!(a.doc_id, b.doc_id);
+            assert!((a.score - b.score).abs() < 1e-5);
+        }
+    }
 
     /// Verify that `MaxScore` produces the same top-k as brute-force when
     /// document vectors contain negative weights (e.g. SPLADE with negatives).

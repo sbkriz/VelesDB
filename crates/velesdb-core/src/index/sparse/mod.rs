@@ -10,5 +10,5 @@ pub mod search;
 pub mod types;
 
 pub use inverted_index::SparseInvertedIndex;
-pub use search::sparse_search;
+pub use search::{sparse_search, sparse_search_filtered};
 pub use types::{PostingEntry, ScoredDoc, SparseVector};
