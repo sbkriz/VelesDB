@@ -11,8 +11,8 @@ Requirements pour la release v1.5. Chaque requirement mappe à une phase du road
 
 - [x] **QUAL-01**: bincode RUSTSEC-2025-0141 migré vers une alternative sound (bitcode ou postcard) — wire-format compatible si possible
 - [ ] **QUAL-02**: BUG-8 corrigé — multi-alias FROM dans VelesQL produit des résultats incorrects
-- [ ] **QUAL-03**: `ProductQuantizer::train()` — `assert!` / `panic!` remplacés par `Result<_, VelesError>` — input invalide ne tue plus le serveur
-- [ ] **QUAL-04**: k-means++ init implémenté pour PQ — remplace l'init séquentielle déterministe qui produit des codebooks dégénérés sur données réelles
+- [x] **QUAL-03**: `ProductQuantizer::train()` — `assert!` / `panic!` remplacés par `Result<_, VelesError>` — input invalide ne tue plus le serveur
+- [x] **QUAL-04**: k-means++ init implémenté pour PQ — remplace l'init séquentielle déterministe qui produit des codebooks dégénérés sur données réelles
 - [x] **QUAL-05**: `cargo audit || true` retiré du CI — advisory réel = CI rouge
 - [ ] **QUAL-06**: Criterion baseline v1.5 enregistré dans `benchmarks/baseline.json` — seuil 15% enforced sur toutes les 35+ suites
 - [ ] **QUAL-07**: Coverage code ≥ 82% maintenue après toutes les additions v1.5
@@ -116,8 +116,8 @@ Mapping requirements → phases. Updated 2026-03-05 after roadmap creation.
 |-------------|-------|--------|
 | QUAL-01 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-02 | Phase 1: Quality Baseline & Security | Pending |
-| QUAL-03 | Phase 1: Quality Baseline & Security | Pending |
-| QUAL-04 | Phase 1: Quality Baseline & Security | Pending |
+| QUAL-03 | Phase 1: Quality Baseline & Security | Complete |
+| QUAL-04 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-05 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-06 | Phase 1: Quality Baseline & Security | Pending |
 | QUAL-07 | Phase 1: Quality Baseline & Security | Pending |

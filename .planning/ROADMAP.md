@@ -141,7 +141,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Quality Baseline & Security | 1/4 | In Progress|  |
+| 1. Quality Baseline & Security | 3/4 | In Progress|  |
 | 2. PQ Core Engine | 0/TBD | Not started | - |
 | 3. PQ Integration | 0/TBD | Not started | - |
 | 4. Sparse Vector Engine | 0/TBD | Not started | - |
