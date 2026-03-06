@@ -7,7 +7,7 @@ VelesDB v1.5 adds four interdependent engine subsystems (Product Quantization, S
 ## Phases
 
 - [ ] **Phase 1: Quality Baseline & Security** - Fix blocking bugs, migrate bincode RUSTSEC advisory, harden CI gates
-- [ ] **Phase 2: PQ Core Engine** - Production-quality PQ training (k-means++), ADC SIMD kernels, no API surface change
+- [x] **Phase 2: PQ Core Engine** - Production-quality PQ training (k-means++), ADC SIMD kernels, no API surface change (completed 2026-03-06)
 - [ ] **Phase 3: PQ Integration** - VelesQL TRAIN command, QuantizationConfig PQ variant, recall benchmark suite
 - [ ] **Phase 4: Sparse Vector Engine** - WeightedPostingList inverted index, sparse persistence, ANN inner-product search
 - [ ] **Phase 5: Sparse Integration** - Hybrid dense+sparse RRF, VelesQL SPARSE_NEAR grammar, REST endpoints, u32 term_id
@@ -150,7 +150,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Quality Baseline & Security | 3/4 | In Progress|  |
-| 2. PQ Core Engine | 3/4 | In Progress|  |
+| 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
 | 3. PQ Integration | 0/TBD | Not started | - |
 | 4. Sparse Vector Engine | 0/TBD | Not started | - |
 | 5. Sparse Integration | 0/TBD | Not started | - |

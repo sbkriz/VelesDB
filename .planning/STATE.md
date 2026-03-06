@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-03-06T11:31:00Z"
-last_activity: 2026-03-06 — Completed plan 02-03 (RaBitQ binary quantization with XOR+popcount)
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-03-06T11:31:37Z"
+last_activity: 2026-03-06 — Completed plan 02-04 (OPQ pre-rotation + GPU k-means)
 progress:
   total_phases: 10
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
-  percent: 10
+  completed_plans: 8
+  percent: 20
 ---
 
 # Project State
@@ -25,30 +25,30 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 
 ## Current Position
 
-Phase: 2 of 10 (PQ Core Engine)
-Plan: 3 of 4 in current phase (completed)
-Status: Executing phase 2
-Last activity: 2026-03-06 — Completed plan 02-03 (RaBitQ binary quantization with XOR+popcount)
+Phase: 2 of 10 (PQ Core Engine) -- COMPLETE
+Plan: 4 of 4 in current phase (completed)
+Status: Phase 2 complete, ready for Phase 3
+Last activity: 2026-03-06 — Completed plan 02-04 (OPQ pre-rotation + GPU k-means)
 
-Progress: [█████████░] 88%
+Progress: [██████████] 100% (Phase 2)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: 20 min
-- Total execution time: 2.35 hours
+- Total execution time: 2.7 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-foundation-fixes | 2/4 | 32 min | 16 min |
-| 02-pq-core-engine | 3/4 | 72 min | 24 min |
+| 02-pq-core-engine | 4/4 | 93 min | 23 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (23 min), 02-01 (15 min), 02-02 (26 min), 02-03 (31 min)
-- Trend: Executing
+- Last 5 plans: 02-01 (15 min), 02-02 (26 min), 02-03 (31 min), 02-04 (21 min)
+- Trend: Phase 2 complete
 
 *Updated after each plan completion*
 
@@ -74,6 +74,9 @@ Recent decisions affecting current work:
 - [02-03]: Removed qip correction from RaBitQ distance formula -- simpler ip_binary achieves 85%+ recall
 - [02-03]: Modified Gram-Schmidt for orthogonal rotation instead of ndarray QR (zero new deps)
 - [02-03]: 128d vectors with 100 clusters needed for recall test (binary quantization needs high dimensionality)
+- [02-04]: PCA-based OPQ instead of IPQ Procrustes (power iteration eigenvectors are deterministic, more robust)
+- [02-04]: f64 accumulation for covariance/eigenvalue computation (avoids float32 precision loss on 64d+ vectors)
+- [02-04]: WGSL shader embedded in pq_gpu.rs (different bind group layout from existing cosine shader)
 
 ### Pending Todos
 
@@ -87,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T11:31:00Z
-Stopped at: Completed 02-03-PLAN.md
-Resume file: .planning/phases/02-pq-core-engine/02-04-PLAN.md
+Last session: 2026-03-06T11:31:37Z
+Stopped at: Completed 02-04-PLAN.md (Phase 02 complete)
+Resume file: Phase 03 plans (next phase)

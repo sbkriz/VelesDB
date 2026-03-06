@@ -21,7 +21,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 
 - [x] **PQ-01**: Codebook PQ entrainable avec k-means++ (m sous-espaces, k centroids configurables)
 - [x] **PQ-02**: ADC (Asymmetric Distance Computation) avec SIMD — lookup table tient en cache L1 (m x k x 4 bytes, ~8KB pour m=8 k=256)
-- [ ] **PQ-03**: OPQ pre-rotation optionnelle via `ndarray` — ameliore recall ~5-15% sur donnees groupees
+- [x] **PQ-03**: OPQ pre-rotation optionnelle via `ndarray` — ameliore recall ~5-15% sur donnees groupees
 - [x] **PQ-04**: Phase de rescore — oversampling + rerank f32 active par defaut (evite le silent recall collapse)
 - [ ] **PQ-05**: Commande VelesQL `TRAIN QUANTIZER ON <collection> WITH (m=8, k=256)` — entrainement explicite, pas automatique
 - [ ] **PQ-06**: `QuantizationConfig` etendu avec variante PQ — retrocompatible avec SQ8/Binary existants, pas de breaking change
@@ -123,7 +123,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | QUAL-07 | Phase 1: Quality Baseline & Security | Pending |
 | PQ-01 | Phase 2: PQ Core Engine | Complete |
 | PQ-02 | Phase 2: PQ Core Engine | Complete |
-| PQ-03 | Phase 2: PQ Core Engine | Pending |
+| PQ-03 | Phase 2: PQ Core Engine | Complete |
 | PQ-04 | Phase 2: PQ Core Engine | Complete |
 | PQ-ADV-01 | Phase 2: PQ Core Engine | Pending (promoted from v2) |
 | QUANT-ADV-01 | Phase 2: PQ Core Engine | Pending (promoted from v2) |
