@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-03-06T18:11:00Z"
-last_activity: 2026-03-06 — Completed plan 04-03 (Sparse index persistence and collection integration)
+stopped_at: Completed 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
+last_updated: "2026-03-06T21:48:01.187Z"
+last_activity: 2026-03-06 — Completed plan 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
 progress:
   total_phases: 10
-  completed_phases: 3
-  total_plans: 14
-  completed_plans: 14
+  completed_phases: 4
+  total_plans: 18
+  completed_plans: 15
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 4 — Sparse Vector Engine
+**Current focus:** Phase 5 — Sparse Integration
 
 ## Current Position
 
-Phase: 4 of 10 (Sparse Vector Engine)
-Plan: 3 of ? in current phase
-Status: Completed plan 04-03 (sparse index persistence + collection integration)
-Last activity: 2026-03-06 — Completed plan 04-03 (Sparse index persistence and collection integration)
+Phase: 5 of 10 (Sparse Integration)
+Plan: 2 of 4 in current phase
+Status: Completed plan 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
+Last activity: 2026-03-06 — Completed plan 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
 
-Progress: [████████████] 100% (11 prior + 3 phase 4)
+Progress: [████████░░] 83% (14 prior + 1 phase 5)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14
+- Total plans completed: 15
 - Average duration: 19 min
-- Total execution time: 4.5 hours
+- Total execution time: 4.9 hours
 
 **By Phase:**
 
@@ -49,8 +49,8 @@ Progress: [████████████] 100% (11 prior + 3 phase 4)
 | 04-sparse-vector-engine | 3/? | 66 min | 22 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (19 min), 03-03 (17 min), 04-01 (20 min), 04-02 (22 min), 04-03 (24 min)
-- Trend: Stable ~20-24 min per plan
+- Last 5 plans: 03-03 (17 min), 04-01 (20 min), 04-02 (22 min), 04-03 (24 min), 05-02 (26 min)
+- Trend: Stable ~20-26 min per plan
 
 *Updated after each plan completion*
 
@@ -58,6 +58,7 @@ Progress: [████████████] 100% (11 prior + 3 phase 4)
 |------|----------|-------|-------|
 | Phase 04 P02 | 22 min | 2 tasks | 5 files |
 | Phase 04 P03 | 24 min | 2 tasks | 7 files |
+| Phase 05 P02 | 26 min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,9 @@ Recent decisions affecting current work:
 - [Phase 04]: MaxScore uses sorted-by-contribution term ordering with prefix-sum upper bounds for early termination
 - [Phase 04]: Linear scan threshold at 30% coverage (total_postings > 0.3 * doc_count * query_nnz)
 - [Phase 04]: Dense array accumulator up to 10M doc IDs, FxHashMap fallback above
+- [05-02]: SPARSE_NEAR placed before vector_search in PEG primary_expr for longest-match-first ordering
+- [05-02]: SparseVectorExpr enum separates Literal(SparseVector) from Parameter(String) for type-safe query binding
+- [05-02]: Rsf added as FusionStrategyType variant with dense_weight/sparse_weight on FusionClause
 
 ### Pending Todos
 
@@ -114,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T18:11:00Z
-Stopped at: Completed 04-03-PLAN.md
-Resume file: .planning/phases/04-sparse-vector-engine/04-03-SUMMARY.md
+Last session: 2026-03-06T21:48:01.187Z
+Stopped at: Completed 05-02 (VelesQL SPARSE_NEAR grammar + parser + conformance)
+Resume file: .planning/phases/05-sparse-integration/05-02-SUMMARY.md

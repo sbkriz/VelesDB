@@ -95,7 +95,13 @@ Plans:
   2. The VelesQL grammar accepts and parses `vector SPARSE_NEAR $sv` — the conformance test suite in `conformance/velesql_parser_cases.json` includes sparse cases that pass in all crates
   3. The REST API accepts `sparse_vector` in upsert payloads and exposes a sparse search endpoint — both are documented in the OpenAPI spec
   4. All term IDs are stored as u32 — a test corpus with term_id values up to 2^32-1 is inserted and retrieved correctly
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Named sparse vectors data model + CRUD wiring + u32 boundary test (SPARSE-04, SPARSE-07)
+- [ ] 05-02-PLAN.md — VelesQL SPARSE_NEAR grammar + parser + AST + conformance (SPARSE-05)
+- [ ] 05-03-PLAN.md — RSF fusion + filtered sparse search + hybrid executor wiring (SPARSE-04)
+- [ ] 05-04-PLAN.md — REST API sparse endpoints + WASM sparse bindings (SPARSE-06, SPARSE-07)
 
 ### Phase 6: Query Plan Cache
 **Goal**: Repeated identical VelesQL queries are served from a compiled plan cache — latency on cache hits is measurably lower and the cache invalidates correctly on all write paths
@@ -163,7 +169,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
 | 3. PQ Integration | 2/3 | In Progress|  |
 | 4. Sparse Vector Engine | 3/3 | Complete   | 2026-03-06 |
-| 5. Sparse Integration | 0/TBD | Not started | - |
+| 5. Sparse Integration | 1/4 | In Progress |  |
 | 6. Query Plan Cache | 0/TBD | Not started | - |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
 | 8. SDK Parity | 0/TBD | Not started | - |
