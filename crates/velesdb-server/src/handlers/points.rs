@@ -11,12 +11,50 @@ use futures::StreamExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::types::{ErrorResponse, UpsertPointsRequest};
+use crate::types::{ErrorResponse, SparseVectorInput, UpsertPointsRequest};
 use crate::AppState;
 use velesdb_core::{Point, VectorCollection};
 
+use velesdb_core::index::sparse::SparseVector;
+
 const STREAM_BATCH_SIZE: usize = 100;
 const STREAM_BATCH_MAX_WAIT: Duration = Duration::from_millis(100);
+
+/// Converts sparse vector input fields from a request into a `BTreeMap<String, SparseVector>`.
+///
+/// Merges `sparse_vector` (single, stored under `""`) and `sparse_vectors` (named map).
+/// Named map takes precedence if both provide the same key.
+fn convert_sparse_inputs(
+    sparse_vector: Option<SparseVectorInput>,
+    sparse_vectors: Option<std::collections::BTreeMap<String, SparseVectorInput>>,
+) -> Result<Option<std::collections::BTreeMap<String, SparseVector>>, String> {
+    let has_single = sparse_vector.is_some();
+    let has_named = sparse_vectors.as_ref().is_some_and(|m| !m.is_empty());
+
+    if !has_single && !has_named {
+        return Ok(None);
+    }
+
+    let mut result = std::collections::BTreeMap::new();
+
+    // Single sparse vector goes under default name ""
+    if let Some(sv_input) = sparse_vector {
+        let sv = sv_input.into_sparse_vector()?;
+        result.insert(String::new(), sv);
+    }
+
+    // Named sparse vectors (overwrite default if same key)
+    if let Some(named) = sparse_vectors {
+        for (name, sv_input) in named {
+            let sv = sv_input
+                .into_sparse_vector()
+                .map_err(|e| format!("sparse_vectors['{name}']: {e}"))?;
+            result.insert(name, sv);
+        }
+    }
+
+    Ok(Some(result))
+}
 
 #[derive(Default)]
 struct StreamUpsertStats {
@@ -108,11 +146,18 @@ pub async fn upsert_points(
         }
     };
 
-    let points: Vec<Point> = req
-        .points
-        .into_iter()
-        .map(|p| Point::new(p.id, p.vector, p.payload))
-        .collect();
+    let mut points: Vec<Point> = Vec::with_capacity(req.points.len());
+    for p in req.points {
+        let sparse = match convert_sparse_inputs(p.sparse_vector, p.sparse_vectors) {
+            Ok(s) => s,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
+            }
+        };
+        let mut point = Point::new(p.id, p.vector, p.payload);
+        point.sparse_vectors = sparse;
+        points.push(point);
+    }
 
     // CRITICAL: upsert_bulk is blocking (HNSW insertion + I/O)
     // Must use spawn_blocking to avoid blocking the async runtime
