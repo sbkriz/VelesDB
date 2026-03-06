@@ -4,10 +4,11 @@
 //! and `SparseInvertedIndex` for efficient sparse-to-sparse similarity search.
 
 pub mod inverted_index;
+#[cfg(feature = "persistence")]
+pub mod persistence;
+pub mod search;
 pub mod types;
-// Modules enabled in later plans:
-// pub mod search;      [EPIC-062/US-001]
-// pub mod persistence; [EPIC-062/US-002]
 
 pub use inverted_index::SparseInvertedIndex;
+pub use search::sparse_search;
 pub use types::{PostingEntry, ScoredDoc, SparseVector};

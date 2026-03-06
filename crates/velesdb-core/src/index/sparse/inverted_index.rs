@@ -86,14 +86,27 @@ impl MutableSegment {
 }
 
 /// A frozen (read-optimized) segment. The `f32` in the tuple is `max_weight`.
-struct FrozenSegment {
+pub(crate) struct FrozenSegment {
     /// Posting lists per term. The `f32` is the max absolute weight for that term.
-    postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
+    pub(crate) postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
     /// Tombstone set: doc IDs that have been logically deleted.
     tombstones: FxHashSet<u64>,
     /// Number of documents originally in this segment (used by persistence layer).
-    #[allow(dead_code)]
-    doc_count: usize,
+    pub(crate) doc_count: usize,
+}
+
+impl FrozenSegment {
+    /// Creates a new frozen segment from postings and a document count.
+    pub(crate) fn new(
+        postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
+        doc_count: usize,
+    ) -> Self {
+        Self {
+            postings,
+            tombstones: FxHashSet::default(),
+            doc_count,
+        }
+    }
 }
 
 /// Sparse inverted index with segment-level isolation.
@@ -263,6 +276,93 @@ impl SparseInvertedIndex {
         }
 
         terms.len()
+    }
+
+    /// Constructs an index from a single frozen segment (used by persistence layer).
+    #[must_use]
+    pub(crate) fn from_frozen_segment(segment: FrozenSegment) -> Self {
+        let doc_count = segment.doc_count as u64;
+        Self {
+            mutable: RwLock::new(MutableSegment::new()),
+            frozen: RwLock::new(vec![segment]),
+            doc_count: AtomicU64::new(doc_count),
+        }
+    }
+
+    /// Returns all unique term IDs across all segments.
+    #[must_use]
+    pub fn all_term_ids(&self) -> Vec<u32> {
+        let mut terms: FxHashSet<u32> = FxHashSet::default();
+
+        {
+            let frozen_vec = self.frozen.read();
+            for frozen_seg in frozen_vec.iter() {
+                terms.extend(frozen_seg.postings.keys());
+            }
+        }
+
+        {
+            let seg = self.mutable.read();
+            terms.extend(seg.postings.keys());
+        }
+
+        let mut ids: Vec<u32> = terms.into_iter().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Merges all segments into a single map for disk compaction.
+    ///
+    /// Filters tombstoned entries and recalculates max weights.
+    /// Returns `(term_id -> (postings, max_weight))`.
+    #[must_use]
+    pub fn get_merged_postings_for_compaction(&self) -> FxHashMap<u32, (Vec<PostingEntry>, f32)> {
+        let mut merged: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
+
+        // Collect from frozen segments, filtering tombstones
+        {
+            let frozen_vec = self.frozen.read();
+            for frozen_seg in frozen_vec.iter() {
+                for (&term_id, (entries, _)) in &frozen_seg.postings {
+                    let dest = merged.entry(term_id).or_default();
+                    for entry in entries {
+                        if !frozen_seg.tombstones.contains(&entry.doc_id) {
+                            dest.push(*entry);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect from mutable segment
+        {
+            let seg = self.mutable.read();
+            for (&term_id, entries) in &seg.postings {
+                let dest = merged.entry(term_id).or_default();
+                dest.extend_from_slice(entries);
+            }
+        }
+
+        // Deduplicate by doc_id (last-write-wins), sort, and compute max_weights
+        let mut result: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
+        for (term_id, mut entries) in merged {
+            // Sort by doc_id; deduplicate keeping last occurrence
+            entries.sort_by_key(|e| e.doc_id);
+            entries.dedup_by_key(|e| e.doc_id);
+
+            // Filter empty lists
+            if entries.is_empty() {
+                continue;
+            }
+
+            let max_w = entries
+                .iter()
+                .map(|e| e.weight.abs())
+                .fold(0.0_f32, f32::max);
+            result.insert(term_id, (entries, max_w));
+        }
+
+        result
     }
 
     /// Returns the number of frozen segments (for testing).
