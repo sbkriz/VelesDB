@@ -1,37 +1,33 @@
 {
-  "version": "1.0.0",
-  "description": "VelesDB Performance Baseline (EPIC-026/US-002)",
-  "recorded_at": "2026-02-20",
+  "version": "1.5.0",
+  "description": "VelesDB Performance Baseline v1.5 — Phase 01 complete (postcard, PQ hardened, BUG-8 fixed)",
+  "recorded_at": "2026-03-06",
   "environment": {
-    "rust_version": "1.83.0",
-    "features": "simd",
-    "runner": "github-hosted ubuntu-latest"
+    "rust_version": "1.92.0",
+    "features": "persistence,gpu,update-check",
+    "runner": "local (i9-14900KF, Windows 11)"
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 6730000000,
-      "std_ns": 550000000,
+      "mean_ns": 3997165150.0,
+      "std_ns": 400000000,
       "threshold_percent": 15
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 331820,
+      "mean_ns": 329167.0,
       "std_ns": 45000,
       "threshold_percent": 15
     },
-    "hnsw_insert": {
-      "mean_ns": 50000000,
-      "std_ns": 3000000,
-      "threshold_percent": 15
-    },
-    "hnsw_search_k10": {
-      "mean_ns": 1000000,
-      "std_ns": 100000,
+    "smoke_hybrid/vector_plus_filter": {
+      "mean_ns": 179910.0,
+      "std_ns": 20000,
       "threshold_percent": 15
     }
   },
   "notes": [
-    "Smoke baseline refreshed from main CI run 22241009537",
-    "Threshold of 15% is aligned with docs/reference/PERFORMANCE_SLO.md",
-    "Recalibrate on dedicated performance host before release cut"
+    "Baseline captured after Phase 01 foundation fixes (postcard migration, PQ hardening, BUG-8)",
+    "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
+    "Machine: i9-14900KF, 64GB RAM, Windows 11 Pro",
+    "Only smoke_test bench suite included — full suite benchmarks run on demand"
   ]
 }
