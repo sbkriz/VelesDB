@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0",
+  "version": "2.2.0",
   "cases": [
     {
       "id": "P001",
@@ -25,6 +25,36 @@
       "id": "P005",
       "query": "SELECT * docs",
       "should_parse": false
+    },
+    {
+      "id": "P006",
+      "query": "SELECT * FROM docs AS d",
+      "should_parse": true,
+      "from_alias": ["d"]
+    },
+    {
+      "id": "P007",
+      "query": "SELECT d.name, t.tag FROM docs AS d JOIN tags AS t ON d.id = t.doc_id",
+      "should_parse": true,
+      "from_alias": ["d", "t"]
+    },
+    {
+      "id": "P008",
+      "query": "SELECT e.name, m.name FROM employees AS e JOIN employees AS m ON e.manager_id = m.id",
+      "should_parse": true,
+      "from_alias": ["e", "m"]
+    },
+    {
+      "id": "P009",
+      "query": "SELECT * FROM docs JOIN tags AS t ON docs.id = t.doc_id",
+      "should_parse": true,
+      "from_alias": ["t"]
+    },
+    {
+      "id": "P010",
+      "query": "SELECT e.name, m.name, d.name FROM employees AS e JOIN employees AS m ON e.manager_id = m.id JOIN employees AS d ON m.manager_id = d.id",
+      "should_parse": true,
+      "from_alias": ["e", "m", "d"]
     }
   ]
 }

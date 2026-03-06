@@ -14,6 +14,10 @@ struct ParserCase {
     id: String,
     query: String,
     should_parse: bool,
+    /// Expected from_alias Vec (BUG-8 conformance). When present, the test
+    /// verifies the parsed AST contains exactly these aliases in order.
+    #[serde(default)]
+    from_alias: Option<Vec<String>>,
 }
 
 fn fixture_path() -> PathBuf {
@@ -33,5 +37,17 @@ fn test_velesql_parser_conformance_fixture_cases() {
             "parser conformance failed for case {}",
             case.id
         );
+
+        // BUG-8: Validate from_alias Vec when expected aliases are specified.
+        if case.should_parse {
+            if let Some(ref expected_aliases) = case.from_alias {
+                let query = parsed.unwrap();
+                assert_eq!(
+                    &query.select.from_alias, expected_aliases,
+                    "from_alias mismatch for case {}: expected {:?}, got {:?}",
+                    case.id, expected_aliases, query.select.from_alias
+                );
+            }
+        }
     }
 }
