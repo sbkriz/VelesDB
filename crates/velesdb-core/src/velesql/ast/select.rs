@@ -31,9 +31,9 @@ pub struct SelectStatement {
     pub columns: SelectColumns,
     /// Collection name (FROM clause).
     pub from: String,
-    /// Alias for the FROM table (EPIC-052 US-003).
+    /// Aliases visible in scope: FROM alias + JOIN aliases (BUG-8 fix).
     #[serde(default)]
-    pub from_alias: Option<String>,
+    pub from_alias: Vec<String>,
     /// JOIN clauses (EPIC-031 US-004).
     #[serde(default)]
     pub joins: Vec<JoinClause>,

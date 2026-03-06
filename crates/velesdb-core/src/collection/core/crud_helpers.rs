@@ -51,23 +51,26 @@ impl Collection {
                         let training: Vec<Vec<f32>> =
                             buffer.iter().map(|(_, vector)| vector.clone()).collect();
                         let num_centroids = 256usize.min(training.len().max(2));
-                        *quantizer_guard = Some(ProductQuantizer::train(
+                        *quantizer_guard = ProductQuantizer::train(
                             &training,
                             auto_num_subspaces(point.vector.len()),
                             num_centroids,
-                        ));
+                        )
+                        .ok();
                         backfill_samples = buffer.drain(..).collect();
                     }
                 }
 
                 if let (Some(cache), Some(quantizer)) = (pq_cache, quantizer_guard.as_ref()) {
                     for (id, vector) in backfill_samples {
-                        let code = quantizer.quantize(&vector);
-                        cache.insert(id, code);
+                        if let Ok(code) = quantizer.quantize(&vector) {
+                            cache.insert(id, code);
+                        }
                     }
 
-                    let code = quantizer.quantize(&point.vector);
-                    cache.insert(point.id, code);
+                    if let Ok(code) = quantizer.quantize(&point.vector) {
+                        cache.insert(point.id, code);
+                    }
                 }
             }
             StorageMode::Full => {}

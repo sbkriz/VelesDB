@@ -248,12 +248,7 @@ impl Collection {
                     .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
                 if has_graph_predicates {
                     results = self
-                        .apply_where_condition_to_results(
-                            results,
-                            cond,
-                            params,
-                            stmt.from_alias.as_deref(),
-                        )
+                        .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
                         .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
                 }
 
@@ -285,12 +280,7 @@ impl Collection {
                     .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
                 if has_graph_predicates {
                     results = self
-                        .apply_where_condition_to_results(
-                            results,
-                            cond,
-                            params,
-                            stmt.from_alias.as_deref(),
-                        )
+                        .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
                         .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
                 }
 
@@ -332,12 +322,7 @@ impl Collection {
         if has_graph_predicates {
             if let Some(cond) = stmt.where_clause.as_ref() {
                 results = self
-                    .apply_where_condition_to_results(
-                        results,
-                        cond,
-                        params,
-                        stmt.from_alias.as_deref(),
-                    )
+                    .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
                     .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
             }
         }
@@ -353,9 +338,8 @@ impl Collection {
         // enabling the future ColumnStore JOIN executor to consume the analysis.
         if !stmt.joins.is_empty() {
             if let Some(ref cond) = stmt.where_clause {
-                // Note (BUG-8): from_alias is Option<String>, so graph_vars contains at most
-                // one alias. Multi-alias FROM clauses are not yet supported; if added in future,
-                // from_alias will need to become Vec<String> and this collect() updated.
+                // BUG-8 fix: from_alias is now Vec<String> containing all aliases
+                // visible in scope (FROM alias + JOIN aliases).
                 let graph_vars: std::collections::HashSet<String> =
                     stmt.from_alias.iter().cloned().collect();
                 let join_tables = pushdown::extract_join_tables(&stmt.joins);

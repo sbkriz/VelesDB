@@ -145,6 +145,13 @@ pub enum Error {
     /// memory, rate limit, or circuit breaker).
     #[error("[VELES-027] Guard-rail violation: {0}")]
     GuardRail(String),
+
+    /// Invalid quantizer configuration (VELES-028).
+    ///
+    /// Indicates invalid parameters passed to a quantizer (e.g., empty training set,
+    /// zero subspaces, dimension not divisible by subspaces).
+    #[error("[VELES-028] Invalid quantizer config: {0}")]
+    InvalidQuantizerConfig(String),
 }
 
 impl Error {
@@ -179,6 +186,7 @@ impl Error {
             Self::GpuError(_) => "VELES-025",
             Self::EpochMismatch(_) => "VELES-026",
             Self::GuardRail(_) => "VELES-027",
+            Self::InvalidQuantizerConfig(_) => "VELES-028",
         }
     }
 

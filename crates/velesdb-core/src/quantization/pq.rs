@@ -3,6 +3,7 @@
 //! PQ splits vectors into multiple subspaces and quantizes each subspace
 //! independently with its own codebook (k-means centroids).
 
+use crate::error::Error;
 use serde::{Deserialize, Serialize};
 
 /// Per-subspace centroid tables learned with k-means.
@@ -36,25 +37,58 @@ pub struct ProductQuantizer {
 
 impl ProductQuantizer {
     /// Train a PQ codebook using simplified k-means for each subspace.
-    #[must_use]
-    pub fn train(vectors: &[Vec<f32>], num_subspaces: usize, num_centroids: usize) -> Self {
-        assert!(!vectors.is_empty(), "Cannot train PQ with empty dataset");
-        assert!(num_subspaces > 0, "num_subspaces must be > 0");
-        assert!(num_centroids > 0, "num_centroids must be > 0");
-        assert!(
-            u16::try_from(num_centroids).is_ok(),
-            "num_centroids must fit in u16 (max 65535)"
-        );
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidQuantizerConfig` if:
+    /// - `vectors` is empty
+    /// - `num_subspaces` is 0
+    /// - `num_centroids` is 0 or exceeds `u16::MAX`
+    /// - vector dimension is not divisible by `num_subspaces`
+    /// - `num_centroids` exceeds `vectors.len()`
+    pub fn train(
+        vectors: &[Vec<f32>],
+        num_subspaces: usize,
+        num_centroids: usize,
+    ) -> Result<Self, Error> {
+        if vectors.is_empty() {
+            return Err(Error::InvalidQuantizerConfig(
+                "cannot train PQ with empty dataset".into(),
+            ));
+        }
+        if num_subspaces == 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "num_subspaces must be > 0".into(),
+            ));
+        }
+        if num_centroids == 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "num_centroids must be > 0".into(),
+            ));
+        }
+        if u16::try_from(num_centroids).is_err() {
+            return Err(Error::InvalidQuantizerConfig(
+                "num_centroids must fit in u16 (max 65535)".into(),
+            ));
+        }
 
         let dimension = vectors[0].len();
-        assert!(
-            vectors.iter().all(|v| v.len() == dimension),
-            "All vectors must share the same dimension"
-        );
-        assert!(
-            dimension % num_subspaces == 0,
-            "Dimension must be divisible by num_subspaces"
-        );
+        if !vectors.iter().all(|v| v.len() == dimension) {
+            return Err(Error::InvalidQuantizerConfig(
+                "all vectors must share the same dimension".into(),
+            ));
+        }
+        if dimension % num_subspaces != 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "dimension must be divisible by num_subspaces".into(),
+            ));
+        }
+        if num_centroids > vectors.len() {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "num_centroids ({num_centroids}) exceeds number of training vectors ({})",
+                vectors.len()
+            )));
+        }
 
         let subspace_dim = dimension / num_subspaces;
         let mut centroids = Vec::with_capacity(num_subspaces);
@@ -67,7 +101,7 @@ impl ProductQuantizer {
             centroids.push(kmeans_train(&sub_vectors, num_centroids, 25));
         }
 
-        Self {
+        Ok(Self {
             codebook: PQCodebook {
                 centroids,
                 dimension,
@@ -75,13 +109,23 @@ impl ProductQuantizer {
                 num_centroids,
                 subspace_dim,
             },
-        }
+        })
     }
 
     /// Quantize a full-precision vector into PQ codes.
-    #[must_use]
-    pub fn quantize(&self, vector: &[f32]) -> PQVector {
-        assert_eq!(vector.len(), self.codebook.dimension);
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidQuantizerConfig` if `vector.len()` does not match
+    /// the codebook dimension.
+    pub fn quantize(&self, vector: &[f32]) -> Result<PQVector, Error> {
+        if vector.len() != self.codebook.dimension {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "vector dimension mismatch: expected {}, got {}",
+                self.codebook.dimension,
+                vector.len()
+            )));
+        }
 
         let mut codes = Vec::with_capacity(self.codebook.num_subspaces);
         for subspace in 0..self.codebook.num_subspaces {
@@ -94,25 +138,49 @@ impl ProductQuantizer {
             codes.push(code as u16);
         }
 
-        PQVector { codes }
+        Ok(PQVector { codes })
     }
 
     /// Reconstruct an approximate vector from PQ codes.
-    #[must_use]
-    pub fn reconstruct(&self, pq_vector: &PQVector) -> Vec<f32> {
-        assert_eq!(pq_vector.codes.len(), self.codebook.num_subspaces);
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidQuantizerConfig` if the number of codes does not
+    /// match the number of subspaces, or if a code index is out of range.
+    pub fn reconstruct(&self, pq_vector: &PQVector) -> Result<Vec<f32>, Error> {
+        if pq_vector.codes.len() != self.codebook.num_subspaces {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "code count mismatch: expected {}, got {}",
+                self.codebook.num_subspaces,
+                pq_vector.codes.len()
+            )));
+        }
 
         let mut reconstructed = Vec::with_capacity(self.codebook.dimension);
         for (subspace, &code) in pq_vector.codes.iter().enumerate() {
-            let centroid = &self.codebook.centroids[subspace][usize::from(code)];
+            let code_idx = usize::from(code);
+            if code_idx >= self.codebook.centroids[subspace].len() {
+                return Err(Error::InvalidQuantizerConfig(format!(
+                    "code index {code_idx} out of range for subspace {subspace} \
+                     (max {})",
+                    self.codebook.centroids[subspace].len() - 1
+                )));
+            }
+            let centroid = &self.codebook.centroids[subspace][code_idx];
             reconstructed.extend_from_slice(centroid);
         }
 
-        reconstructed
+        Ok(reconstructed)
     }
 }
 
 /// Asymmetric distance computation (ADC): query is f32, candidate is PQ-coded.
+///
+/// # Panics
+///
+/// Panics if `query_vector.len() != codebook.dimension` or
+/// `pq_vector.codes.len() != codebook.num_subspaces`. These are internal
+/// invariant checks (not user-facing).
 #[must_use]
 pub fn distance_pq_l2(query_vector: &[f32], pq_vector: &PQVector, codebook: &PQCodebook) -> f32 {
     assert_eq!(query_vector.len(), codebook.dimension);
@@ -172,7 +240,9 @@ fn l2_squared(a: &[f32], b: &[f32]) -> f32 {
 }
 
 fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32>> {
-    assert!(!samples.is_empty());
+    // Internal invariant: callers validate non-empty samples and k > 0.
+    debug_assert!(!samples.is_empty());
+    debug_assert!(k > 0);
     let dim = samples[0].len();
 
     // Deterministic init: first k (cycled if needed).
@@ -208,8 +278,8 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
                 // Re-seed empty cluster deterministically.
                 new_centroids[cluster].clone_from(&samples[cluster % samples.len()]);
             } else {
-                let count = counts[cluster].to_string().parse::<f32>().unwrap_or(1.0);
-                let inv = 1.0_f32 / count;
+                #[allow(clippy::cast_precision_loss)]
+                let inv = 1.0_f32 / counts[cluster] as f32;
                 for value in new_centroids[cluster].iter_mut().take(dim) {
                     *value *= inv;
                 }
@@ -229,6 +299,7 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
 #[cfg(test)]
 mod tests {
     use super::{distance_pq_l2, ProductQuantizer};
+    use crate::error::Error;
 
     #[test]
     fn train_builds_expected_codebook_shape() {
@@ -239,7 +310,7 @@ mod tests {
             vec![8.1, 7.9, 1.2, 0.8],
         ];
 
-        let pq = ProductQuantizer::train(&vectors, 2, 2);
+        let pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
         assert_eq!(pq.codebook.num_subspaces, 2);
         assert_eq!(pq.codebook.num_centroids, 2);
         assert_eq!(pq.codebook.subspace_dim, 2);
@@ -255,11 +326,11 @@ mod tests {
             vec![8.0, 8.0, 1.0, 1.0],
             vec![8.1, 7.9, 1.2, 0.8],
         ];
-        let pq = ProductQuantizer::train(&vectors, 2, 4);
+        let pq = ProductQuantizer::train(&vectors, 2, 4).unwrap();
 
         let input = vec![8.05, 8.0, 1.1, 1.0];
-        let code = pq.quantize(&input);
-        let reconstructed = pq.reconstruct(&code);
+        let code = pq.quantize(&input).unwrap();
+        let reconstructed = pq.reconstruct(&code).unwrap();
 
         assert_eq!(code.codes.len(), 2);
         assert_eq!(reconstructed.len(), input.len());
@@ -284,15 +355,108 @@ mod tests {
             vec![5.0, 5.0, 5.0, 5.0],
             vec![5.1, 4.9, 5.0, 5.2],
         ];
-        let pq = ProductQuantizer::train(&vectors, 2, 2);
+        let pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
 
-        let near = pq.quantize(&[0.05, 0.05, 0.0, 0.1]);
-        let far = pq.quantize(&[5.0, 5.0, 5.0, 5.0]);
+        let near = pq.quantize(&[0.05, 0.05, 0.0, 0.1]).unwrap();
+        let far = pq.quantize(&[5.0, 5.0, 5.0, 5.0]).unwrap();
         let query = [0.0, 0.0, 0.0, 0.0];
 
         let d_near = distance_pq_l2(&query, &near, &pq.codebook);
         let d_far = distance_pq_l2(&query, &far, &pq.codebook);
 
         assert!(d_near < d_far, "ADC did not preserve proximity ordering");
+    }
+
+    #[test]
+    fn train_empty_vectors_returns_error() {
+        let result = ProductQuantizer::train(&[], 2, 2);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn train_zero_subspaces_returns_error() {
+        let vectors = vec![vec![1.0, 2.0]];
+        let result = ProductQuantizer::train(&vectors, 0, 2);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::InvalidQuantizerConfig(_)
+        ));
+    }
+
+    #[test]
+    fn train_zero_centroids_returns_error() {
+        let vectors = vec![vec![1.0, 2.0]];
+        let result = ProductQuantizer::train(&vectors, 1, 0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::InvalidQuantizerConfig(_)
+        ));
+    }
+
+    #[test]
+    fn train_centroids_exceed_u16_returns_error() {
+        let vectors = vec![vec![1.0, 2.0]];
+        let result = ProductQuantizer::train(&vectors, 1, 65536);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::InvalidQuantizerConfig(_)
+        ));
+    }
+
+    #[test]
+    fn train_dimension_not_divisible_returns_error() {
+        let vectors = vec![vec![1.0, 2.0, 3.0]];
+        let result = ProductQuantizer::train(&vectors, 2, 1);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::InvalidQuantizerConfig(_)
+        ));
+    }
+
+    #[test]
+    fn train_more_centroids_than_vectors_returns_error() {
+        let vectors = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = ProductQuantizer::train(&vectors, 1, 5);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Error::InvalidQuantizerConfig(_)
+        ));
+    }
+
+    #[test]
+    fn train_valid_inputs_returns_ok() {
+        let vectors = vec![
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![5.0, 6.0, 7.0, 8.0],
+            vec![9.0, 10.0, 11.0, 12.0],
+        ];
+        let result = ProductQuantizer::train(&vectors, 2, 2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn quantize_wrong_dimension_returns_error() {
+        let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+        let pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
+        let result = pq.quantize(&[1.0, 2.0]); // wrong dimension
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reconstruct_invalid_codes_returns_error() {
+        let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+        let pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
+        // Wrong number of codes
+        let bad_pq_vec = super::PQVector { codes: vec![0] };
+        let result = pq.reconstruct(&bad_pq_vec);
+        assert!(result.is_err());
     }
 }

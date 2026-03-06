@@ -59,10 +59,10 @@ fn rescore_with_metric(
 ) -> f32 {
     match metric {
         DistanceMetric::Euclidean => distance_pq_l2(query, pq_vec, &quantizer.codebook),
-        _ => {
-            let reconstructed = quantizer.reconstruct(pq_vec);
-            metric.calculate(query, &reconstructed)
-        }
+        _ => match quantizer.reconstruct(pq_vec) {
+            Ok(reconstructed) => metric.calculate(query, &reconstructed),
+            Err(_) => f32::MAX,
+        },
     }
 }
 

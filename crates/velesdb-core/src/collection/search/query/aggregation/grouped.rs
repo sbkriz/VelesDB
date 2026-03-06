@@ -94,7 +94,7 @@ impl Collection {
                         payload.as_ref(),
                         vector.as_deref(),
                         params,
-                        stmt.from_alias.as_deref(),
+                        &stmt.from_alias,
                         &mut graph_cache,
                     )?;
                     if !matches {

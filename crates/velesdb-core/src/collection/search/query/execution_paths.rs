@@ -38,7 +38,7 @@ impl Collection {
         &self,
         predicate: &crate::velesql::GraphMatchPredicate,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        from_alias: Option<&str>,
+        from_aliases: &[String],
     ) -> Result<HashSet<u64>> {
         let pattern = &predicate.pattern;
         let first_node = pattern.nodes.first().ok_or_else(|| {
@@ -52,13 +52,12 @@ impl Collection {
             )
         })?;
 
-        if let Some(from_alias) = from_alias {
-            if from_alias != anchor_alias {
-                return Err(crate::error::Error::Config(format!(
-                    "MATCH predicate anchor alias '{}' must match FROM alias '{}'",
-                    anchor_alias, from_alias
-                )));
-            }
+        // BUG-8: Check anchor alias against ALL aliases visible in scope.
+        if !from_aliases.is_empty() && !from_aliases.iter().any(|a| a == &anchor_alias) {
+            return Err(crate::error::Error::Config(format!(
+                "MATCH predicate anchor alias '{}' must match one of the FROM/JOIN aliases: {:?}",
+                anchor_alias, from_aliases
+            )));
         }
 
         let clause = crate::velesql::MatchClause {
