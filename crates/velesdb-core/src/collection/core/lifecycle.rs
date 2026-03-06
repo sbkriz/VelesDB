@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::guardrails::GuardRails;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
+use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 
@@ -357,6 +358,22 @@ impl Collection {
     ///
     /// Scans for `sparse.meta` (default name `""`) and `sparse-{name}.meta` files.
     /// Returns a `BTreeMap` keyed by sparse vector name.
+    ///
+    /// # Concurrency safety of `read_dir`
+    ///
+    /// The `read_dir` scan below is safe from race conditions for two reasons:
+    ///
+    /// 1. **Single-threaded open**: `Collection::open` (and therefore this
+    ///    function) is always called from `Database::open`, which runs
+    ///    single-threaded during startup. No concurrent writers exist at this
+    ///    point.
+    ///
+    /// 2. **Atomic rename in compaction**: `compact_with_prefix` writes new
+    ///    data to `{prefix}.*.tmp` staging files and only promotes them to
+    ///    their final names via an atomic `rename(2)`. A `read_dir` scan
+    ///    therefore never observes a partially-written `sparse-*.meta` file;
+    ///    it either sees the complete previous version or the complete new
+    ///    version — never a torn write.
     fn load_named_sparse_indexes(
         path: &std::path::Path,
     ) -> BTreeMap<String, crate::index::sparse::SparseInvertedIndex> {
@@ -365,7 +382,7 @@ impl Collection {
         // Load default (unprefixed) sparse index: sparse.meta / sparse.wal
         match crate::index::sparse::persistence::load_from_disk(path) {
             Ok(Some(idx)) => {
-                indexes.insert(String::new(), idx);
+                indexes.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), idx);
             }
             Ok(None) => {}
             Err(e) => {
@@ -377,7 +394,10 @@ impl Collection {
             }
         }
 
-        // Scan for named sparse indexes: sparse-{name}.meta files
+        // Scan for named sparse indexes: sparse-{name}.meta files.
+        // The `.meta` suffix is the sentinel for a fully compacted (committed)
+        // index file; stale `.tmp` artefacts from interrupted compactions are
+        // ignored because they do not match the `strip_suffix(".meta")` filter.
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 let file_name = entry.file_name();

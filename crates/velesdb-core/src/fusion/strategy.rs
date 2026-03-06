@@ -353,12 +353,23 @@ impl FusionStrategy {
     /// Relative Score Fusion: per-branch min-max normalization + weighted sum.
     ///
     /// Expects exactly two branches in `results`: index 0 = dense, index 1 = sparse.
-    /// If more branches are provided, only the first two are used.
+    /// If more branches are provided, only the first two are used; the extras
+    /// are silently discarded. A warning is emitted so callers can detect the
+    /// accidental multi-branch case during development.
     fn fuse_relative_score(
         results: &[Vec<(u64, f32)>],
         dense_weight: f32,
         sparse_weight: f32,
     ) -> Result<Vec<(u64, f32)>, FusionError> {
+        if results.len() > 2 {
+            tracing::warn!(
+                branch_count = results.len(),
+                "RelativeScore fusion received {} branches but only supports 2 (dense + sparse). \
+                 Branches beyond index 1 are ignored.",
+                results.len(),
+            );
+        }
+
         let dense = results.first().map_or(&[][..], |v| v.as_slice());
         let sparse = results.get(1).map_or(&[][..], |v| v.as_slice());
 

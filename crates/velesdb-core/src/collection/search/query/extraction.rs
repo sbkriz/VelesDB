@@ -156,10 +156,13 @@ impl Collection {
     /// only the metadata filter parts (e.g., `category = 'tech'`).
     pub(crate) fn extract_metadata_filter(condition: &Condition) -> Option<Condition> {
         match condition {
-            // Remove vector search conditions - they're handled separately by the query executor
+            // Remove vector/sparse/graph search conditions — they are handled
+            // separately by the query executor and must not be pushed down as
+            // payload filters.
             Condition::Similarity(_)
             | Condition::VectorSearch(_)
             | Condition::VectorFusedSearch(_)
+            | Condition::SparseVectorSearch(_)
             | Condition::GraphMatch(_) => None,
             // For AND: keep both sides if they exist, or just one side
             Condition::And(left, right) => {

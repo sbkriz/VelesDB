@@ -134,16 +134,10 @@ impl Collection {
 
         // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
         if !sparse_batch.is_empty() {
-            let mut indexes = self.sparse_indexes.write();
-            for (point_id, sv_map) in &sparse_batch {
-                for (name, sv) in sv_map {
-                    let idx = indexes.entry(name.clone()).or_default();
-                    idx.insert(*point_id, sv);
-                }
-            }
-            drop(indexes);
-
-            // Append sparse WAL entries for persistence (after index insert).
+            // WAL-before-apply: persist the intent to disk BEFORE mutating the
+            // in-memory index. A crash between WAL write and index insert is safe
+            // because the WAL is replayed on recovery; a crash after index insert
+            // but before WAL write would lose the update.
             #[cfg(feature = "persistence")]
             {
                 for (point_id, sv_map) in &sparse_batch {
@@ -154,6 +148,14 @@ impl Collection {
                             &wal_path, *point_id, sv,
                         )?;
                     }
+                }
+            }
+
+            let mut indexes = self.sparse_indexes.write();
+            for (point_id, sv_map) in &sparse_batch {
+                for (name, sv) in sv_map {
+                    let idx = indexes.entry(name.clone()).or_default();
+                    idx.insert(*point_id, sv);
                 }
             }
         }
@@ -408,16 +410,7 @@ impl Collection {
             drop(config);
 
             // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
-            {
-                let indexes = self.sparse_indexes.read();
-                for idx in indexes.values() {
-                    for &id in ids {
-                        idx.delete(id);
-                    }
-                }
-            }
-
-            // Append sparse WAL delete entries for persistence.
+            // WAL-before-apply: write delete intent to WAL before mutating the index.
             #[cfg(feature = "persistence")]
             {
                 let indexes = self.sparse_indexes.read();
@@ -428,6 +421,15 @@ impl Collection {
                         for &id in ids {
                             crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
                         }
+                    }
+                }
+            }
+
+            {
+                let indexes = self.sparse_indexes.read();
+                for idx in indexes.values() {
+                    for &id in ids {
+                        idx.delete(id);
                     }
                 }
             }

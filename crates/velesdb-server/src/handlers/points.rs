@@ -43,12 +43,20 @@ fn convert_sparse_inputs(
         result.insert(String::new(), sv);
     }
 
-    // Named sparse vectors (overwrite default if same key)
+    // Named sparse vectors (overwrite default if same key).
+    // If both `sparse_vector` and `sparse_vectors[""]` are supplied, the named map wins.
+    // A debug trace is emitted so operators can detect this (usually unintentional) pattern.
     if let Some(named) = sparse_vectors {
         for (name, sv_input) in named {
             let sv = sv_input
                 .into_sparse_vector()
                 .map_err(|e| format!("sparse_vectors['{name}']: {e}"))?;
+            if name.is_empty() && result.contains_key("") {
+                tracing::debug!(
+                    "sparse_vector (default \"\") is being overwritten by \
+                     sparse_vectors[\"\"] — supply only one to avoid ambiguity"
+                );
+            }
             result.insert(name, sv);
         }
     }

@@ -13,4 +13,6 @@ pub use crate::sparse_index::types;
 
 pub use crate::sparse_index::inverted_index::SparseInvertedIndex;
 pub use crate::sparse_index::search::{sparse_search, sparse_search_filtered};
-pub use crate::sparse_index::types::{PostingEntry, ScoredDoc, SparseVector};
+pub use crate::sparse_index::types::{
+    PostingEntry, ScoredDoc, SparseVector, DEFAULT_SPARSE_INDEX_NAME,
+};

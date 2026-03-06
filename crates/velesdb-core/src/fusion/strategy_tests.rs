@@ -523,3 +523,43 @@ fn test_rsf_validation_sum_not_one() {
     let result = FusionStrategy::relative_score(0.3, 0.3);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_rsf_ignores_extra_branches_beyond_two() {
+    // M-7: fuse_relative_score silently drops branches beyond index 1.
+    // The result must be identical to passing only the first two branches.
+    let strategy = FusionStrategy::relative_score(0.6, 0.4).unwrap();
+
+    let two_branches = vec![
+        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
+        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
+    ];
+    let three_branches = vec![
+        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
+        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
+        vec![(4_u64, 99.0_f32)],           // extra (must be ignored)
+    ];
+
+    let fused_two = strategy.fuse(two_branches).unwrap();
+    let fused_three = strategy.fuse(three_branches).unwrap();
+
+    // Extra branch doc 4 must NOT appear in the results.
+    assert!(
+        !fused_three.iter().any(|(id, _)| *id == 4),
+        "doc 4 from the extra branch must be absent from RSF output"
+    );
+
+    // Scores for the shared documents must be identical.
+    for (id, score) in &fused_two {
+        let matching = fused_three.iter().find(|(i, _)| i == id);
+        assert!(
+            matching.is_some(),
+            "doc {id} must appear in three-branch result"
+        );
+        let (_, score_three) = matching.unwrap();
+        assert!(
+            (score - score_three).abs() < 1e-5,
+            "score for doc {id} must not change when an extra branch is present"
+        );
+    }
+}

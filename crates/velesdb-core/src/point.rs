@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::sparse_index::SparseVector;
+use crate::sparse_index::{SparseVector, DEFAULT_SPARSE_INDEX_NAME};
 
 /// A point in the vector database.
 ///
@@ -63,7 +63,8 @@ impl<'de> Deserialize<'de> for Point {
         } else {
             helper.sparse_vector.map(|sv| {
                 let mut map = BTreeMap::new();
-                map.insert(String::new(), sv);
+                // Use the canonical constant to avoid magic empty-string literals.
+                map.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), sv);
                 map
             })
         };
@@ -152,7 +153,8 @@ impl Point {
     #[must_use]
     pub fn sparse_only(id: u64, sparse_vector: SparseVector, payload: Option<JsonValue>) -> Self {
         let mut map = BTreeMap::new();
-        map.insert(String::new(), sparse_vector);
+        // Use the canonical constant to avoid magic empty-string literals.
+        map.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), sparse_vector);
         Self {
             id,
             vector: Vec::new(),

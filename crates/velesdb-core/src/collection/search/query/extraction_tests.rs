@@ -1,9 +1,10 @@
 //! Tests for `extraction` module - Query condition extraction utilities.
 
 use crate::collection::types::Collection;
+use crate::sparse_index::SparseVector;
 use crate::velesql::{
-    CompareOp, Comparison, Condition, MatchCondition, Parser, SimilarityCondition, Value,
-    VectorExpr, VectorSearch,
+    CompareOp, Comparison, Condition, MatchCondition, Parser, SimilarityCondition,
+    SparseVectorExpr, SparseVectorSearch, Value, VectorExpr, VectorSearch,
 };
 
 fn make_comparison(column: &str, val: i64) -> Condition {
@@ -33,6 +34,13 @@ fn make_similarity(field: &str, threshold: f64) -> Condition {
 fn make_vector_search() -> Condition {
     Condition::VectorSearch(VectorSearch {
         vector: VectorExpr::Parameter("v".to_string()),
+    })
+}
+
+fn make_sparse_vector_search() -> Condition {
+    Condition::SparseVectorSearch(SparseVectorSearch {
+        vector: SparseVectorExpr::Literal(SparseVector::new(vec![(1, 0.5)])),
+        index_name: None,
     })
 }
 
@@ -208,4 +216,48 @@ fn test_collect_graph_match_predicates_nested() {
     let mut predicates = Vec::new();
     Collection::collect_graph_match_predicates(&cond, &mut predicates);
     assert_eq!(predicates.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// C-2 regression: SparseVectorSearch must be stripped by extract_metadata_filter
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_extract_metadata_filter_removes_sparse_vector_search() {
+    // C-2: SparseVectorSearch was previously falling into `other => Some(other.clone())`.
+    // It must return None, just like VectorSearch and Similarity do.
+    let cond = make_sparse_vector_search();
+    let result = Collection::extract_metadata_filter(&cond);
+    assert!(
+        result.is_none(),
+        "extract_metadata_filter must return None for SparseVectorSearch"
+    );
+}
+
+#[test]
+fn test_extract_metadata_filter_and_with_sparse_vector_search() {
+    // Compound condition: metadata AND sparse_near -> keep only metadata part.
+    let cond = Condition::And(
+        Box::new(make_comparison("category", 42)),
+        Box::new(make_sparse_vector_search()),
+    );
+    let result = Collection::extract_metadata_filter(&cond);
+    assert!(
+        matches!(result, Some(Condition::Comparison(_))),
+        "Only the metadata side of AND should survive"
+    );
+}
+
+#[test]
+fn test_extract_metadata_filter_or_with_sparse_vector_search_returns_none() {
+    // OR with a sparse search: both sides must be metadata-only; otherwise None.
+    let cond = Condition::Or(
+        Box::new(make_comparison("score", 1)),
+        Box::new(make_sparse_vector_search()),
+    );
+    let result = Collection::extract_metadata_filter(&cond);
+    assert!(
+        result.is_none(),
+        "OR containing SparseVectorSearch must return None"
+    );
 }

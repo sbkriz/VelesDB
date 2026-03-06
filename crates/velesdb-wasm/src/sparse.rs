@@ -60,7 +60,13 @@ pub struct SparseIndex {
     postings: BTreeMap<u32, Vec<(u64, f32)>>,
     /// Max weight per term (for MaxScore pruning).
     max_weights: BTreeMap<u32, f32>,
-    /// Number of documents inserted.
+    /// Set of all doc_ids that have been inserted at least once.
+    ///
+    /// This is the authoritative source for "is this doc already in the index?"
+    /// — checking posting lists is unreliable when a re-insert touches different
+    /// terms than the original insert (disjoint-term upsert case).
+    known_docs: std::collections::BTreeSet<u64>,
+    /// Number of distinct documents (= `known_docs.len()`).
     doc_count: usize,
 }
 
@@ -78,6 +84,7 @@ impl SparseIndex {
         Self {
             postings: BTreeMap::new(),
             max_weights: BTreeMap::new(),
+            known_docs: std::collections::BTreeSet::new(),
             doc_count: 0,
         }
     }
@@ -101,6 +108,11 @@ impl SparseIndex {
             .collect();
         let sv = SparseVec::new(pairs);
 
+        // `known_docs` is the authoritative set of all doc_ids ever inserted.
+        // This is O(log n) and correctly handles the disjoint-term re-insert case
+        // (where the new vector touches different terms than the original insert).
+        let is_new_doc = !self.known_docs.contains(&doc_id);
+
         for (&term_id, &weight) in sv.indices.iter().zip(sv.values.iter()) {
             let list = self.postings.entry(term_id).or_default();
             match list.binary_search_by_key(&doc_id, |&(id, _)| id) {
@@ -112,7 +124,11 @@ impl SparseIndex {
                 *max_w = weight.abs();
             }
         }
-        self.doc_count += 1;
+        // Only increment doc_count for genuinely new documents, not for re-inserts/updates.
+        if is_new_doc {
+            self.known_docs.insert(doc_id);
+            self.doc_count += 1;
+        }
         Ok(())
     }
 
@@ -254,6 +270,42 @@ mod tests {
         // Verify correct insert works with matching lengths.
         assert!(index.insert(1, &[10, 20], &[1.0, 2.0]).is_ok());
         assert_eq!(index.doc_count(), 1);
+    }
+
+    #[test]
+    fn test_sparse_index_upsert_does_not_increment_doc_count() {
+        let mut index = SparseIndex::new();
+        // First insert: new doc → count becomes 1.
+        index.insert(42, &[1, 2], &[1.0, 0.5]).unwrap();
+        assert_eq!(
+            index.doc_count(),
+            1,
+            "first insert should increment doc_count"
+        );
+
+        // Second insert of the same doc_id with overlapping terms → still 1.
+        index.insert(42, &[1, 3], &[2.0, 0.3]).unwrap();
+        assert_eq!(
+            index.doc_count(),
+            1,
+            "re-insert of existing doc_id must not increment doc_count"
+        );
+
+        // Third insert of the same doc_id with a completely disjoint term set → still 1.
+        index.insert(42, &[99], &[0.7]).unwrap();
+        assert_eq!(
+            index.doc_count(),
+            1,
+            "re-insert with disjoint terms must not increment doc_count"
+        );
+
+        // A different doc_id → count becomes 2.
+        index.insert(99, &[1], &[1.0]).unwrap();
+        assert_eq!(
+            index.doc_count(),
+            2,
+            "new doc_id should increment doc_count"
+        );
     }
 
     #[test]

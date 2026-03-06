@@ -17,6 +17,10 @@ pub const FREEZE_THRESHOLD: usize = 10_000;
 struct MutableSegment {
     postings: FxHashMap<u32, Vec<PostingEntry>>,
     max_weights: FxHashMap<u32, f32>,
+    /// Set of all doc IDs currently held in this segment. Used to distinguish
+    /// a true insert from an upsert (same `point_id`, updated weights) so that
+    /// `doc_count` is only incremented for genuinely new documents.
+    doc_set: FxHashSet<u64>,
     doc_count: usize,
 }
 
@@ -25,11 +29,20 @@ impl MutableSegment {
         Self {
             postings: FxHashMap::default(),
             max_weights: FxHashMap::default(),
+            doc_set: FxHashSet::default(),
             doc_count: 0,
         }
     }
 
-    fn insert(&mut self, point_id: u64, vector: &SparseVector) {
+    /// Inserts or updates `vector` for `point_id`.
+    ///
+    /// Returns `true` if this is a new document (first time this `point_id`
+    /// appears in this segment), `false` if it is an in-place update (upsert).
+    /// Callers must only increment `doc_count` on the outer index when `true`
+    /// is returned, to avoid double-counting on upserts.
+    fn insert(&mut self, point_id: u64, vector: &SparseVector) -> bool {
+        let is_new = self.doc_set.insert(point_id);
+
         for (&term_id, &weight) in vector.indices.iter().zip(vector.values.iter()) {
             let entries = self.postings.entry(term_id).or_default();
 
@@ -51,7 +64,12 @@ impl MutableSegment {
                 *max_w = abs_weight;
             }
         }
-        self.doc_count += 1;
+
+        if is_new {
+            self.doc_count += 1;
+        }
+
+        is_new
     }
 
     /// Removes all posting entries for `point_id`.
@@ -60,6 +78,9 @@ impl MutableSegment {
     /// (i.e. was actually present and removed), `false` if it was not found.
     /// Also recalculates `max_weights` only for the terms that were modified.
     fn delete(&mut self, point_id: u64) -> bool {
+        // Remove from doc_set so a subsequent re-insert is counted as a new doc.
+        self.doc_set.remove(&point_id);
+
         let mut any_removed = false;
         // Terms that still have remaining entries after removal — need max_weight
         // recalculation.
@@ -103,6 +124,12 @@ impl MutableSegment {
 }
 
 /// A frozen (read-optimized) segment. The `f32` in the tuple is `max_weight`.
+///
+/// `pub(crate)` fields are consumed exclusively by `index::sparse::persistence`,
+/// which is gated behind `feature = "persistence"`. Without that feature the
+/// compiler cannot see those usages, so the lint is suppressed here rather than
+/// at the module level to keep the scope as narrow as possible.
+#[allow(dead_code)]
 pub(crate) struct FrozenSegment {
     /// Posting lists per term. The `f32` is the max absolute weight for that term.
     pub(crate) postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
@@ -172,14 +199,20 @@ impl SparseInvertedIndex {
         }
     }
 
-    /// Inserts a sparse vector for the given point ID.
+    /// Inserts or updates a sparse vector for the given point ID.
+    ///
+    /// `doc_count` is incremented only when this is a genuinely new document.
+    /// Re-inserting the same `point_id` (upsert) updates the posting weights
+    /// in-place without incrementing the count.
     ///
     /// If the mutable segment reaches [`FREEZE_THRESHOLD`] documents,
     /// it is automatically frozen into an immutable segment.
     pub fn insert(&self, point_id: u64, vector: &SparseVector) {
         let mut seg = self.mutable.write();
-        seg.insert(point_id, vector);
-        self.doc_count.fetch_add(1, Ordering::Relaxed);
+        let is_new = seg.insert(point_id, vector);
+        if is_new {
+            self.doc_count.fetch_add(1, Ordering::Relaxed);
+        }
 
         if seg.doc_count >= FREEZE_THRESHOLD {
             self.freeze_inner(&mut seg);
@@ -347,7 +380,10 @@ impl SparseInvertedIndex {
     }
 
     /// Constructs an index from a single frozen segment (used by persistence layer).
+    ///
+    /// Only called from `index::sparse::persistence` (feature = "persistence").
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn from_frozen_segment(segment: FrozenSegment) -> Self {
         let doc_count = segment.doc_count as u64;
         Self {
@@ -662,6 +698,50 @@ mod tests {
             index.doc_count(),
             0,
             "doc_count must not underflow on delete of non-existent id"
+        );
+    }
+
+    #[test]
+    fn test_upsert_same_id_does_not_increment_doc_count() {
+        // H-3 regression: inserting the same point_id twice must not double-count.
+        let index = SparseInvertedIndex::new();
+        let v1 = make_vector(vec![(1, 1.0)]);
+        let v2 = make_vector(vec![(1, 2.0)]);
+
+        index.insert(42, &v1);
+        assert_eq!(index.doc_count(), 1, "first insert must set doc_count to 1");
+
+        // Upsert same ID with updated weight — doc_count must stay at 1.
+        index.insert(42, &v2);
+        assert_eq!(
+            index.doc_count(),
+            1,
+            "upsert of existing ID must not increment doc_count"
+        );
+
+        // Weight must reflect the latest insert (upsert semantics).
+        let postings = index.get_all_postings(1);
+        assert_eq!(postings.len(), 1);
+        assert!(
+            (postings[0].weight - 2.0).abs() < f32::EPSILON,
+            "upsert must update the stored weight"
+        );
+    }
+
+    #[test]
+    fn test_upsert_different_terms_does_not_increment_doc_count() {
+        // Upsert where the new vector uses different terms than the first insert.
+        let index = SparseInvertedIndex::new();
+
+        index.insert(99, &make_vector(vec![(10, 1.0)]));
+        assert_eq!(index.doc_count(), 1);
+
+        // Same point_id, completely different term set.
+        index.insert(99, &make_vector(vec![(20, 0.5)]));
+        assert_eq!(
+            index.doc_count(),
+            1,
+            "upsert with different terms must not increment doc_count"
         );
     }
 

@@ -117,8 +117,20 @@ fn read_le_f32(data: &[u8], pos: usize, context: &str) -> Result<f32> {
 pub fn wal_append_upsert(wal_path: &Path, point_id: u64, vector: &SparseVector) -> Result<()> {
     #[allow(clippy::cast_possible_truncation)] // nnz bounded by sparse vector dimension count
     let nnz = vector.nnz() as u32;
-    // total_len = op(1) + point_id(8) + nnz(4) + pairs(nnz * 8)
-    let total_len: u32 = 1 + 8 + 4 + nnz * 8;
+    // total_len = op(1) + point_id(8) + nnz(4) + pairs(nnz * 8).
+    // Use checked arithmetic to guard against pathologically large sparse vectors.
+    let total_len: u32 = nnz
+        .checked_mul(8)
+        .and_then(|pairs_len| {
+            1u32.checked_add(8)
+                .and_then(|h| h.checked_add(4))
+                .and_then(|h| h.checked_add(pairs_len))
+        })
+        .ok_or_else(|| {
+            Error::SparseIndexError(format!(
+                "WAL entry too large: nnz={nnz} would overflow u32 length prefix"
+            ))
+        })?;
 
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -324,13 +336,9 @@ pub fn wal_path_for_name(dir: &Path, name: &str) -> std::path::PathBuf {
 ///
 /// Delegates to [`compact_with_prefix`] with prefix `"sparse"`.
 ///
-/// # Panics
-///
-/// Panics if a term ID from the sorted key set is missing from the merged map.
-///
 /// # Errors
 ///
-/// Returns an error if disk writes fail.
+/// Returns an error if disk writes fail or if an internal index invariant is violated.
 pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
     compact_with_prefix(dir, "sparse", index)
 }
@@ -340,14 +348,10 @@ pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
 /// Files written: `{prefix}.idx`, `{prefix}.terms`, `{prefix}.meta`.
 /// Truncates `{prefix}.wal` after successful compaction.
 ///
-/// # Panics
-///
-/// Panics if a term ID from the sorted key set is missing from the merged map
-/// (internal invariant -- should never happen).
-///
 /// # Errors
 ///
-/// Returns an error if disk writes fail.
+/// Returns an error if disk writes fail or if the index's internal posting map is
+/// inconsistent (a term ID present in the sorted key list is absent from the map).
 #[allow(clippy::too_many_lines)]
 fn compact_with_prefix(dir: &Path, prefix: &str, index: &SparseInvertedIndex) -> Result<()> {
     let merged = index.get_merged_postings_for_compaction();
@@ -367,7 +371,12 @@ fn compact_with_prefix(dir: &Path, prefix: &str, index: &SparseInvertedIndex) ->
     let mut current_offset: u64 = 0;
 
     for &term_id in &term_ids {
-        let (postings, max_weight) = merged.get(&term_id).expect("term_id in sorted list");
+        let (postings, max_weight) = merged.get(&term_id).ok_or_else(|| {
+            Error::SparseIndexError(format!(
+                "compact: term_id {term_id} present in sorted key list \
+                 but absent from merged postings map — index state is inconsistent"
+            ))
+        })?;
 
         // Write each PostingEntry as packed bytes: doc_id(u64 LE) + weight(f32 LE)
         for entry in postings {

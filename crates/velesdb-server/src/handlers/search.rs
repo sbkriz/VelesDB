@@ -7,6 +7,7 @@ use axum::{
     Json,
 };
 use std::sync::Arc;
+use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use crate::types::{
     mode_to_ef_search, BatchSearchRequest, BatchSearchResponse, ErrorResponse, HybridSearchRequest,
@@ -107,11 +108,38 @@ pub async fn search(
 
     // Determine search mode from request fields.
     let has_dense = !req.vector.is_empty();
-    // Prefer single sparse_vector; fall back to first named entry in sparse_vectors.
-    let sparse_input = req.sparse_vector.or_else(|| {
-        req.sparse_vectors
-            .and_then(|mut m| m.pop_first().map(|(_, v)| v))
-    });
+    // Resolve sparse query vector:
+    //   1. `sparse_vector` (single, unnamed) takes priority.
+    //   2. `sparse_vectors` with exactly one entry is accepted without `sparse_index`.
+    //   3. `sparse_vectors` with >1 entry requires `sparse_index` to be specified;
+    //      otherwise the request is ambiguous and is rejected with HTTP 400.
+    let sparse_input = if let Some(sv) = req.sparse_vector {
+        Some(sv)
+    } else if let Some(mut m) = req.sparse_vectors {
+        if m.len() > 1 && req.sparse_index.is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Ambiguous sparse query: {} named sparse vectors supplied but \
+                         'sparse_index' was not specified. \
+                         Provide 'sparse_index' to select which one to use, \
+                         or supply a single 'sparse_vector'.",
+                        m.len()
+                    ),
+                }),
+            )
+                .into_response();
+        }
+        // Use `sparse_index` as the key if provided; otherwise take the only entry.
+        if let Some(ref idx_name) = req.sparse_index {
+            m.remove(idx_name.as_str())
+        } else {
+            m.pop_first().map(|(_, v)| v)
+        }
+    } else {
+        None
+    };
     let has_sparse = sparse_input.is_some();
 
     if !has_dense && !has_sparse {
@@ -136,7 +164,10 @@ pub async fn search(
         None
     };
 
-    let index_name = req.sparse_index.as_deref().unwrap_or("");
+    let index_name = req
+        .sparse_index
+        .as_deref()
+        .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
 
     // ---- HYBRID: both dense and sparse ----
     if has_dense && has_sparse {
@@ -151,7 +182,10 @@ pub async fn search(
                 "rrf" => velesdb_core::FusionStrategy::RRF {
                     k: f.k.unwrap_or(60),
                 },
-                "rsf" => velesdb_core::FusionStrategy::RelativeScore {
+                // "rsf" is the canonical REST alias for `FusionStrategy::RelativeScore`
+                // (maps to `FusionStrategyType::Rsf` in the core enum).
+                // "relative_score" is accepted as a more descriptive synonym.
+                "rsf" | "relative_score" => velesdb_core::FusionStrategy::RelativeScore {
                     dense_weight: f.dense_w.unwrap_or(0.5),
                     sparse_weight: f.sparse_w.unwrap_or(0.5),
                 },
@@ -159,7 +193,10 @@ pub async fn search(
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: format!("Invalid fusion strategy: '{other}'. Valid: rrf, rsf"),
+                            error: format!(
+                                "Invalid fusion strategy: '{other}'. \
+                                 Valid values: 'rrf', 'rsf' (alias: 'relative_score')"
+                            ),
                         }),
                     )
                         .into_response();

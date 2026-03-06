@@ -7,7 +7,9 @@
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
-use crate::index::sparse::{sparse_search, sparse_search_filtered, SparseVector};
+use crate::index::sparse::{
+    sparse_search, sparse_search_filtered, SparseVector, DEFAULT_SPARSE_INDEX_NAME,
+};
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{Condition, SparseVectorExpr, SparseVectorSearch};
@@ -18,6 +20,12 @@ impl Collection {
     // ------------------------------------------------------------------
 
     /// Recursively walks the condition tree to find a `SparseVectorSearch` node.
+    ///
+    /// **First-wins semantics**: when multiple `SparseVectorSearch` nodes exist
+    /// in a compound condition (e.g. `AND`), only the left-most one is returned.
+    /// Queries containing more than one `SPARSE_NEAR` clause are currently not
+    /// supported; callers that need to detect this case should call
+    /// [`Self::validate_single_sparse_search`] before invoking this function.
     pub(crate) fn extract_sparse_vector_search(
         condition: &Condition,
     ) -> Option<&SparseVectorSearch> {
@@ -32,6 +40,38 @@ impl Collection {
             }
             _ => None,
         }
+    }
+
+    /// Counts `SparseVectorSearch` nodes in the condition tree.
+    ///
+    /// Returns an error if more than one `SPARSE_NEAR` clause is found,
+    /// because the planner only handles a single sparse branch per query.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the condition contains more than one
+    /// `SparseVectorSearch` node (ambiguous multi-sparse query).
+    // TODO(SPARSE-04): call this from the VelesQL planner's validation pass to
+    // surface the ambiguous multi-SPARSE_NEAR error to callers at plan time.
+    #[allow(dead_code)]
+    pub(crate) fn validate_single_sparse_search(condition: &Condition) -> Result<()> {
+        fn count(cond: &Condition) -> usize {
+            match cond {
+                Condition::SparseVectorSearch(_) => 1,
+                Condition::And(l, r) | Condition::Or(l, r) => count(l) + count(r),
+                Condition::Group(inner) | Condition::Not(inner) => count(inner),
+                _ => 0,
+            }
+        }
+
+        let n = count(condition);
+        if n > 1 {
+            return Err(Error::Config(format!(
+                "Query contains {n} SPARSE_NEAR clauses; only one is supported per query. \
+                 Use separate queries for each sparse search."
+            )));
+        }
+        Ok(())
     }
 
     /// Resolve a `SparseVectorExpr` to a concrete `SparseVector`.
@@ -114,6 +154,11 @@ impl Collection {
     // ------------------------------------------------------------------
 
     /// Execute a sparse-only search, optionally filtered by payload conditions.
+    ///
+    /// # Lock ordering
+    ///
+    /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
+    /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
     pub(crate) fn execute_sparse_search(
         &self,
         svs: &SparseVectorSearch,
@@ -122,39 +167,56 @@ impl Collection {
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         let query_vec = Self::resolve_sparse_vector(&svs.vector, params)?;
-        let index_name = svs.index_name.as_deref().unwrap_or("");
-
-        let indexes = self.sparse_indexes.read();
-        let index = indexes.get(index_name).ok_or_else(|| {
-            Error::Config(format!(
-                "Sparse index '{}' not found",
-                if index_name.is_empty() {
-                    "<default>"
-                } else {
-                    index_name
-                }
-            ))
-        })?;
+        let index_name = svs
+            .index_name
+            .as_deref()
+            .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
 
         // Build payload filter if there are non-vector metadata conditions.
         let metadata_filter = filter_condition
             .and_then(Self::extract_metadata_filter)
             .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
 
+        // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
         let results = if let Some(ref filter) = metadata_filter {
-            let payload_storage = self.payload_storage.read();
+            let payload_storage = self.payload_storage.read(); // lock 3
+            let indexes = self.sparse_indexes.read(); // lock 9
+            let index = indexes.get(index_name).ok_or_else(|| {
+                Error::Config(format!(
+                    "Sparse index '{}' not found",
+                    if index_name.is_empty() {
+                        "<default>"
+                    } else {
+                        index_name
+                    }
+                ))
+            })?;
             let filter_fn = |id: u64| {
                 let payload = payload_storage.retrieve(id).ok().flatten();
                 let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
                 filter.matches(p)
             };
-            sparse_search_filtered(index, &query_vec, limit, Some(&filter_fn))
+            let r = sparse_search_filtered(index, &query_vec, limit, Some(&filter_fn));
+            drop(indexes);
+            drop(payload_storage);
+            r
         } else {
-            sparse_search(index, &query_vec, limit)
+            let indexes = self.sparse_indexes.read(); // lock 9 only (no payload needed)
+            let index = indexes.get(index_name).ok_or_else(|| {
+                Error::Config(format!(
+                    "Sparse index '{}' not found",
+                    if index_name.is_empty() {
+                        "<default>"
+                    } else {
+                        index_name
+                    }
+                ))
+            })?;
+            let r = sparse_search(index, &query_vec, limit);
+            drop(indexes);
+            r
         };
 
-        // Resolve full Points for results.
-        drop(indexes); // Release lock before acquiring storage locks.
         Ok(self.resolve_sparse_results(&results, limit))
     }
 
@@ -166,6 +228,11 @@ impl Collection {
     ///
     /// Runs both branches (optionally in parallel via `rayon::join`), then
     /// fuses results using RRF with k=60.
+    ///
+    /// Currently only exercised by integration tests; production callers use
+    /// [`Self::execute_hybrid_search_with_strategy`] directly.
+    // TODO(SPARSE-04): wire this convenience wrapper into the VelesQL execution
+    // path so it can be selected via `USING FUSION 'rrf'` without explicit params.
     #[allow(dead_code)]
     pub(crate) fn execute_hybrid_search(
         &self,
@@ -197,7 +264,20 @@ impl Collection {
         strategy: &FusionStrategy,
     ) -> Result<Vec<SearchResult>> {
         let sparse_query = Self::resolve_sparse_vector(&svs.vector, params)?;
-        let index_name = svs.index_name.as_deref().unwrap_or("");
+        let index_name = svs
+            .index_name
+            .as_deref()
+            .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
+        // Oversampling factor: 2× the requested limit.
+        //
+        // Both the dense (HNSW) and sparse branches can independently miss the
+        // globally optimal result; fetching more candidates from each branch
+        // compensates for the blind spots of the other. 2× is chosen to be
+        // conservative: `sparse_search_filtered` internally uses a higher
+        // oversampling factor (4×–8×) to account for payload-filter selectivity,
+        // so the 2× here operates at the fusion level — not the per-branch level.
+        // Increasing this beyond 2× improves recall marginally at the cost of
+        // more fusion work; it can be tuned per query via strategy configuration.
         let candidate_k = limit.saturating_mul(2).max(limit + 10);
 
         // Pre-build metadata filter for the sparse branch.
@@ -242,6 +322,16 @@ impl Collection {
     }
 
     /// Execute dense and sparse branches, optionally in parallel.
+    ///
+    /// # Lock ordering
+    ///
+    /// When a `metadata_filter` is present, `payload_storage(3)` is acquired
+    /// before `sparse_indexes(9)` in both execution paths to respect the
+    /// canonical lock order (see `docs/CONCURRENCY_MODEL.md`).
+    ///
+    /// In the `persistence` path, the two branches run via `rayon::join`; the
+    /// dense closure never touches `sparse_indexes`, so there is no ordering
+    /// conflict between the two parallel closures.
     pub(crate) fn execute_both_branches(
         &self,
         dense_vector: &[f32],
@@ -253,18 +343,23 @@ impl Collection {
         #[cfg(feature = "persistence")]
         {
             // Parallel execution via rayon::join.
+            // The dense closure uses search_ids() which internally acquires
+            // vector_storage(2) only — no conflict with sparse locks.
+            // The sparse closure acquires payload_storage(3) before
+            // sparse_indexes(9) when filtering is needed.
             let (dense, sparse) = rayon::join(
                 || {
                     self.search_ids(dense_vector, candidate_k)
                         .unwrap_or_default()
                 },
                 || {
-                    let indexes = self.sparse_indexes.read();
-                    let Some(index) = indexes.get(index_name) else {
-                        return Vec::new();
-                    };
                     if let Some(filter) = metadata_filter {
+                        // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
                         let payload_storage = self.payload_storage.read();
+                        let indexes = self.sparse_indexes.read();
+                        let Some(index) = indexes.get(index_name) else {
+                            return Vec::new();
+                        };
                         let filter_fn = |id: u64| {
                             let payload = payload_storage.retrieve(id).ok().flatten();
                             let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
@@ -272,6 +367,10 @@ impl Collection {
                         };
                         sparse_search_filtered(index, sparse_query, candidate_k, Some(&filter_fn))
                     } else {
+                        let indexes = self.sparse_indexes.read();
+                        let Some(index) = indexes.get(index_name) else {
+                            return Vec::new();
+                        };
                         sparse_search(index, sparse_query, candidate_k)
                     }
                 },
@@ -285,20 +384,24 @@ impl Collection {
             let dense = self
                 .search_ids(dense_vector, candidate_k)
                 .unwrap_or_default();
-            let sparse = {
+            let sparse = if let Some(filter) = metadata_filter {
+                // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
+                let payload_storage = self.payload_storage.read();
                 let indexes = self.sparse_indexes.read();
                 if let Some(index) = indexes.get(index_name) {
-                    if let Some(filter) = metadata_filter {
-                        let payload_storage = self.payload_storage.read();
-                        let filter_fn = |id: u64| {
-                            let payload = payload_storage.retrieve(id).ok().flatten();
-                            let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
-                            filter.matches(p)
-                        };
-                        sparse_search_filtered(index, sparse_query, candidate_k, Some(&filter_fn))
-                    } else {
-                        sparse_search(index, sparse_query, candidate_k)
-                    }
+                    let filter_fn = |id: u64| {
+                        let payload = payload_storage.retrieve(id).ok().flatten();
+                        let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
+                        filter.matches(p)
+                    };
+                    sparse_search_filtered(index, sparse_query, candidate_k, Some(&filter_fn))
+                } else {
+                    Vec::new()
+                }
+            } else {
+                let indexes = self.sparse_indexes.read();
+                if let Some(index) = indexes.get(index_name) {
+                    sparse_search(index, sparse_query, candidate_k)
                 } else {
                     Vec::new()
                 }

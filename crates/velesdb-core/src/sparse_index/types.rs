@@ -3,6 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
+/// The canonical name used to identify the default (unnamed) sparse index.
+///
+/// When a point's `sparse_vectors` map has an entry keyed by `""`, it is
+/// stored under this index. Queries that omit the `USING` clause also resolve
+/// to this name. Using this constant avoids magic empty-string literals
+/// scattered across the codebase.
+pub const DEFAULT_SPARSE_INDEX_NAME: &str = "";
+
 /// A sparse vector represented as sorted parallel arrays of indices and values.
 ///
 /// Invariants maintained at construction:
