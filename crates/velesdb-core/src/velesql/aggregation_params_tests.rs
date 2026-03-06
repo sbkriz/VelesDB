@@ -34,7 +34,7 @@ fn test_bug_5_aggregation_params_should_be_resolved() {
             id: 1,
             vector: vec![1.0, 0.0, 0.0, 0.0],
             payload: Some(serde_json::json!({"category": "electronics", "price": 100.0})),
-            sparse_vector: None,
+            sparse_vectors: None,
         }])
         .unwrap();
 
@@ -43,7 +43,7 @@ fn test_bug_5_aggregation_params_should_be_resolved() {
             id: 2,
             vector: vec![0.0, 1.0, 0.0, 0.0],
             payload: Some(serde_json::json!({"category": "electronics", "price": 200.0})),
-            sparse_vector: None,
+            sparse_vectors: None,
         }])
         .unwrap();
 
@@ -52,7 +52,7 @@ fn test_bug_5_aggregation_params_should_be_resolved() {
             id: 3,
             vector: vec![0.0, 0.0, 1.0, 0.0],
             payload: Some(serde_json::json!({"category": "books", "price": 50.0})),
-            sparse_vector: None,
+            sparse_vectors: None,
         }])
         .unwrap();
 
@@ -123,7 +123,7 @@ fn test_bug_5_grouped_aggregation_with_params() {
                     "category": if i < 3 { "A" } else { "B" },
                     "price": (i + 1) * 10
                 })),
-                sparse_vector: None,
+                sparse_vectors: None,
             }])
             .unwrap();
     }

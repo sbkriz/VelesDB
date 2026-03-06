@@ -58,7 +58,56 @@ struct TermEntry {
 // ---------------------------------------------------------------------------
 
 /// Size of a single `PostingEntry` on disk (`u64` `doc_id` + `f32` weight, no padding).
+///
+/// Note: `size_of::<PostingEntry>()` is 16 due to alignment padding on `#[repr(C)]`,
+/// but on disk we write the fields individually without padding (packed layout).
 const POSTING_DISK_SIZE: usize = 12; // 8 + 4, packed
+
+// Compile-time guard: POSTING_DISK_SIZE must equal the sum of the two constituent field sizes.
+// If u64 or f32 ever change width (e.g., on exotic targets), this fires at compile time.
+const _: () = assert!(
+    std::mem::size_of::<u64>() + std::mem::size_of::<f32>() == POSTING_DISK_SIZE,
+    "POSTING_DISK_SIZE must match u64 + f32 packed size"
+);
+
+// ---------------------------------------------------------------------------
+// Byte-parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Reads a little-endian `u64` from `data[pos..pos+8]`.
+///
+/// The caller is responsible for bounds-checking before calling. The `try_into()` can only
+/// fail if the slice is not exactly 8 bytes — which the upstream bounds checks prevent.
+/// We propagate rather than panic to fail-fast if an upstream refactor breaks the invariant.
+#[inline]
+fn read_le_u64(data: &[u8], pos: usize, context: &str) -> Result<u64> {
+    data[pos..pos + 8]
+        .try_into()
+        .map(u64::from_le_bytes)
+        .map_err(|_| Error::SparseIndexError(format!("{context} at offset {pos}")))
+}
+
+/// Reads a little-endian `u32` from `data[pos..pos+4]`.
+///
+/// See [`read_le_u64`] for the invariant reasoning.
+#[inline]
+fn read_le_u32(data: &[u8], pos: usize, context: &str) -> Result<u32> {
+    data[pos..pos + 4]
+        .try_into()
+        .map(u32::from_le_bytes)
+        .map_err(|_| Error::SparseIndexError(format!("{context} at offset {pos}")))
+}
+
+/// Reads a little-endian `f32` from `data[pos..pos+4]`.
+///
+/// See [`read_le_u64`] for the invariant reasoning.
+#[inline]
+fn read_le_f32(data: &[u8], pos: usize, context: &str) -> Result<f32> {
+    data[pos..pos + 4]
+        .try_into()
+        .map(f32::from_le_bytes)
+        .map_err(|_| Error::SparseIndexError(format!("{context} at offset {pos}")))
+}
 
 /// Appends an upsert entry to the sparse WAL.
 ///
@@ -134,21 +183,19 @@ pub fn wal_append_delete(wal_path: &Path, point_id: u64) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if the WAL file cannot be read (other than not-found).
+/// Returns an error if the WAL file cannot be read (other than not-found), or if
+/// byte sequences that should be exactly 4 or 8 bytes long are corrupt.
 pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
     let data = match std::fs::read(wal_path) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => {
-            return Err(Error::SparseIndexError(format!("WAL read failed: {e}")));
-        }
+        Err(e) => return Err(Error::SparseIndexError(format!("WAL read failed: {e}"))),
     };
 
     let mut pos = 0usize;
     let mut count = 0u64;
 
     while pos < data.len() {
-        // Read total_len (4 bytes)
         if pos + 4 > data.len() {
             tracing::warn!(
                 "Sparse WAL truncated at offset {pos}: not enough bytes for length prefix"
@@ -156,10 +203,9 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
             break;
         }
         let total_len =
-            u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
+            read_le_u32(&data, pos, "WAL entry corrupted: bad length-prefix bytes")? as usize;
         pos += 4;
 
-        // Check if remaining data is sufficient
         if pos + total_len > data.len() {
             tracing::warn!(
                 "Sparse WAL truncated at offset {}: declared {total_len} bytes but only {} remain",
@@ -179,10 +225,9 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
                     tracing::warn!("Sparse WAL upsert entry too short at offset {entry_start}");
                     break;
                 }
-                let point_id = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap_or([0; 8]));
+                let point_id = read_le_u64(&data, pos, "WAL entry corrupted: bad point_id bytes")?;
                 pos += 8;
-                let nnz =
-                    u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
+                let nnz = read_le_u32(&data, pos, "WAL entry corrupted: bad nnz bytes")? as usize;
                 pos += 4;
 
                 let expected_pairs_len = nnz * 8;
@@ -193,9 +238,9 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
 
                 let mut pairs = Vec::with_capacity(nnz);
                 for _ in 0..nnz {
-                    let idx = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap_or([0; 4]));
+                    let idx = read_le_u32(&data, pos, "WAL entry corrupted: bad term-index bytes")?;
                     pos += 4;
-                    let val = f32::from_le_bytes(data[pos..pos + 4].try_into().unwrap_or([0; 4]));
+                    let val = read_le_f32(&data, pos, "WAL entry corrupted: bad weight bytes")?;
                     pos += 4;
                     pairs.push((idx, val));
                 }
@@ -205,19 +250,18 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
                 count += 1;
             }
             WAL_OP_DELETE => {
-                let point_id = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap_or([0; 8]));
+                let point_id = read_le_u64(&data, pos, "WAL entry corrupted: bad point_id bytes")?;
                 pos += 8;
                 index.delete(point_id);
                 count += 1;
             }
             unknown => {
                 tracing::warn!("Sparse WAL unknown op 0x{unknown:02x} at offset {entry_start}");
-                // Skip the rest of this entry
                 pos = entry_start + total_len;
             }
         }
 
-        // Ensure pos is aligned to end of entry in case of padding
+        // Ensure pos advances to end of entry in case of internal padding
         let expected_end = entry_start + total_len;
         if pos < expected_end {
             pos = expected_end;
@@ -228,13 +272,73 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
 }
 
 // ---------------------------------------------------------------------------
+// Named sparse index helpers
+// ---------------------------------------------------------------------------
+
+/// Returns the file prefix for a named sparse index.
+///
+/// - Empty name `""` -> `"sparse"` (backward compat with unprefixed files)
+/// - Named `"title"` -> `"sparse-title"`
+fn sparse_file_prefix(name: &str) -> String {
+    if name.is_empty() {
+        "sparse".to_string()
+    } else {
+        format!("sparse-{name}")
+    }
+}
+
+/// Compacts a named sparse index to disk using name-prefixed files.
+///
+/// Default name `""` uses unprefixed `sparse.*` files for backward compat.
+///
+/// # Errors
+///
+/// Returns an error if disk writes fail.
+pub fn compact_named(dir: &Path, name: &str, index: &SparseInvertedIndex) -> Result<()> {
+    let prefix = sparse_file_prefix(name);
+    compact_with_prefix(dir, &prefix, index)
+}
+
+/// Loads a named sparse index from disk using name-prefixed files.
+///
+/// # Errors
+///
+/// Returns an error if files exist but are corrupt.
+pub fn load_named_from_disk(dir: &Path, name: &str) -> Result<Option<SparseInvertedIndex>> {
+    let prefix = sparse_file_prefix(name);
+    load_from_disk_with_prefix(dir, &prefix)
+}
+
+/// Returns the WAL path for a named sparse index.
+#[must_use]
+pub fn wal_path_for_name(dir: &Path, name: &str) -> std::path::PathBuf {
+    let prefix = sparse_file_prefix(name);
+    dir.join(format!("{prefix}.wal"))
+}
+
+// ---------------------------------------------------------------------------
 // Compaction
 // ---------------------------------------------------------------------------
 
-/// Compacts the in-memory index to disk (sparse.idx + sparse.terms + sparse.meta).
+/// Compacts the in-memory index to disk using the default (unprefixed) file names.
 ///
-/// Uses atomic temp-file + rename to avoid partial writes on crash.
-/// Truncates the WAL after successful compaction.
+/// Delegates to [`compact_with_prefix`] with prefix `"sparse"`.
+///
+/// # Panics
+///
+/// Panics if a term ID from the sorted key set is missing from the merged map.
+///
+/// # Errors
+///
+/// Returns an error if disk writes fail.
+pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
+    compact_with_prefix(dir, "sparse", index)
+}
+
+/// Compacts the in-memory index to disk using the given file prefix.
+///
+/// Files written: `{prefix}.idx`, `{prefix}.terms`, `{prefix}.meta`.
+/// Truncates `{prefix}.wal` after successful compaction.
 ///
 /// # Panics
 ///
@@ -244,15 +348,16 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
 /// # Errors
 ///
 /// Returns an error if disk writes fail.
-pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+fn compact_with_prefix(dir: &Path, prefix: &str, index: &SparseInvertedIndex) -> Result<()> {
     let merged = index.get_merged_postings_for_compaction();
 
     // Sort terms for deterministic output
     let mut term_ids: Vec<u32> = merged.keys().copied().collect();
     term_ids.sort_unstable();
 
-    // --- Write sparse.idx.tmp ---
-    let idx_tmp = dir.join("sparse.idx.tmp");
+    // --- Write {prefix}.idx.tmp ---
+    let idx_tmp = dir.join(format!("{prefix}.idx.tmp"));
     let mut idx_file = BufWriter::new(
         std::fs::File::create(&idx_tmp)
             .map_err(|e| Error::SparseIndexError(format!("compact idx create: {e}")))?,
@@ -289,15 +394,15 @@ pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
         .map_err(|e| Error::SparseIndexError(format!("compact idx flush: {e}")))?;
     drop(idx_file);
 
-    // --- Write sparse.terms.tmp ---
-    let terms_tmp = dir.join("sparse.terms.tmp");
+    // --- Write {prefix}.terms.tmp ---
+    let terms_tmp = dir.join(format!("{prefix}.terms.tmp"));
     let terms_data = postcard::to_allocvec(&term_entries)
         .map_err(|e| Error::SparseIndexError(format!("compact terms serialize: {e}")))?;
     std::fs::write(&terms_tmp, &terms_data)
         .map_err(|e| Error::SparseIndexError(format!("compact terms write: {e}")))?;
 
-    // --- Write sparse.meta.tmp ---
-    let meta_tmp = dir.join("sparse.meta.tmp");
+    // --- Write {prefix}.meta.tmp ---
+    let meta_tmp = dir.join(format!("{prefix}.meta.tmp"));
     let meta = SparseMeta {
         version: 1,
         doc_count: index.doc_count(),
@@ -310,15 +415,15 @@ pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
         .map_err(|e| Error::SparseIndexError(format!("compact meta write: {e}")))?;
 
     // --- Atomic rename ---
-    std::fs::rename(&idx_tmp, dir.join("sparse.idx"))
+    std::fs::rename(&idx_tmp, dir.join(format!("{prefix}.idx")))
         .map_err(|e| Error::SparseIndexError(format!("compact idx rename: {e}")))?;
-    std::fs::rename(&terms_tmp, dir.join("sparse.terms"))
+    std::fs::rename(&terms_tmp, dir.join(format!("{prefix}.terms")))
         .map_err(|e| Error::SparseIndexError(format!("compact terms rename: {e}")))?;
-    std::fs::rename(&meta_tmp, dir.join("sparse.meta"))
+    std::fs::rename(&meta_tmp, dir.join(format!("{prefix}.meta")))
         .map_err(|e| Error::SparseIndexError(format!("compact meta rename: {e}")))?;
 
     // --- Truncate WAL ---
-    let wal_path = dir.join("sparse.wal");
+    let wal_path = dir.join(format!("{prefix}.wal"));
     if wal_path.exists() {
         let file = std::fs::OpenOptions::new()
             .write(true)
@@ -335,32 +440,38 @@ pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
 // Loading from disk
 // ---------------------------------------------------------------------------
 
-/// Loads a sparse index from disk, if sparse files exist.
+/// Loads a sparse index from disk using default (unprefixed) file names.
 ///
-/// Returns `Ok(None)` if no `sparse.meta` file is found (empty collection).
-/// If `sparse.wal` exists, replays it after loading compacted data.
-/// If replayed entries exceed the compaction threshold, triggers automatic compaction.
-///
-/// # Panics
-///
-/// Panics if a term dictionary entry references data that passed the size check
-/// but the byte slice cannot be converted to the expected fixed-size array
-/// (internal invariant -- should never happen).
+/// Delegates to [`load_from_disk_with_prefix`] with prefix `"sparse"`.
 ///
 /// # Errors
 ///
-/// Returns an error if files exist but cannot be read or deserialized.
+/// Returns an error if files exist but are corrupt.
 pub fn load_from_disk(dir: &Path) -> Result<Option<SparseInvertedIndex>> {
-    let meta_path = dir.join("sparse.meta");
+    load_from_disk_with_prefix(dir, "sparse")
+}
+
+/// Loads a sparse index from disk using the given file prefix.
+///
+/// Returns `Ok(None)` if no `{prefix}.meta` file is found (empty collection).
+/// If `{prefix}.wal` exists, replays it after loading compacted data.
+/// If replayed entries exceed the compaction threshold, triggers automatic compaction.
+///
+/// # Errors
+///
+/// Returns an error if files exist but cannot be read, deserialized, or contain
+/// corrupt byte sequences that cannot be converted to the expected fixed-size arrays.
+fn load_from_disk_with_prefix(dir: &Path, prefix: &str) -> Result<Option<SparseInvertedIndex>> {
+    let meta_path = dir.join(format!("{prefix}.meta"));
     if !meta_path.exists() {
-        // No sparse data — check for WAL-only scenario
-        let wal_path = dir.join("sparse.wal");
+        // No sparse data -- check for WAL-only scenario
+        let wal_path = dir.join(format!("{prefix}.wal"));
         if wal_path.exists() {
             let index = SparseInvertedIndex::new();
             let replayed = wal_replay(&wal_path, &index)?;
             if replayed > 0 {
                 if replayed >= COMPACTION_REPLAY_THRESHOLD {
-                    compact(dir, &index)?;
+                    compact_with_prefix(dir, prefix, &index)?;
                 }
                 return Ok(Some(index));
             }
@@ -382,53 +493,18 @@ pub fn load_from_disk(dir: &Path) -> Result<Option<SparseInvertedIndex>> {
     }
 
     // Read and deserialize term dictionary
-    let terms_path = dir.join("sparse.terms");
+    let terms_path = dir.join(format!("{prefix}.terms"));
     let terms_data = std::fs::read(&terms_path)
         .map_err(|e| Error::SparseIndexError(format!("load terms read: {e}")))?;
     let term_entries: Vec<TermEntry> = postcard::from_bytes(&terms_data)
         .map_err(|e| Error::SparseIndexError(format!("load terms deserialize: {e}")))?;
 
     // Read the posting index file
-    let idx_path = dir.join("sparse.idx");
+    let idx_path = dir.join(format!("{prefix}.idx"));
     let idx_data = std::fs::read(&idx_path)
         .map_err(|e| Error::SparseIndexError(format!("load idx read: {e}")))?;
 
-    // Build postings map from idx + term dictionary
-    let mut postings: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
-    let mut loaded_doc_count: usize = 0;
-
-    for te in &term_entries {
-        #[allow(clippy::cast_possible_truncation)] // 32-bit target: file offsets won't exceed usize
-        let start = te.offset as usize;
-        let end = start + (te.len as usize) * POSTING_DISK_SIZE;
-
-        if end > idx_data.len() {
-            return Err(Error::SparseIndexError(format!(
-                "load idx: term {} offset {start}+{} exceeds file size {}",
-                te.term_id,
-                (te.len as usize) * POSTING_DISK_SIZE,
-                idx_data.len()
-            )));
-        }
-
-        let mut entries = Vec::with_capacity(te.len as usize);
-        let mut pos = start;
-        for _ in 0..te.len {
-            // SAFETY: We verified `end <= idx_data.len()` above, so these slices are in-bounds.
-            // Reading raw little-endian bytes for doc_id (u64) and weight (f32).
-            let doc_id =
-                u64::from_le_bytes(idx_data[pos..pos + 8].try_into().expect("8 bytes for u64"));
-            pos += 8;
-            let weight =
-                f32::from_le_bytes(idx_data[pos..pos + 4].try_into().expect("4 bytes for f32"));
-            pos += 4;
-
-            entries.push(PostingEntry { doc_id, weight });
-        }
-
-        loaded_doc_count += entries.len();
-        postings.insert(te.term_id, (entries, te.max_weight));
-    }
+    let postings = build_postings_from_idx(&idx_data, &term_entries)?;
 
     // Use doc_count from meta (more accurate than counting postings)
     #[allow(clippy::cast_possible_truncation)] // doc_count fits in usize on supported platforms
@@ -436,15 +512,55 @@ pub fn load_from_disk(dir: &Path) -> Result<Option<SparseInvertedIndex>> {
     let index = SparseInvertedIndex::from_frozen_segment(frozen);
 
     // Replay WAL if exists
-    let wal_path = dir.join("sparse.wal");
+    let wal_path = dir.join(format!("{prefix}.wal"));
     let replayed = wal_replay(&wal_path, &index)?;
-    let _ = loaded_doc_count; // suppress unused warning
 
     if replayed >= COMPACTION_REPLAY_THRESHOLD {
-        compact(dir, &index)?;
+        compact_with_prefix(dir, prefix, &index)?;
     }
 
     Ok(Some(index))
+}
+
+/// Deserializes the posting lists from a raw index buffer and its term dictionary.
+///
+/// Extracted to keep `load_from_disk` within the pedantic line-count budget.
+fn build_postings_from_idx(
+    idx_data: &[u8],
+    term_entries: &[TermEntry],
+) -> Result<FxHashMap<u32, (Vec<PostingEntry>, f32)>> {
+    let mut postings: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
+
+    for te in term_entries {
+        #[allow(clippy::cast_possible_truncation)] // 32-bit target: file offsets won't exceed usize
+        let start = te.offset as usize;
+        let byte_count = (te.len as usize) * POSTING_DISK_SIZE;
+        let end = start + byte_count;
+
+        if end > idx_data.len() {
+            return Err(Error::SparseIndexError(format!(
+                "load idx: term {} offset {start}+{byte_count} exceeds file size {}",
+                te.term_id,
+                idx_data.len()
+            )));
+        }
+
+        let mut entries = Vec::with_capacity(te.len as usize);
+        let mut pos = start;
+        for _ in 0..te.len {
+            // We verified `end <= idx_data.len()` above, so every 12-byte window is in-bounds.
+            // read_le_u64/f32 propagate rather than panic to catch future refactor regressions.
+            let doc_id = read_le_u64(idx_data, pos, "load idx: corrupt doc_id bytes")?;
+            pos += 8;
+            let weight = read_le_f32(idx_data, pos, "load idx: corrupt weight bytes")?;
+            pos += 4;
+            entries.push(PostingEntry { doc_id, weight });
+        }
+
+        postings.insert(te.term_id, (entries, te.max_weight));
+    }
+
+    Ok(postings)
 }
 
 // ---------------------------------------------------------------------------
@@ -644,6 +760,58 @@ mod tests {
         let index = SparseInvertedIndex::new();
         let count = wal_replay(&wal_path, &index).unwrap();
         assert_eq!(count, 0);
+    }
+
+    /// Simulates a crash that left a `.tmp` file behind from a previous interrupted compaction.
+    ///
+    /// Verifies that `load_from_disk` ignores stale `.tmp` artefacts and correctly recovers
+    /// state from the WAL alone (no `sparse.meta` present — WAL-only scenario).
+    #[test]
+    fn test_partial_compaction_crash_recovery() {
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("sparse.wal");
+
+        // Insert 5 distinct vectors and record them only in the WAL (no compaction).
+        for i in 0..5u64 {
+            let v = make_vector(vec![(i as u32, 1.0 + i as f32 * 0.1)]);
+            wal_append_upsert(&wal_path, i, &v).unwrap();
+        }
+
+        // Simulate an interrupted compaction: the .tmp file exists but the final sparse.idx
+        // and sparse.meta files were never atomically renamed into place.
+        let tmp_path = dir.path().join("sparse.idx.tmp");
+        std::fs::write(&tmp_path, b"garbage partial write").unwrap();
+
+        // sparse.meta must NOT exist so load_from_disk follows the WAL-only path.
+        assert!(!dir.path().join("sparse.meta").exists());
+
+        // load_from_disk must ignore the .tmp file and recover from the WAL.
+        let loaded = load_from_disk(dir.path()).unwrap();
+        assert!(
+            loaded.is_some(),
+            "WAL-only load should return Some after partial compaction crash"
+        );
+        let index = loaded.unwrap();
+
+        // All 5 WAL-inserted documents must be present.
+        assert_eq!(index.doc_count(), 5);
+
+        // Verify each term has exactly one posting with the correct doc_id.
+        for i in 0..5u64 {
+            let postings = index.get_all_postings(i as u32);
+            assert_eq!(
+                postings.len(),
+                1,
+                "term {i} should have exactly one posting"
+            );
+            assert_eq!(postings[0].doc_id, i);
+        }
+
+        // The stale .tmp file must still be present (load_from_disk must not delete it).
+        assert!(
+            tmp_path.exists(),
+            "load_from_disk must not remove stale .tmp artefacts"
+        );
     }
 
     #[test]

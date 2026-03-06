@@ -88,7 +88,7 @@ mod tests {
                 id,
                 vector: vec![0.0; 4], // Dummy vector for tests
                 payload: Some(payload),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             score: 1.0,
         }

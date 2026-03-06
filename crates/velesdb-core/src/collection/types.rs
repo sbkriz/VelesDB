@@ -13,7 +13,7 @@ use crate::storage::{LogPayloadStorage, MmapStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -177,7 +177,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
 //   8. edge_store
-//   9. sparse_index
+//   9. sparse_indexes
 
 /// A collection of vectors with associated metadata.
 #[derive(Clone)]
@@ -225,9 +225,9 @@ pub struct Collection {
     /// Edge store for knowledge graph relationships (EPIC-015).
     pub(super) edge_store: Arc<RwLock<EdgeStore>>,
 
-    /// Sparse inverted index for sparse vector search (EPIC-062).
-    /// `None` until first sparse vector upsert or loaded from disk.
-    pub(super) sparse_index: Arc<RwLock<Option<SparseInvertedIndex>>>,
+    /// Named sparse inverted indexes for sparse vector search (EPIC-062).
+    /// Key is the sparse vector name (e.g., `""` for default, `"title"`, `"body"`).
+    pub(super) sparse_indexes: Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>>,
 
     /// Secondary indexes for metadata payload fields.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
@@ -246,10 +246,10 @@ pub struct Collection {
 }
 
 impl Collection {
-    /// Returns a reference to the sparse index lock (EPIC-062 sparse integration).
+    /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
     #[allow(dead_code)]
-    pub(crate) fn sparse_index(&self) -> &Arc<RwLock<Option<SparseInvertedIndex>>> {
-        &self.sparse_index
+    pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
+        &self.sparse_indexes
     }
 
     /// Extracts all string values from a JSON payload for text indexing.

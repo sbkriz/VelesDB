@@ -36,13 +36,13 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -81,19 +81,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "other"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -128,19 +128,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0], // similarity = 1.0
                 payload: None,
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.7, 0.7, 0.0, 0.0], // similarity ≈ 0.7
                 payload: None,
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.0, 1.0, 0.0, 0.0], // similarity = 0.0
                 payload: None,
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -178,13 +178,13 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -209,13 +209,13 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -241,13 +241,13 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -281,25 +281,25 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "A", "priority": 3})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "A", "priority": 1})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.8, 0.2, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "B", "priority": 2})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 4,
                 vector: vec![0.7, 0.3, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "A", "priority": 2})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -364,25 +364,25 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"a": 1, "b": 2, "c": "x"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"a": 1, "b": 2, "c": "y"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.8, 0.2, 0.0, 0.0],
                 payload: Some(serde_json::json!({"a": 1, "b": 1, "c": "z"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 4,
                 vector: vec![0.7, 0.3, 0.0, 0.0],
                 payload: Some(serde_json::json!({"a": 2, "b": 1, "c": "w"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -417,19 +417,19 @@ mod tests {
                 id: 10,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "same", "seq": 1})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 20,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "same", "seq": 2})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 30,
                 vector: vec![0.8, 0.2, 0.0, 0.0],
                 payload: Some(serde_json::json!({"category": "same", "seq": 3})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -456,19 +456,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -495,19 +495,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -534,19 +534,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();
@@ -575,19 +575,19 @@ mod tests {
                 id: 1,
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 2,
                 vector: vec![0.9, 0.1, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
             crate::Point {
                 id: 3,
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
-                sparse_vector: None,
+                sparse_vectors: None,
             },
         ];
         collection.upsert(points).unwrap();

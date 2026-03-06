@@ -231,7 +231,7 @@ impl Collection {
                             id,
                             vector,
                             payload,
-                            sparse_vector: None,
+                            sparse_vectors: None,
                         },
                         score,
                     ));
@@ -303,7 +303,7 @@ impl Collection {
                             id,
                             vector,
                             payload,
-                            sparse_vector: None,
+                            sparse_vectors: None,
                         },
                         1.0, // Constant score for scans
                     ));

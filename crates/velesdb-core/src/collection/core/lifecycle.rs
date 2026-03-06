@@ -10,7 +10,7 @@ use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
@@ -94,7 +94,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_index: Arc::new(RwLock::new(None)),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -193,7 +193,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_index: Arc::new(RwLock::new(None)),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -261,8 +261,8 @@ impl Collection {
         let range_index = Self::load_range_index(&path);
         // Load EdgeStore if present (graph collections -- D-02)
         let edge_store = Self::load_edge_store(&path);
-        // Load SparseInvertedIndex if present (EPIC-062)
-        let sparse_index = Self::load_sparse_index(&path);
+        // Load named sparse indexes if present (EPIC-062 / SPARSE-04)
+        let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
         Ok(Self {
             path,
@@ -279,7 +279,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(edge_store)),
-            sparse_index: Arc::new(RwLock::new(sparse_index)),
+            sparse_indexes: Arc::new(RwLock::new(sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -341,7 +341,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_index: Arc::new(RwLock::new(None)),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
@@ -353,21 +353,62 @@ impl Collection {
         Ok(collection)
     }
 
-    /// Loads a sparse inverted index from disk if sparse files exist.
-    fn load_sparse_index(
+    /// Loads all named sparse indexes from disk.
+    ///
+    /// Scans for `sparse.meta` (default name `""`) and `sparse-{name}.meta` files.
+    /// Returns a `BTreeMap` keyed by sparse vector name.
+    fn load_named_sparse_indexes(
         path: &std::path::Path,
-    ) -> Option<crate::index::sparse::SparseInvertedIndex> {
+    ) -> BTreeMap<String, crate::index::sparse::SparseInvertedIndex> {
+        let mut indexes = BTreeMap::new();
+
+        // Load default (unprefixed) sparse index: sparse.meta / sparse.wal
         match crate::index::sparse::persistence::load_from_disk(path) {
-            Ok(idx) => idx,
+            Ok(Some(idx)) => {
+                indexes.insert(String::new(), idx);
+            }
+            Ok(None) => {}
             Err(e) => {
                 tracing::warn!(
-                    "Failed to load sparse index from {:?}: {}. Starting without sparse index.",
+                    "Failed to load default sparse index from {:?}: {}. Skipping.",
                     path,
                     e
                 );
-                None
             }
         }
+
+        // Scan for named sparse indexes: sparse-{name}.meta files
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name_str = file_name.to_string_lossy();
+                if let Some(sparse_name) = name_str
+                    .strip_prefix("sparse-")
+                    .and_then(|s| s.strip_suffix(".meta"))
+                {
+                    let sparse_name = sparse_name.to_string();
+                    match crate::index::sparse::persistence::load_named_from_disk(
+                        path,
+                        &sparse_name,
+                    ) {
+                        Ok(Some(idx)) => {
+                            indexes.insert(sparse_name, idx);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to load sparse index '{}' from {:?}: {}. Skipping.",
+                                sparse_name,
+                                path,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        indexes
     }
 
     fn load_edge_store(path: &std::path::Path) -> EdgeStore {
@@ -455,9 +496,12 @@ impl Collection {
                 .map_err(Error::Io)?;
         }
 
-        // Compact sparse index to disk if present (EPIC-062)
-        if let Some(ref idx) = *self.sparse_index.read() {
-            crate::index::sparse::persistence::compact(&self.path, idx)?;
+        // Compact all named sparse indexes to disk (EPIC-062 / SPARSE-04)
+        {
+            let indexes = self.sparse_indexes.read();
+            for (name, idx) in indexes.iter() {
+                crate::index::sparse::persistence::compact_named(&self.path, name, idx)?;
+            }
         }
 
         Ok(())
