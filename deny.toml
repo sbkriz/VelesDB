@@ -21,8 +21,10 @@ ignore = [
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property: tauri transitive" },
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive" },
+    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill: postcard -> heapless transitive, unmaintained, no fix in postcard 1.x" },
     { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive, unmaintained, no fix available" },
-    { id = "RUSTSEC-2025-0141", reason = "bincode: hnsw_rs/velesdb-core serialization, migration planned" },
+    # bincode removed from velesdb-core; remains as transitive dep via uniffi -> velesdb-mobile
+    { id = "RUSTSEC-2025-0141", reason = "bincode: uniffi transitive (velesdb-mobile), awaiting uniffi upgrade" },
 ]
 
 [licenses]
