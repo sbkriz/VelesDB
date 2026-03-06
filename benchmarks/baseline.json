@@ -1,6 +1,6 @@
 {
   "version": "1.5.0",
-  "description": "VelesDB Performance Baseline v1.5 — Phase 01 complete (postcard, PQ hardened, BUG-8 fixed)",
+  "description": "VelesDB Performance Baseline v1.5 — Phase 03 PQ integration (recall benchmarks added)",
   "recorded_at": "2026-03-06",
   "environment": {
     "rust_version": "1.92.0",
@@ -22,12 +22,22 @@
       "mean_ns": 179910.0,
       "std_ns": 20000,
       "threshold_percent": 15
+    },
+    "pq_recall/pq_recall_m_auto_rescore": {
+      "recall_at_10": null,
+      "threshold_recall": 0.20,
+      "notes": "Populated after first benchmark run"
+    },
+    "pq_recall/full_precision_baseline": {
+      "recall_at_10": null,
+      "threshold_recall": 0.95,
+      "notes": "Populated after first benchmark run"
     }
   },
   "notes": [
     "Baseline captured after Phase 01 foundation fixes (postcard migration, PQ hardening, BUG-8)",
     "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
     "Machine: i9-14900KF, 64GB RAM, Windows 11 Pro",
-    "Only smoke_test bench suite included — full suite benchmarks run on demand"
+    "pq_recall entries added in Phase 03 — recall thresholds instead of timing thresholds"
   ]
 }

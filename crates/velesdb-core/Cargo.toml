@@ -315,3 +315,7 @@ workspace = true
 [[bench]]
 name = "pq_hnsw_benchmark"
 harness = false
+
+[[bench]]
+name = "pq_recall_benchmark"
+harness = false
