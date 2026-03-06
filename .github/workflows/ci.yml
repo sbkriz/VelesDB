@@ -252,6 +252,12 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
+      - name: Check coverage threshold
+        run: |
+          cargo llvm-cov --features persistence,gpu,update-check --workspace \
+            --exclude velesdb-python \
+            --fail-under-lines 82
+
       - name: Generate coverage report
         run: |
           cargo llvm-cov --features persistence,gpu,update-check --workspace \
@@ -262,7 +268,7 @@ jobs:
         continue-on-error: true
         with:
           files: lcov.info
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # ===========================================================================
