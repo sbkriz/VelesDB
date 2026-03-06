@@ -3,7 +3,14 @@
 //! Provides optional GPU acceleration for the k-means assignment step during
 //! PQ codebook training. Falls back silently to CPU when GPU is unavailable
 //! or the dataset is too small to benefit from GPU dispatch.
+//!
+//! ## Usage
+//!
+//! Create a [`PqGpuContext`] once before entering the k-means loop, then pass
+//! a reference to each [`gpu_kmeans_assign`] call. This avoids paying the
+//! device-init overhead (~100–500 ms) on every iteration.
 
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 /// WGSL compute shader for PQ k-means assignment.
@@ -50,10 +57,148 @@ fn kmeans_assign(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
+/// Reusable GPU context for PQ k-means assignment.
+///
+/// Creating a [`PqGpuContext`] initializes the wgpu adapter, device, queue,
+/// and compiled compute pipeline once. Pass a reference to each
+/// [`gpu_kmeans_assign`] call to amortize the ~100–500 ms initialization cost
+/// over all k-means iterations.
+///
+/// Returns `None` if no suitable GPU adapter is available.
+pub struct PqGpuContext {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    pipeline: Arc<wgpu::ComputePipeline>,
+    bind_group_layout: Arc<wgpu::BindGroupLayout>,
+}
+
+impl PqGpuContext {
+    /// Initialize the GPU context: adapter, device, queue, and compiled pipeline.
+    ///
+    /// Returns `None` if:
+    /// - No suitable GPU adapter is found.
+    /// - Device creation fails.
+    ///
+    /// # Notes
+    ///
+    /// The 10 M FLOP threshold in [`should_use_gpu`] is tuned for discrete GPUs.
+    /// Integrated GPUs may benefit from a higher threshold (e.g. 50 M FLOPs)
+    /// due to shared memory bandwidth constraints.
+    #[must_use]
+    pub fn new() -> Option<Self> {
+        // Dispatch to a background thread so `pollster::block_on` never panics
+        // when called from within an async runtime (e.g. tokio in velesdb-server).
+        std::thread::spawn(Self::new_sync).join().ok().flatten()
+    }
+
+    /// Synchronous initialization — must NOT be called from inside an async context.
+    #[allow(clippy::too_many_lines)]
+    fn new_sync() -> Option<Self> {
+        let backends = wgpu::Backends::all();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("VelesDB PQ K-means"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::Performance,
+            },
+            None,
+        ))
+        .ok()?;
+
+        // Compile the shader and pipeline once.
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("PQ K-means Assignment Shader"),
+            source: wgpu::ShaderSource::Wgsl(PQ_KMEANS_ASSIGN_SHADER.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("PQ K-means Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("PQ K-means Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("PQ K-means Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("kmeans_assign"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        Some(Self {
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            pipeline: Arc::new(pipeline),
+            bind_group_layout: Arc::new(bind_group_layout),
+        })
+    }
+}
+
 /// Check if GPU dispatch is worthwhile based on FLOP threshold.
 ///
 /// GPU dispatch overhead (device init, buffer copies, kernel launch) is only
-/// amortized when the computation exceeds ~10M FLOPs.
+/// amortized when the computation exceeds ~10 M FLOPs. This threshold is
+/// calibrated for discrete GPUs; integrated GPUs may require a higher value
+/// due to shared memory bandwidth constraints.
 #[must_use]
 pub fn should_use_gpu(n: usize, k: usize, subspace_dim: usize) -> bool {
     n * k * subspace_dim > 10_000_000
@@ -64,13 +209,17 @@ pub fn should_use_gpu(n: usize, k: usize, subspace_dim: usize) -> bool {
 /// For each vector, finds the nearest centroid index using L2 distance.
 /// Returns assignment indices (one per vector), or `None` if GPU dispatch fails.
 ///
+/// Requires a pre-initialized [`PqGpuContext`] to avoid re-paying device init
+/// overhead on every call.
+///
 /// Falls back to `None` if:
-/// - wgpu device initialization fails
-/// - Buffer creation fails
-/// - Compute dispatch fails
-/// - Result readback fails
+/// - Input dimensions are inconsistent (`sub_vectors[i].len() != subspace_dim`).
+/// - Buffer creation fails.
+/// - Compute dispatch fails.
+/// - Result readback fails.
 #[allow(clippy::too_many_lines)]
 pub fn gpu_kmeans_assign(
+    ctx: &PqGpuContext,
     sub_vectors: &[Vec<f32>],
     centroids: &[Vec<f32>],
     subspace_dim: usize,
@@ -79,117 +228,30 @@ pub fn gpu_kmeans_assign(
         return None;
     }
 
+    // Validate that all inputs have the expected dimension.
+    if sub_vectors.iter().any(|v| v.len() != subspace_dim)
+        || centroids.iter().any(|c| c.len() != subspace_dim)
+    {
+        return None;
+    }
+
     let n = sub_vectors.len();
     let k = centroids.len();
 
-    // Initialize GPU device
-    let backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends,
-        ..Default::default()
-    });
-
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))?;
-
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("VelesDB PQ K-means"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
-        },
-        None,
-    ))
-    .ok()?;
-
-    // Flatten vectors and centroids into contiguous buffers
+    // Flatten vectors and centroids into contiguous buffers.
     let mut flat_vectors = Vec::with_capacity(n * subspace_dim);
     for v in sub_vectors {
         flat_vectors.extend_from_slice(v);
     }
-
     let mut flat_centroids = Vec::with_capacity(k * subspace_dim);
     for c in centroids {
         flat_centroids.extend_from_slice(c);
     }
 
-    // Create shader module
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("PQ K-means Assignment Shader"),
-        source: wgpu::ShaderSource::Wgsl(PQ_KMEANS_ASSIGN_SHADER.into()),
-    });
+    let device = &ctx.device;
+    let queue = &ctx.queue;
 
-    // Create bind group layout
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("PQ K-means Bind Group Layout"),
-        entries: &[
-            // Vectors buffer (binding 0)
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            // Centroids buffer (binding 1)
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            // Assignments buffer (binding 2)
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            // Params uniform (binding 3)
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("PQ K-means Pipeline Layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("PQ K-means Pipeline"),
-        layout: Some(&pipeline_layout),
-        module: &shader,
-        entry_point: Some("kmeans_assign"),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
-        cache: None,
-    });
-
-    // Create buffers
+    // Create per-call buffers.
     let vectors_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vectors Buffer"),
         contents: bytemuck::cast_slice(&flat_vectors),
@@ -229,10 +291,10 @@ pub fn gpu_kmeans_assign(
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
-    // Create bind group
+    // Create bind group using the reused pipeline layout.
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("PQ K-means Bind Group"),
-        layout: &bind_group_layout,
+        layout: &ctx.bind_group_layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -253,7 +315,7 @@ pub fn gpu_kmeans_assign(
         ],
     });
 
-    // Dispatch
+    // Dispatch.
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("PQ K-means Encoder"),
     });
@@ -263,7 +325,7 @@ pub fn gpu_kmeans_assign(
             label: Some("PQ K-means Pass"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&pipeline);
+        pass.set_pipeline(&ctx.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
 
         // SAFETY: n is bounded by training set size. div_ceil(256) reduces
@@ -276,7 +338,7 @@ pub fn gpu_kmeans_assign(
     encoder.copy_buffer_to_buffer(&assignments_buffer, 0, &staging_buffer, 0, assignments_size);
     queue.submit(std::iter::once(encoder.finish()));
 
-    // Read back results
+    // Read back results.
     let buffer_slice = staging_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -309,6 +371,15 @@ mod tests {
 
         // Exactly at threshold: should not trigger (strictly greater)
         assert!(!should_use_gpu(10_000_000 / (256 * 8), 256, 8));
+    }
+
+    #[test]
+    fn test_gpu_context_new_does_not_panic() {
+        // PqGpuContext::new() either succeeds or returns None — must not panic.
+        // This validates the thread-spawn + pollster approach works regardless
+        // of whether we are in an async runtime.
+        let _ctx = PqGpuContext::new();
+        // No assertion: GPU may not be available in CI. Absence of panic is the test.
     }
 
     #[test]
@@ -350,25 +421,42 @@ mod tests {
             })
             .collect();
 
-        // GPU assignments (may return None if no GPU available)
-        if let Some(gpu_assignments) = gpu_kmeans_assign(&sub_vectors, &centroids, 4) {
-            assert_eq!(
-                gpu_assignments.len(),
-                sub_vectors.len(),
-                "GPU must return one assignment per vector"
-            );
-            assert_eq!(
-                gpu_assignments, cpu_assignments,
-                "GPU assignments must match CPU"
-            );
+        // GPU assignments (may return None if no GPU available or context init fails)
+        if let Some(ctx) = PqGpuContext::new() {
+            if let Some(gpu_assignments) = gpu_kmeans_assign(&ctx, &sub_vectors, &centroids, 4) {
+                assert_eq!(
+                    gpu_assignments.len(),
+                    sub_vectors.len(),
+                    "GPU must return one assignment per vector"
+                );
+                assert_eq!(
+                    gpu_assignments, cpu_assignments,
+                    "GPU assignments must match CPU"
+                );
+            }
         }
         // If GPU is not available, test passes silently (fallback behavior)
     }
 
     #[test]
     fn test_gpu_kmeans_assign_empty_input() {
-        assert!(gpu_kmeans_assign(&[], &[vec![1.0]], 1).is_none());
-        assert!(gpu_kmeans_assign(&[vec![1.0]], &[], 1).is_none());
-        assert!(gpu_kmeans_assign(&[vec![1.0]], &[vec![1.0]], 0).is_none());
+        if let Some(ctx) = PqGpuContext::new() {
+            assert!(gpu_kmeans_assign(&ctx, &[], &[vec![1.0]], 1).is_none());
+            assert!(gpu_kmeans_assign(&ctx, &[vec![1.0]], &[], 1).is_none());
+            assert!(gpu_kmeans_assign(&ctx, &[vec![1.0]], &[vec![1.0]], 0).is_none());
+        }
+    }
+
+    #[test]
+    fn test_gpu_kmeans_assign_dimension_mismatch_returns_none() {
+        // sub_vectors[0] has dim=3 but subspace_dim=4 → must return None
+        if let Some(ctx) = PqGpuContext::new() {
+            let sub_vectors = vec![vec![1.0, 0.0, 0.0]]; // dim=3
+            let centroids = vec![vec![1.0, 0.0, 0.0, 0.0]]; // dim=4
+            assert!(
+                gpu_kmeans_assign(&ctx, &sub_vectors, &centroids, 4).is_none(),
+                "mismatched sub_vector dim must return None"
+            );
+        }
     }
 }

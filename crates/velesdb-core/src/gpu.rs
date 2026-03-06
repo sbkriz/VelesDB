@@ -35,7 +35,7 @@ pub mod pq_gpu;
 #[cfg(feature = "gpu")]
 pub use gpu_backend::GpuAccelerator;
 #[cfg(feature = "gpu")]
-pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu};
+pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu, PqGpuContext};
 
 /// Check if GPU dispatch is worthwhile (always false without gpu feature).
 #[cfg(not(feature = "gpu"))]

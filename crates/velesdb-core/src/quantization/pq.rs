@@ -103,9 +103,17 @@ impl ProductQuantizer {
 
         let centroids: Vec<Vec<Vec<f32>>>;
 
+        // Create GPU context once before the (possibly parallel) subspace training loop.
+        // Passing it to each kmeans_train call avoids re-initializing the device per iteration.
+        #[cfg(feature = "gpu")]
+        let gpu_ctx = crate::gpu::PqGpuContext::new();
+
         #[cfg(feature = "persistence")]
         {
             use rayon::prelude::*;
+            // Wrap the optional context so it can be shared across rayon threads.
+            #[cfg(feature = "gpu")]
+            let gpu_ctx_ref = gpu_ctx.as_ref();
             centroids = (0..num_subspaces)
                 .into_par_iter()
                 .map(|subspace| {
@@ -113,7 +121,13 @@ impl ProductQuantizer {
                     let end = start + subspace_dim;
                     let sub_vectors: Vec<Vec<f32>> =
                         vectors.iter().map(|v| v[start..end].to_vec()).collect();
-                    kmeans_train(&sub_vectors, num_centroids, 50)
+                    kmeans_train(
+                        &sub_vectors,
+                        num_centroids,
+                        50,
+                        #[cfg(feature = "gpu")]
+                        gpu_ctx_ref,
+                    )
                 })
                 .collect();
         }
@@ -125,14 +139,22 @@ impl ProductQuantizer {
                     let end = start + subspace_dim;
                     let sub_vectors: Vec<Vec<f32>> =
                         vectors.iter().map(|v| v[start..end].to_vec()).collect();
-                    kmeans_train(&sub_vectors, num_centroids, 50)
+                    kmeans_train(
+                        &sub_vectors,
+                        num_centroids,
+                        50,
+                        #[cfg(feature = "gpu")]
+                        gpu_ctx.as_ref(),
+                    )
                 })
                 .collect();
         }
 
-        // Post-training: degenerate centroid detection
+        // Post-training: degenerate centroid detection.
+        // This O(k²) check is only run in debug builds. Re-seeding during training
+        // already prevents degenerate centroids; this is a belt-and-suspenders assertion.
+        #[cfg(debug_assertions)]
         for (subspace, sub_centroids) in centroids.iter().enumerate() {
-            let sub_centroids: &Vec<Vec<f32>> = sub_centroids;
             for i in 0..sub_centroids.len() {
                 for j in (i + 1)..sub_centroids.len() {
                     let dist = l2_squared(&sub_centroids[i], &sub_centroids[j]);
@@ -435,88 +457,126 @@ pub fn train_opq(
         *c *= inv_n;
     }
 
-    // Extract principal components via power iteration.
-    // We compute the top-d eigenvectors to form the rotation matrix.
-    // Using iterative deflation: find top eigenvector, subtract, repeat.
-    let max_power_iters = power_iterations * 20; // Scale to get adequate convergence per eigenvector
-    let mut eigenvectors: Vec<Vec<f64>> = Vec::with_capacity(d);
+    // Extract all D principal components via simultaneous subspace iteration
+    // (simultaneous power iteration with modified Gram-Schmidt re-orthogonalization).
+    //
+    // Algorithm (O(d² × iters), numerically stable):
+    //   1. Start with Q = seeded random orthonormal d×d matrix (columns are candidate vectors).
+    //      Random init is essential: identity would stay near identity if covariance is
+    //      approximately diagonal, producing no decorrelation improvement.
+    //   2. For each iteration: Z = C * Q  (d×d matrix-matrix multiply)
+    //   3. Re-orthonormalize Z via modified Gram-Schmidt to get new Q.
+    //   4. After convergence, rows of Q^T are the principal components.
+    //
+    // This avoids sequential deflation (O(d³) per component, numerically fragile)
+    // and converges reliably for d up to ~1024 in practice.
+    let num_subspace_iters = power_iterations * 20;
 
-    let mut deflated_cov = cov.clone();
-
-    for _ in 0..d {
-        // Power iteration to find top eigenvector of deflated_cov
-        let mut v_iter: Vec<f64> = (0..d)
-            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+    // Initialize Q with a seeded random orthonormal matrix via modified Gram-Schmidt.
+    // Seeded for reproducibility; the seed is derived from dimension and n to be
+    // unique per training run shape without exposing a parameter.
+    #[allow(clippy::cast_possible_truncation)]
+    let init_seed = (d as u64).wrapping_mul(6_364_136_223_846_793_005)
+        ^ (n as u64).wrapping_mul(1_442_695_040_888_963_407);
+    let mut q_cols: Vec<Vec<f64>> = {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(init_seed);
+        // Generate random d×d matrix and orthogonalize columns via MGS.
+        let mut cols: Vec<Vec<f64>> = (0..d)
+            .map(|_| (0..d).map(|_| rng.gen::<f64>() * 2.0 - 1.0).collect())
             .collect();
-        let norm: f64 = v_iter.iter().map(|&x| x * x).sum::<f64>().sqrt();
-        for x in &mut v_iter {
-            *x /= norm;
-        }
-
-        for _ in 0..max_power_iters {
-            // w = deflated_cov * v
-            let mut w = vec![0.0_f64; d];
-            for i in 0..d {
-                for j in 0..d {
-                    w[i] += deflated_cov[i * d + j] * v_iter[j];
+        for j in 0..d {
+            for k in 0..j {
+                let dot: f64 = cols[j]
+                    .iter()
+                    .zip(cols[k].iter())
+                    .map(|(&a, &b)| a * b)
+                    .sum();
+                let proj: Vec<f64> = cols[k].iter().map(|&x| dot * x).collect();
+                for (cji, pi) in cols[j].iter_mut().zip(proj.iter()) {
+                    *cji -= pi;
                 }
             }
-            let w_norm: f64 = w.iter().map(|&x| x * x).sum::<f64>().sqrt();
-            if w_norm < 1e-12 {
-                // Eigenvalue is effectively zero; use an arbitrary orthogonal direction
-                break;
-            }
-            let inv = 1.0 / w_norm;
-            let mut converged = true;
-            for (vi, wi) in v_iter.iter_mut().zip(w.iter()) {
-                let new_val = wi * inv;
-                if (new_val - *vi).abs() > 1e-8 {
-                    converged = false;
+            let norm: f64 = cols[j].iter().map(|&x| x * x).sum::<f64>().sqrt();
+            if norm > 1e-12 {
+                let inv = 1.0 / norm;
+                for x in &mut cols[j] {
+                    *x *= inv;
                 }
-                *vi = new_val;
             }
-            if converged {
-                break;
+        }
+        cols
+    };
+
+    for _ in 0..num_subspace_iters {
+        // Z = C * Q: compute each output column z_j = C * q_j
+        let mut z_cols: Vec<Vec<f64>> = (0..d)
+            .map(|j| {
+                let mut z = vec![0.0_f64; d];
+                for i in 0..d {
+                    let mut s = 0.0_f64;
+                    for k in 0..d {
+                        s += cov[i * d + k] * q_cols[j][k];
+                    }
+                    z[i] = s;
+                }
+                z
+            })
+            .collect();
+
+        // Re-orthonormalize z_cols via modified Gram-Schmidt (in-place on z_cols).
+        for j in 0..d {
+            // Subtract projections of previously orthonormalized columns.
+            for k in 0..j {
+                let dot: f64 = z_cols[j]
+                    .iter()
+                    .zip(z_cols[k].iter())
+                    .map(|(&a, &b)| a * b)
+                    .sum();
+                let proj: Vec<f64> = z_cols[k].iter().map(|&x| dot * x).collect();
+                for (zji, pi) in z_cols[j].iter_mut().zip(proj.iter()) {
+                    *zji -= pi;
+                }
             }
+            // Normalize column j.
+            let norm: f64 = z_cols[j].iter().map(|&x| x * x).sum::<f64>().sqrt();
+            if norm > 1e-12 {
+                let inv = 1.0 / norm;
+                for x in &mut z_cols[j] {
+                    *x *= inv;
+                }
+            }
+            // Else column is numerically zero (degenerate eigenvalue); keep as-is.
         }
 
-        // Re-orthogonalize against all previous eigenvectors
-        for prev in &eigenvectors {
-            let dot: f64 = v_iter.iter().zip(prev.iter()).map(|(&a, &b)| a * b).sum();
-            for (vi, pi) in v_iter.iter_mut().zip(prev.iter()) {
-                *vi -= dot * pi;
-            }
-        }
-        let norm: f64 = v_iter.iter().map(|&x| x * x).sum::<f64>().sqrt();
-        if norm > 1e-12 {
-            let inv = 1.0 / norm;
-            for x in &mut v_iter {
-                *x *= inv;
-            }
-        }
-
-        // Deflate: cov' = cov - eigenvalue * v * v^T
-        // eigenvalue = v^T * cov * v
-        let mut av = vec![0.0_f64; d];
-        for i in 0..d {
-            for j in 0..d {
-                av[i] += deflated_cov[i * d + j] * v_iter[j];
-            }
-        }
-        let eigenvalue: f64 = v_iter.iter().zip(av.iter()).map(|(&a, &b)| a * b).sum();
-        for i in 0..d {
-            for j in 0..d {
-                deflated_cov[i * d + j] -= eigenvalue * v_iter[i] * v_iter[j];
-            }
-        }
-
-        eigenvectors.push(v_iter);
+        q_cols = z_cols;
     }
 
-    // Build rotation matrix from eigenvectors (rows = principal components)
+    // Sort eigenvectors by descending eigenvalue (Rayleigh quotient λ_j = q_j^T C q_j).
+    // This matches the deflation ordering and ensures PQ subspaces are assigned the
+    // directions of highest variance first.
+    let mut eigenvalue_col_pairs: Vec<(f64, usize)> = q_cols
+        .iter()
+        .enumerate()
+        .map(|(j, q)| {
+            // λ_j = q_j^T * C * q_j
+            let mut cq = vec![0.0_f64; d];
+            for i in 0..d {
+                for k in 0..d {
+                    cq[i] += cov[i * d + k] * q[k];
+                }
+            }
+            let lambda: f64 = q.iter().zip(cq.iter()).map(|(&a, &b)| a * b).sum();
+            (lambda, j)
+        })
+        .collect();
+    eigenvalue_col_pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Build rotation matrix: rows are principal components in descending eigenvalue order.
+    // rotation[i * d + j] = q_cols[col_idx][j]  where col_idx = eigenvalue_col_pairs[i].1
     rotation = vec![0.0_f32; d * d];
-    for (i, ev) in eigenvectors.iter().enumerate() {
-        for (j, &val) in ev.iter().enumerate() {
+    for (i, (_, col_idx)) in eigenvalue_col_pairs.iter().enumerate() {
+        for (j, &val) in q_cols[*col_idx].iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
             {
                 rotation[i * d + j] = val as f32;
@@ -710,7 +770,12 @@ fn kmeans_plusplus_init(samples: &[Vec<f32>], k: usize, rng: &mut impl Rng) -> V
 }
 
 #[allow(clippy::too_many_lines)]
-fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32>> {
+fn kmeans_train(
+    samples: &[Vec<f32>],
+    k: usize,
+    max_iters: usize,
+    #[cfg(feature = "gpu")] gpu_ctx: Option<&crate::gpu::PqGpuContext>,
+) -> Vec<Vec<f32>> {
     // Internal invariant: callers validate non-empty samples and k > 0.
     debug_assert!(!samples.is_empty());
     debug_assert!(k > 0);
@@ -729,24 +794,32 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
     for _iter in 0..max_iters {
         let mut changed = false;
 
-        // Assignment step: try GPU acceleration if beneficial
+        // Assignment step: try GPU acceleration if beneficial.
+        // The context is created once by the caller and reused across all iterations,
+        // avoiding repeated device initialization overhead.
         #[cfg(feature = "gpu")]
         let gpu_used = {
             use crate::gpu;
-            if gpu::should_use_gpu(samples.len(), k, dim) {
-                if let Some(gpu_assignments) = gpu::gpu_kmeans_assign(samples, &centroids, dim) {
-                    for (i, &new_assignment) in gpu_assignments.iter().enumerate() {
-                        if assignments[i] != new_assignment {
-                            assignments[i] = new_assignment;
-                            changed = true;
+            if let Some(ctx) = gpu_ctx {
+                if gpu::should_use_gpu(samples.len(), k, dim) {
+                    if let Some(gpu_assignments) =
+                        gpu::gpu_kmeans_assign(ctx, samples, &centroids, dim)
+                    {
+                        for (i, &new_assignment) in gpu_assignments.iter().enumerate() {
+                            if assignments[i] != new_assignment {
+                                assignments[i] = new_assignment;
+                                changed = true;
+                            }
                         }
+                        true
+                    } else {
+                        false // GPU dispatch failed; fall through to CPU
                     }
-                    true
                 } else {
-                    false // GPU failed, fall through to CPU
+                    false // Below FLOP threshold; use CPU
                 }
             } else {
-                false // Below threshold, use CPU
+                false // No GPU context provided
             }
         };
         #[cfg(not(feature = "gpu"))]
@@ -806,12 +879,13 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
 
         // Convergence check: compute max relative centroid movement.
         // If the largest movement is below 1% relative to centroid norm, stop early.
+        // L1: use iterator-based norm computation instead of allocating a zero vector.
         let max_delta = centroids
             .iter()
             .zip(new_centroids.iter())
             .map(|(old, new)| {
                 let movement = l2_squared(old, new).sqrt();
-                let norm = l2_squared(old, &vec![0.0; dim]).sqrt();
+                let norm = old.iter().map(|x| x * x).sum::<f32>().sqrt();
                 if norm > f32::EPSILON {
                     movement / norm
                 } else {
