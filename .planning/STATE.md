@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-stopped_at: Completed 02-04-PLAN.md (Phase 02 complete)
-last_updated: "2026-03-06T11:37:22.571Z"
-last_activity: 2026-03-06 — Completed plan 02-04 (OPQ pre-rotation + GPU k-means)
+status: in-progress
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-06T14:55:10Z"
+last_activity: 2026-03-06 — Completed plan 03-01 (QuantizationType enum + TrainingFailed error)
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 11
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 2 — PQ Core Engine
+**Current focus:** Phase 3 — PQ Integration
 
 ## Current Position
 
-Phase: 2 of 10 (PQ Core Engine) -- COMPLETE
-Plan: 4 of 4 in current phase (completed)
-Status: Phase 2 complete, ready for Phase 3
-Last activity: 2026-03-06 — Completed plan 02-04 (OPQ pre-rotation + GPU k-means)
+Phase: 3 of 10 (PQ Integration)
+Plan: 1 of 3 in current phase (completed)
+Status: Plan 03-01 complete, ready for Plan 03-02
+Last activity: 2026-03-06 — Completed plan 03-01 (QuantizationType enum + TrainingFailed error)
 
-Progress: [██████████] 100% (Phase 2)
+Progress: [████████░░] 82% (8 prior + 1 phase 3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: 20 min
-- Total execution time: 2.7 hours
+- Total execution time: 2.9 hours
 
 **By Phase:**
 
@@ -45,10 +45,11 @@ Progress: [██████████] 100% (Phase 2)
 |-------|-------|-------|----------|
 | 01-foundation-fixes | 2/4 | 32 min | 16 min |
 | 02-pq-core-engine | 4/4 | 93 min | 23 min |
+| 03-pq-integration | 1/3 | 19 min | 19 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (15 min), 02-02 (26 min), 02-03 (31 min), 02-04 (21 min)
-- Trend: Phase 2 complete
+- Last 5 plans: 02-02 (26 min), 02-03 (31 min), 02-04 (21 min), 03-02 (19 min)
+- Trend: Stable ~20-25 min per plan
 
 *Updated after each plan completion*
 
@@ -77,6 +78,10 @@ Recent decisions affecting current work:
 - [02-04]: PCA-based OPQ instead of IPQ Procrustes (power iteration eigenvectors are deterministic, more robust)
 - [02-04]: f64 accumulation for covariance/eigenvalue computation (avoids float32 precision loss on 64d+ vectors)
 - [02-04]: WGSL shader embedded in pq_gpu.rs (different bind group layout from existing cosine shader)
+- [03-01]: Custom Deserialize impl on QuantizationConfig for dual-format support (old string vs new tagged object)
+- [03-01]: QuantizationType (not QuantizationMode) to avoid collision with velesql/ast/with_clause.rs
+- [03-01]: TrainingFailed classified as recoverable error (user can adjust params and retry)
+- [03-01]: PQ defaults: k=256, oversampling=Some(4), opq_enabled=false
 
 ### Pending Todos
 
@@ -90,6 +95,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T11:31:37Z
-Stopped at: Completed 02-04-PLAN.md (Phase 02 complete)
-Resume file: Phase 03 plans (next phase)
+Last session: 2026-03-06T14:55:10Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: .planning/phases/03-pq-integration/03-02-PLAN.md

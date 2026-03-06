@@ -64,7 +64,12 @@ Plans:
   1. A user can run `TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)` in VelesQL and the command succeeds or returns a descriptive error — training is explicit, never automatic
   2. A collection can be created or reconfigured with `QuantizationConfig::ProductQuantization` without breaking existing collections that use SQ8 or Binary — no deserialization errors on existing data
   3. The `pq_recall` Criterion suite runs and its recall@10 >= 92% threshold for m=8 is recorded in `benchmarks/baseline.json` alongside existing benchmarks
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — QuantizationConfig PQ variant + collection config (PQ-06)
+- [x] 03-02-PLAN.md — VelesQL TRAIN QUANTIZER grammar/AST/parser (PQ-05) (completed 2026-03-06)
+- [ ] 03-03-PLAN.md — TRAIN executor wiring + recall benchmark (PQ-07)
 
 ### Phase 4: Sparse Vector Engine
 **Goal**: VelesDB can store and search sparse vectors internally — the WeightedPostingList inverted index is built, persisted to disk, and queryable via inner-product ANN search
@@ -151,7 +156,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 |-------|----------------|--------|-----------|
 | 1. Quality Baseline & Security | 3/4 | In Progress|  |
 | 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
-| 3. PQ Integration | 0/TBD | Not started | - |
+| 3. PQ Integration | 2/3 | In Progress|  |
 | 4. Sparse Vector Engine | 0/TBD | Not started | - |
 | 5. Sparse Integration | 0/TBD | Not started | - |
 | 6. Query Plan Cache | 0/TBD | Not started | - |
