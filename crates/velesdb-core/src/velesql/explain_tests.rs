@@ -297,6 +297,8 @@ fn test_index_lookup_node_cost() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     // IndexLookup cost should be much lower than TableScan
@@ -307,6 +309,8 @@ fn test_index_lookup_node_cost() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     assert!(plan.estimated_cost_ms < scan_plan.estimated_cost_ms);
@@ -324,6 +328,8 @@ fn test_index_lookup_render_tree() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     // Act
@@ -352,6 +358,8 @@ fn test_index_lookup_json_serialization() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     // Act
@@ -456,6 +464,8 @@ fn test_explain_output_struct() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     let output = ExplainOutput {

@@ -19,6 +19,8 @@ fn dummy_query_plan() -> QueryPlan {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     }
 }
 
@@ -248,4 +250,202 @@ fn plan_cache_reuse_count_increments() {
     let _ = cache.get(&key);
     // The reuse_count on the *original* Arc should reflect two reuses
     assert_eq!(plan.reuse_count.load(Ordering::Relaxed), 2);
+}
+
+// ---- Integration tests: Database execute_query cache wiring (CACHE-02) ----
+
+/// Helper: build a simple SELECT query for a given collection.
+#[cfg(feature = "persistence")]
+fn select_query(collection: &str) -> crate::velesql::Query {
+    use crate::velesql::{Condition, SelectColumns, SelectStatement, VectorExpr, VectorSearch};
+
+    crate::velesql::Query {
+        select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::default(),
+            columns: SelectColumns::All,
+            from: collection.to_string(),
+            from_alias: Vec::new(),
+            where_clause: Some(Condition::VectorSearch(VectorSearch {
+                vector: VectorExpr::Literal(vec![1.0, 0.0, 0.0, 0.0]),
+            })),
+            limit: Some(5),
+            offset: None,
+            order_by: None,
+            joins: Vec::new(),
+            group_by: None,
+            having: None,
+            with_clause: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: None,
+        train: None,
+    }
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_plan_cache_hit() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("cache_hit", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    // Insert some data so the query has results.
+    let coll = db.get_collection("cache_hit").unwrap();
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    let query = select_query("cache_hit");
+    let params = std::collections::HashMap::new();
+
+    // First execution: cache miss, populates cache.
+    let _ = db.execute_query(&query, &params).unwrap();
+    let explain1 = db.explain_query(&query).unwrap();
+    // After first execute_query, the cache should have the plan.
+    // explain_query checks the cache -> should be a hit now.
+    assert_eq!(
+        explain1.cache_hit,
+        Some(true),
+        "second lookup should be cache hit"
+    );
+
+    // Second execution: cache hit.
+    let _ = db.execute_query(&query, &params).unwrap();
+    let explain2 = db.explain_query(&query).unwrap();
+    assert_eq!(explain2.cache_hit, Some(true));
+    assert!(
+        explain2.plan_reuse_count.unwrap_or(0) >= 2,
+        "plan should have been reused at least twice"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_plan_invalidation_on_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("cache_write", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    let coll = db.get_collection("cache_write").unwrap();
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    let query = select_query("cache_write");
+    let params = std::collections::HashMap::new();
+
+    // Populate cache.
+    let _ = db.execute_query(&query, &params).unwrap();
+
+    // Upsert invalidates via write_generation change.
+    coll.upsert(vec![crate::Point {
+        id: 2,
+        vector: vec![0.0, 1.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    // Cache should miss because write_generation changed.
+    let explain = db.explain_query(&query).unwrap();
+    assert_eq!(explain.cache_hit, Some(false), "should miss after upsert");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_plan_invalidation_on_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("cache_del", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    let coll = db.get_collection("cache_del").unwrap();
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    let query = select_query("cache_del");
+    let params = std::collections::HashMap::new();
+
+    // Populate cache.
+    let _ = db.execute_query(&query, &params).unwrap();
+
+    // Delete invalidates via write_generation change.
+    coll.delete(&[1]).unwrap();
+
+    let explain = db.explain_query(&query).unwrap();
+    assert_eq!(explain.cache_hit, Some(false), "should miss after delete");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_plan_invalidation_on_drop_recreate() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("cache_drop", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    let coll = db.get_collection("cache_drop").unwrap();
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    let query = select_query("cache_drop");
+    let params = std::collections::HashMap::new();
+
+    // Populate cache.
+    let _ = db.execute_query(&query, &params).unwrap();
+
+    // Drop + recreate invalidates via schema_version change.
+    db.delete_collection("cache_drop").unwrap();
+    db.create_collection("cache_drop", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    let explain = db.explain_query(&query).unwrap();
+    assert_eq!(
+        explain.cache_hit,
+        Some(false),
+        "should miss after drop + recreate"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_explain_first_query_cache_miss() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("cache_miss", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    let query = select_query("cache_miss");
+
+    // EXPLAIN on a never-executed query should show cache_hit: false.
+    let explain = db.explain_query(&query).unwrap();
+    assert_eq!(explain.cache_hit, Some(false));
+    assert_eq!(explain.plan_reuse_count, Some(0));
 }

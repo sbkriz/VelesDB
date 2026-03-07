@@ -34,6 +34,12 @@ pub struct QueryPlan {
     pub index_used: Option<IndexType>,
     /// Filter strategy.
     pub filter_strategy: FilterStrategy,
+    /// Whether this plan was served from the compiled plan cache (CACHE-02).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_hit: Option<bool>,
+    /// How many times this cached plan has been reused (CACHE-02).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_reuse_count: Option<u64>,
 }
 
 /// A node in the query execution plan tree.
@@ -264,6 +270,8 @@ impl QueryPlan {
             estimated_cost_ms,
             index_used,
             filter_strategy,
+            cache_hit: None,
+            plan_reuse_count: None,
         }
     }
 
@@ -441,6 +449,8 @@ impl QueryPlan {
             estimated_cost_ms,
             index_used,
             filter_strategy: FilterStrategy::None,
+            cache_hit: None,
+            plan_reuse_count: None,
         }
     }
 }

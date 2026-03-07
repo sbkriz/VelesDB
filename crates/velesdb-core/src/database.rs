@@ -42,11 +42,10 @@ pub struct Database {
     /// Incremented on every create/drop collection operation.
     /// Used by `CompiledPlanCache` to invalidate cached query plans.
     schema_version: std::sync::atomic::AtomicU64,
-    /// Compiled query plan cache (CACHE-01).
+    /// Compiled query plan cache (CACHE-02).
     ///
     /// Stores recently compiled `QueryPlan` instances keyed by `PlanKey`.
     /// Default sizing: L1 = 1K hot entries, L2 = 10K LRU entries.
-    #[allow(dead_code)]
     compiled_plan_cache: crate::cache::CompiledPlanCache,
 }
 
@@ -199,16 +198,14 @@ impl Database {
 
     /// Returns the current DDL schema version counter.
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn schema_version(&self) -> u64 {
+    pub fn schema_version(&self) -> u64 {
         self.schema_version
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Returns a reference to the compiled query plan cache.
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn plan_cache(&self) -> &crate::cache::CompiledPlanCache {
+    pub fn plan_cache(&self) -> &crate::cache::CompiledPlanCache {
         &self.compiled_plan_cache
     }
 
@@ -291,10 +288,83 @@ impl Database {
         Ok(Some(stats))
     }
 
+    /// Builds a deterministic cache key for a query (CACHE-02).
+    ///
+    /// Hashes the debug representation of the query, reads the current
+    /// `schema_version`, and gathers per-collection `write_generation`
+    /// counters (sorted by collection name) to form a `PlanKey`.
+    #[must_use]
+    pub fn build_plan_key(&self, query: &crate::velesql::Query) -> crate::cache::PlanKey {
+        use std::hash::{BuildHasher, Hasher};
+
+        // Hash the query via its Debug representation (deterministic for identical ASTs).
+        let query_text = format!("{query:?}");
+        let mut hasher = rustc_hash::FxBuildHasher.build_hasher();
+        hasher.write(query_text.as_bytes());
+        let query_hash = hasher.finish();
+
+        let schema_version = self.schema_version();
+
+        // Gather referenced collection names (base + join targets), sort them.
+        let mut collection_names = vec![query.select.from.clone()];
+        for join in &query.select.joins {
+            collection_names.push(join.table.clone());
+        }
+        collection_names.sort();
+        collection_names.dedup();
+
+        // Build generations vector in sorted collection order.
+        let collection_generations: smallvec::SmallVec<[u64; 4]> = collection_names
+            .iter()
+            .map(|name| self.collection_write_generation(name).unwrap_or(0))
+            .collect();
+
+        crate::cache::PlanKey {
+            query_hash,
+            schema_version,
+            collection_generations,
+        }
+    }
+
+    /// Returns the query plan for a query, with cache status populated (CACHE-02).
+    ///
+    /// If the plan is cached, returns it with `cache_hit: Some(true)` and
+    /// `plan_reuse_count` set. Otherwise generates a fresh plan with
+    /// `cache_hit: Some(false)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid.
+    pub fn explain_query(
+        &self,
+        query: &crate::velesql::Query,
+    ) -> Result<crate::velesql::QueryPlan> {
+        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+
+        let plan_key = self.build_plan_key(query);
+
+        if let Some(cached) = self.compiled_plan_cache.get(&plan_key) {
+            let mut plan = cached.plan.clone();
+            plan.cache_hit = Some(true);
+            plan.plan_reuse_count = Some(
+                cached
+                    .reuse_count
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+            return Ok(plan);
+        }
+
+        let mut plan = crate::velesql::QueryPlan::from_select(&query.select);
+        plan.cache_hit = Some(false);
+        plan.plan_reuse_count = Some(0);
+        Ok(plan)
+    }
+
     /// Executes a `VelesQL` query with database-level JOIN resolution.
     ///
     /// This method resolves JOIN target collections from the database registry
-    /// and executes JOIN runtime in sequence.
+    /// and executes JOIN runtime in sequence. Query plans are cached and
+    /// reused for identical queries against unchanged collections (CACHE-02).
     ///
     /// # Errors
     ///
@@ -321,6 +391,10 @@ impl Database {
             ));
         }
 
+        // Build plan key and check cache (CACHE-02).
+        let plan_key = self.build_plan_key(query);
+        let cache_hit = self.compiled_plan_cache.get(&plan_key).is_some();
+
         let base_name = query.select.from.clone();
         // Priority: collections registry first (contains live instances for both legacy
         // create_collection and new create_vector_collection via shared inner Arc<>).
@@ -330,26 +404,45 @@ impl Database {
             .or_else(|| self.get_vector_collection(&base_name).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
 
-        if query.select.joins.is_empty() {
-            return base_collection.execute_query(query, params);
-        }
+        let results = if query.select.joins.is_empty() {
+            base_collection.execute_query(query, params)?
+        } else {
+            let mut base_query = query.clone();
+            base_query.select.joins.clear();
 
-        let mut base_query = query.clone();
-        base_query.select.joins.clear();
+            let mut results = base_collection.execute_query(&base_query, params)?;
+            for join in &query.select.joins {
+                let join_collection = self
+                    .get_collection(&join.table)
+                    .or_else(|| self.get_vector_collection(&join.table).map(|vc| vc.inner))
+                    .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
+                let column_store = Self::build_join_column_store(&join_collection)?;
+                let joined = crate::collection::search::query::join::execute_join(
+                    &results,
+                    join,
+                    &column_store,
+                )?;
+                results = crate::collection::search::query::join::joined_to_search_results(joined);
+            }
+            results
+        };
 
-        let mut results = base_collection.execute_query(&base_query, params)?;
-        for join in &query.select.joins {
-            let join_collection = self
-                .get_collection(&join.table)
-                .or_else(|| self.get_vector_collection(&join.table).map(|vc| vc.inner))
-                .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
-            let column_store = Self::build_join_column_store(&join_collection)?;
-            let joined = crate::collection::search::query::join::execute_join(
-                &results,
-                join,
-                &column_store,
-            )?;
-            results = crate::collection::search::query::join::joined_to_search_results(joined);
+        // Populate cache on miss (CACHE-02).
+        if !cache_hit {
+            let mut collection_names = vec![query.select.from.clone()];
+            for join in &query.select.joins {
+                collection_names.push(join.table.clone());
+            }
+            collection_names.sort();
+            collection_names.dedup();
+
+            let compiled = std::sync::Arc::new(crate::cache::CompiledPlan {
+                plan: crate::velesql::QueryPlan::from_select(&query.select),
+                referenced_collections: collection_names,
+                compiled_at: std::time::Instant::now(),
+                reuse_count: std::sync::atomic::AtomicU64::new(0),
+            });
+            self.compiled_plan_cache.insert(plan_key, compiled);
         }
 
         Ok(results)
