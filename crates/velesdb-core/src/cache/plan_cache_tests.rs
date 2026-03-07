@@ -300,24 +300,40 @@ fn test_plan_cache_hit() {
     let query = select_query("cache_hit");
     let params = std::collections::HashMap::new();
 
-    // First execution: cache miss, populates cache.
+    // Exact execution flow (important for understanding reuse_count):
+    //
+    // 1. execute_query #1: calls contains() -> false (no metric recorded).
+    //    Executes the query, compiles plan, inserts into cache (reuse_count=0).
+    // 2. explain_query #1: calls get() -> HIT, increments reuse_count to 1,
+    //    returns cache_hit=true and plan_reuse_count=Some(1).
+    // 3. execute_query #2: calls contains() -> true (no metric recorded).
+    //    Executes the query, skips cache insert (is_cached=true).
+    //    reuse_count remains 1.
+    // 4. explain_query #2: calls get() -> HIT, increments reuse_count to 2,
+    //    returns cache_hit=true and plan_reuse_count=Some(2).
+    //
+    // NOTE: execute_query uses contains() (no metric side-effect) rather than
+    // get() (which would increment reuse_count). Only explain_query calls get(),
+    // keeping cache metrics accurate and reuse_count meaningful.
+
+    // Step 1: first execute_query — cache miss, populates cache.
     let _ = db.execute_query(&query, &params).unwrap();
+    // Step 2: explain_query — hits the cache via get(), reuse_count -> 1.
     let explain1 = db.explain_query(&query).unwrap();
-    // After first execute_query, the cache should have the plan.
-    // explain_query checks the cache -> should be a hit now.
     assert_eq!(
         explain1.cache_hit,
         Some(true),
-        "second lookup should be cache hit"
+        "explain after first execute should be cache hit"
     );
 
-    // Second execution: cache hit.
+    // Step 3: second execute_query — cache hit via contains(), reuse_count unchanged.
     let _ = db.execute_query(&query, &params).unwrap();
+    // Step 4: explain_query — hits the cache via get(), reuse_count -> 2.
     let explain2 = db.explain_query(&query).unwrap();
     assert_eq!(explain2.cache_hit, Some(true));
     assert!(
         explain2.plan_reuse_count.unwrap_or(0) >= 2,
-        "plan should have been reused at least twice"
+        "plan should have been reused at least twice (once per explain_query call)"
     );
 }
 

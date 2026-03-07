@@ -400,9 +400,14 @@ impl Database {
             ));
         }
 
-        // Build plan key and check cache (CACHE-02).
-        let plan_key = self.build_plan_key(query);
-        let cache_hit = self.compiled_plan_cache.get(&plan_key).is_some();
+        // Build plan key and check cache WITHOUT recording hit/miss metrics (CACHE-02).
+        //
+        // `contains()` is used instead of `get().is_some()` so that this
+        // existence check does not increment the hit/miss counters or
+        // `reuse_count`. Only `explain_query` (which surfaces these values to
+        // callers) should call `get()`.
+        let pre_exec_key = self.build_plan_key(query);
+        let is_cached = self.compiled_plan_cache.contains(&pre_exec_key);
 
         let base_name = query.select.from.clone();
         // Priority: collections registry first (contains live instances for both legacy
@@ -437,7 +442,15 @@ impl Database {
         };
 
         // Populate cache on miss (CACHE-02).
-        if !cache_hit {
+        //
+        // C-1 TOCTOU fix: rebuild the plan key AFTER execution. Between the
+        // pre-execution `contains()` check and here, a concurrent writer may
+        // have bumped a collection's `write_generation` (e.g. via `upsert` on
+        // another thread). Rebuilding the key captures the post-execution
+        // state, so the cached plan is associated with the generation that was
+        // live when the plan was actually compiled — not a potentially stale
+        // pre-execution snapshot.
+        if !is_cached {
             let mut collection_names = vec![query.select.from.clone()];
             for join in &query.select.joins {
                 collection_names.push(join.table.clone());
@@ -451,7 +464,9 @@ impl Database {
                 compiled_at: std::time::Instant::now(),
                 reuse_count: std::sync::atomic::AtomicU64::new(0),
             });
-            self.compiled_plan_cache.insert(plan_key, compiled);
+            // Rebuild key after execution to reflect current write_generation (C-1).
+            let post_exec_key = self.build_plan_key(query);
+            self.compiled_plan_cache.insert(post_exec_key, compiled);
         }
 
         Ok(results)
