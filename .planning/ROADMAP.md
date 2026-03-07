@@ -127,7 +127,12 @@ Plans:
   2. A vector inserted through the streaming path is findable in a search query issued immediately after the insert returns — the searchable-immediately guarantee holds
   3. 100 vectors inserted during an ongoing HNSW rebuild are all present in search results after the rebuild completes — no inserts are silently lost during auto-reindex
   4. The streaming insert code is excluded from the WASM build via `#[cfg(feature = "persistence")]` — `cargo build -p velesdb-wasm --no-default-features` compiles without error
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — StreamIngester + StreamingConfig + WriteMode + DeltaBuffer stub + Collection wiring (STREAM-01, STREAM-02, STREAM-05)
+- [ ] 07-02-PLAN.md — DeltaBuffer search merge + rebuild coordination + searchable-immediately (STREAM-03, STREAM-04)
+- [ ] 07-03-PLAN.md — REST stream/insert endpoint + WASM exclusion verification (STREAM-01, STREAM-05)
 
 ### Phase 8: SDK Parity
 **Goal**: All SDK and integration surfaces expose the full v1.5 API — Python, TypeScript, WASM, Mobile, LangChain, LlamaIndex, and the Tauri plugin all support sparse vectors, PQ config, and streaming inserts
@@ -175,7 +180,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 4. Sparse Vector Engine | 3/3 | Complete   | 2026-03-06 |
 | 5. Sparse Integration | 4/4 | Complete   | 2026-03-06 |
 | 6. Query Plan Cache | 2/2 | Complete   | 2026-03-07 |
-| 7. Streaming Inserts | 0/TBD | Not started | - |
+| 7. Streaming Inserts | 0/3 | Not started | - |
 | 8. SDK Parity | 0/TBD | Not started | - |
 | 9. Documentation | 0/TBD | Not started | - |
 | 10. Release Readiness | 0/TBD | Not started | - |
