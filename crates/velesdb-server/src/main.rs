@@ -125,14 +125,15 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
-        )
-        .with_state(state);
+        );
 
     #[cfg(feature = "prometheus")]
     let api_router = {
         use velesdb_server::prometheus_metrics;
         api_router.route("/metrics", get(prometheus_metrics))
     };
+
+    let api_router = api_router.with_state(state);
 
     #[cfg(feature = "swagger-ui")]
     let api_router = {
