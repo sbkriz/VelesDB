@@ -414,6 +414,18 @@ pub async fn batch_search(
 }
 
 /// Multi-query search with fusion strategies.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/multi",
+    tag = "search",
+    params(("name" = String, Path, description = "Collection name")),
+    request_body = MultiQuerySearchRequest,
+    responses(
+        (status = 200, description = "Multi-query search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 #[allow(clippy::unused_async)]
 pub async fn multi_query_search(
     State(state): State<Arc<AppState>>,

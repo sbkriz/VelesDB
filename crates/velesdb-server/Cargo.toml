@@ -55,6 +55,7 @@ tokio-test = "0.4"
 tempfile = { workspace = true }
 tower = { workspace = true }
 toml = { workspace = true }
+serde_yaml = "0.9"
 
 [lints]
 workspace = true

@@ -12,12 +12,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use crate::types::VELESQL_CONTRACT_VERSION;
 use crate::AppState;
 
 /// Request body for MATCH query execution.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct MatchQueryRequest {
     /// VelesQL MATCH query string.
     pub query: String,
@@ -33,7 +34,7 @@ pub struct MatchQueryRequest {
 }
 
 /// Single result from MATCH query.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MatchQueryResultItem {
     /// Variable bindings from pattern matching.
     pub bindings: HashMap<String, u64>,
@@ -48,7 +49,7 @@ pub struct MatchQueryResultItem {
 }
 
 /// Response for MATCH query execution.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MatchQueryResponse {
     /// Query results.
     pub results: Vec<MatchQueryResultItem>,
@@ -61,14 +62,14 @@ pub struct MatchQueryResponse {
 }
 
 /// Metadata section for MATCH query responses.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MatchQueryMeta {
     /// VelesQL contract version used by this response.
     pub velesql_contract_version: String,
 }
 
 /// Error response for MATCH query.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MatchQueryError {
     /// Error message.
     pub error: String,
@@ -105,6 +106,19 @@ pub struct MatchQueryError {
 /// - `404 NOT_FOUND` - Collection not found
 /// - `400 BAD_REQUEST` - Parse error or not a MATCH query
 /// - `500 INTERNAL_SERVER_ERROR` - Execution error
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/match",
+    tag = "graph",
+    params(("name" = String, Path, description = "Collection name")),
+    request_body = MatchQueryRequest,
+    responses(
+        (status = 200, description = "Match query results", body = MatchQueryResponse),
+        (status = 400, description = "Parse error or invalid query", body = MatchQueryError),
+        (status = 404, description = "Collection not found", body = MatchQueryError),
+        (status = 500, description = "Internal server error", body = MatchQueryError)
+    )
+)]
 pub async fn match_query(
     Path(collection_name): Path<String>,
     State(state): State<Arc<AppState>>,

@@ -75,7 +75,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         (name = "points", description = "Vector point operations"),
         (name = "search", description = "Vector similarity search"),
         (name = "query", description = "VelesQL query execution"),
-        (name = "indexes", description = "Property index management (EPIC-009)")
+        (name = "indexes", description = "Property index management (EPIC-009)"),
+        (name = "graph", description = "Graph traversal and edge operations")
     ),
     paths(
         handlers::health::health_check,
@@ -84,6 +85,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::collections::get_collection,
         handlers::collections::delete_collection,
         handlers::collections::collection_sanity,
+        handlers::collections::is_empty,
+        handlers::collections::flush_collection,
         handlers::points::upsert_points,
         handlers::points::stream_upsert_points,
         handlers::points::stream_insert,
@@ -91,6 +94,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::points::delete_point,
         handlers::search::search,
         handlers::search::batch_search,
+        handlers::search::multi_query_search,
         handlers::search::text_search,
         handlers::search::hybrid_search,
         handlers::query::query,
@@ -98,7 +102,13 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::query::explain,
         handlers::indexes::create_index,
         handlers::indexes::list_indexes,
-        handlers::indexes::delete_index
+        handlers::indexes::delete_index,
+        handlers::graph::handlers::get_edges,
+        handlers::graph::handlers::add_edge,
+        handlers::graph::handlers::traverse_graph,
+        handlers::graph::handlers::get_node_degree,
+        handlers::graph::stream::stream_traverse,
+        handlers::match_query::match_query
     ),
     components(
         schemas(
@@ -111,6 +121,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             BatchSearchRequest,
             TextSearchRequest,
             HybridSearchRequest,
+            MultiQuerySearchRequest,
             SearchResponse,
             BatchSearchResponse,
             SearchResultResponse,
@@ -130,7 +141,23 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             ExplainFeatures,
             CreateIndexRequest,
             IndexResponse,
-            ListIndexesResponse
+            ListIndexesResponse,
+            handlers::graph::TraverseRequest,
+            handlers::graph::TraverseResponse,
+            handlers::graph::TraversalResultItem,
+            handlers::graph::TraversalStats,
+            handlers::graph::DegreeResponse,
+            handlers::graph::AddEdgeRequest,
+            handlers::graph::EdgesResponse,
+            handlers::graph::EdgeResponse,
+            handlers::graph::StreamNodeEvent,
+            handlers::graph::StreamStatsEvent,
+            handlers::graph::StreamDoneEvent,
+            handlers::match_query::MatchQueryRequest,
+            handlers::match_query::MatchQueryResponse,
+            handlers::match_query::MatchQueryResultItem,
+            handlers::match_query::MatchQueryMeta,
+            handlers::match_query::MatchQueryError
         )
     )
 )]
@@ -260,6 +287,53 @@ mod tests {
         assert!(
             json.contains("ErrorResponse"),
             "Should have ErrorResponse schema"
+        );
+    }
+
+    #[test]
+    fn generate_openapi_spec_files() {
+        let openapi = ApiDoc::openapi();
+        let json = openapi
+            .to_pretty_json()
+            .expect("Failed to serialize OpenAPI JSON");
+        let yaml = serde_yaml::to_string(&openapi).expect("Failed to serialize OpenAPI YAML");
+
+        // Write to docs/ relative to workspace root
+        let docs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("docs");
+        std::fs::create_dir_all(&docs_dir).expect("Failed to create docs dir");
+
+        std::fs::write(docs_dir.join("openapi.json"), &json).expect("Failed to write openapi.json");
+        std::fs::write(docs_dir.join("openapi.yaml"), &yaml).expect("Failed to write openapi.yaml");
+
+        // Verify key endpoints are present
+        assert!(
+            json.contains("sparse"),
+            "OpenAPI spec should contain sparse endpoints"
+        );
+        assert!(
+            json.contains("/graph/edges"),
+            "Should contain graph edge endpoints"
+        );
+        assert!(
+            json.contains("/graph/traverse"),
+            "Should contain graph traverse endpoint"
+        );
+        assert!(
+            json.contains("/stream/insert"),
+            "Should contain stream insert endpoint"
+        );
+        assert!(
+            json.contains("/match"),
+            "Should contain match query endpoint"
+        );
+        assert!(
+            json.contains("/search/multi"),
+            "Should contain multi-query search endpoint"
         );
     }
 
