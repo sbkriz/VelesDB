@@ -524,12 +524,12 @@ impl VectorCollection {
     /// Sends a point into the streaming ingestion channel.
     ///
     /// Returns `Ok(())` on success (202 semantics). Returns
-    /// [`BackpressureError::BufferFull`] when the channel is at capacity, or
-    /// [`BackpressureError::NotConfigured`] if streaming is not active.
+    /// `BackpressureError::BufferFull` when the channel is at capacity, or
+    /// `BackpressureError::NotConfigured` if streaming is not active.
     ///
     /// # Errors
     ///
-    /// Returns [`BackpressureError`] on buffer-full or not-configured.
+    /// Returns `BackpressureError` on buffer-full or not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert(
         &self,

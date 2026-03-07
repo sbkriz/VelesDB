@@ -334,7 +334,7 @@ pub fn wal_path_for_name(dir: &Path, name: &str) -> std::path::PathBuf {
 
 /// Compacts the in-memory index to disk using the default (unprefixed) file names.
 ///
-/// Delegates to [`compact_with_prefix`] with prefix `"sparse"`.
+/// Delegates to `compact_with_prefix` with prefix `"sparse"`.
 ///
 /// # Errors
 ///
@@ -451,7 +451,7 @@ fn compact_with_prefix(dir: &Path, prefix: &str, index: &SparseInvertedIndex) ->
 
 /// Loads a sparse index from disk using default (unprefixed) file names.
 ///
-/// Delegates to [`load_from_disk_with_prefix`] with prefix `"sparse"`.
+/// Delegates to `load_from_disk_with_prefix` with prefix `"sparse"`.
 ///
 /// # Errors
 ///

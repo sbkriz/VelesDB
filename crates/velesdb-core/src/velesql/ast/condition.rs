@@ -33,7 +33,7 @@ pub enum Condition {
     IsNull(IsNullCondition),
     /// Full-text search: column MATCH 'query'
     Match(MatchCondition),
-    /// Graph match predicate inside WHERE: MATCH (a)-[:REL]->(b)
+    /// Graph match predicate inside WHERE: `MATCH (a)-[:REL]->(b)`
     GraphMatch(GraphMatchPredicate),
     /// Logical AND
     And(Box<Condition>, Box<Condition>),

@@ -137,7 +137,7 @@ impl QueryPlanner {
             .map_or(ExecutionStrategy::Parallel, |(strategy, _)| strategy)
     }
 
-    /// Like [`choose_strategy_with_cbo`] but also returns the CBO-computed over-fetch factor.
+    /// Like `choose_strategy_with_cbo` but also returns the CBO-computed over-fetch factor.
     ///
     /// Returns `(strategy, over_fetch)` where `over_fetch` is a multiplier for `k` when
     /// doing vector-first search with a selective metadata filter:

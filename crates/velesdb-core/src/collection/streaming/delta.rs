@@ -7,7 +7,7 @@
 //!
 //! # State machine
 //!
-//! The buffer transitions through three states encoded in [`DeltaBuffer::state`]:
+//! The buffer transitions through three states encoded in the internal `state` field:
 //!
 //! ```text
 //! INACTIVE (0) --activate()--> ACTIVE (1) --deactivate_and_drain()--> DRAINING (2) --> INACTIVE (0)

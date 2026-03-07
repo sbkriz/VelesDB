@@ -160,7 +160,13 @@ Plans:
   2. Every public type and function in `velesdb-core` has a rustdoc comment — `cargo doc --no-deps` produces zero "missing documentation" warnings for public items
   3. The OpenAPI spec includes all new v1.5 endpoints (sparse upsert, sparse search, stream insert) and passes the OpenAPI round-trip CI check
   4. The migration guide covers all breaking changes: `QuantizationConfig` wire format, VelesQL `SPARSE_NEAR` syntax, bincode -> postcard on-disk format
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — README v1.5 update + CHANGELOG completion (DOC-01, DOC-06)
+- [ ] 09-02-PLAN.md — Rustdoc link fixes + OpenAPI spec generation (DOC-02, DOC-03)
+- [ ] 09-03-PLAN.md — Migration guide + VelesQL spec + guides updates (DOC-04)
+- [ ] 09-04-PLAN.md — Benchmarks v1.5 with real Criterion numbers (DOC-05)
 
 ### Phase 10: Release Readiness
 **Goal**: VelesDB v1.5.0 is published across all package registries with validated cross-platform artifacts and an automated CI release matrix that prevents broken publishes
@@ -188,5 +194,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 6. Query Plan Cache | 2/2 | Complete   | 2026-03-07 |
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
 | 8. SDK Parity | 3/4 | In Progress|  |
-| 9. Documentation | 0/TBD | Not started | - |
+| 9. Documentation | 0/4 | Not started | - |
 | 10. Release Readiness | 0/TBD | Not started | - |
