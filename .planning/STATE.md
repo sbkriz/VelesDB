@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-stopped_at: Completed 09-04-PLAN.md
-last_updated: "2026-03-07T18:19:02.788Z"
-last_activity: 2026-03-07 — Phase 09 Plan 04 complete (v1.5 benchmarks with PQ, sparse, hybrid)
+status: in-progress
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-03-07T23:16:02Z"
+last_activity: 2026-03-08 — Phase 10 Plan 01 complete (version bump 1.4.5 to 1.5.0 + publish guards)
 progress:
   total_phases: 10
   completed_phases: 9
-  total_plans: 31
-  completed_plans: 31
+  total_plans: 32
+  completed_plans: 32
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 9 — Documentation (in progress)
+**Current focus:** Phase 10 — Release Readiness (in progress)
 
 ## Current Position
 
-Phase: 9 of 10 (Documentation) -- IN PROGRESS
-Plan: 4 of 5 in current phase (4 complete)
-Status: Phase 09 Plan 04 complete -- v1.5 benchmarks
-Last activity: 2026-03-07 — Phase 09 Plan 04 complete (v1.5 benchmarks with PQ, sparse, hybrid)
+Phase: 10 of 10 (Release Readiness) -- IN PROGRESS
+Plan: 1 of ? in current phase (1 complete)
+Status: Phase 10 Plan 01 complete -- version bump 1.5.0 + publish guards
+Last activity: 2026-03-08 — Phase 10 Plan 01 complete (version bump 1.4.5 to 1.5.0 + publish guards)
 
-Progress: [██████████] 100% (29/32 plans in phases 1-9 complete)
+Progress: [██████████] 100% (32/32 plans complete)
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Progress: [██████████] 100% (29/32 plans in phases 1-9 compl
 | Phase 09 P02 | 7 min | 2 tasks | 15 files |
 | Phase 09 P03 | 6 | 2 tasks | 4 files |
 | Phase 09 P04 | 17 min | 1 tasks | 1 files |
+| Phase 10 P01 | 3 min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -177,6 +178,9 @@ Recent decisions affecting current work:
 - [09-04]: Hybrid search section uses estimated latency from component benchmarks (no dedicated hybrid bench)
 - [09-04]: PQ recall@10 of 30.6% on 128D/5K reported as-is (expected for standard PQ without OPQ)
 - [09-02]: OpenAPI spec regeneration via cargo test generate_openapi_spec_files pattern
+- [10-01]: Inter-crate deps use workspace = true inheritance, no explicit version in crate Cargo.toml files
+- [10-01]: Downstream crate dry-run fails expected (velesdb-core 1.5.0 not yet on crates.io), resolves during ordered publish
+- [10-01]: publish = false on velesdb-python and velesdb-wasm to prevent accidental crates.io publish
 
 ### Pending Todos
 
@@ -190,7 +194,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T17:34:31Z
-Stopped at: Completed 09-04-PLAN.md
+Last session: 2026-03-07T23:16:02Z
+Stopped at: Completed 10-01-PLAN.md
 Resume file: None
-Next action: Proceed to Phase 09 Plan 05 (final docs plan)
+Next action: Proceed to Phase 10 Plan 02

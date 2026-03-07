@@ -73,11 +73,11 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 
 ### Release (REL)
 
-- [ ] **REL-01**: Tous crates versionnes `1.5.0`, publies sur crates.io dans l'ordre des dependances (velesdb-core en premier)
+- [x] **REL-01**: Tous crates versionnes `1.5.0`, publies sur crates.io dans l'ordre des dependances (velesdb-core en premier)
 - [ ] **REL-02**: PyPI — wheels cross-platform via maturin CI matrix (linux-x86_64, linux-aarch64, macos-arm64, windows-x86_64)
 - [ ] **REL-03**: npm — `@wiscale/velesdb` et `@wiscale/velesdb-wasm` publies avec version 1.5.0
 - [ ] **REL-04**: GitHub Release — notes de release structurees + artefacts binaires (Linux, macOS ARM, macOS Intel, Windows)
-- [ ] **REL-05**: CI release matrix — validation cross-platform automatique avant toute publication
+- [x] **REL-05**: CI release matrix — validation cross-platform automatique avant toute publication
 
 ## v2 Requirements
 
@@ -159,11 +159,11 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | DOC-04 | Phase 9: Documentation | Complete |
 | DOC-05 | Phase 9: Documentation | Complete |
 | DOC-06 | Phase 9: Documentation | Complete |
-| REL-01 | Phase 10: Release Readiness | Pending |
+| REL-01 | Phase 10: Release Readiness | Complete |
 | REL-02 | Phase 10: Release Readiness | Pending |
 | REL-03 | Phase 10: Release Readiness | Pending |
 | REL-04 | Phase 10: Release Readiness | Pending |
-| REL-05 | Phase 10: Release Readiness | Pending |
+| REL-05 | Phase 10: Release Readiness | Complete |
 
 **Coverage:**
 - v1 requirements: 48 total
