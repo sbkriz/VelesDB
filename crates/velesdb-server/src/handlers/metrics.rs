@@ -75,52 +75,74 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
     let cache_metrics = state.db.plan_cache().metrics();
     let cache_stats = state.db.plan_cache().stats();
 
-    let _ = writeln!(
+    if writeln!(
         output,
         "# HELP velesdb_plan_cache_hits_total Plan cache hits"
-    );
-    let _ = writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter");
-    let _ = writeln!(
-        output,
-        "velesdb_plan_cache_hits_total {}",
-        cache_metrics.hits()
-    );
-    let _ = writeln!(output);
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_hits_total {}",
+            cache_metrics.hits()
+        )
+        .is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
 
-    let _ = writeln!(
+    if writeln!(
         output,
         "# HELP velesdb_plan_cache_misses_total Plan cache misses"
-    );
-    let _ = writeln!(output, "# TYPE velesdb_plan_cache_misses_total counter");
-    let _ = writeln!(
-        output,
-        "velesdb_plan_cache_misses_total {}",
-        cache_metrics.misses()
-    );
-    let _ = writeln!(output);
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_misses_total counter").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_misses_total {}",
+            cache_metrics.misses()
+        )
+        .is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
 
-    let _ = writeln!(
+    if writeln!(
         output,
         "# HELP velesdb_plan_cache_size Current number of cached plans"
-    );
-    let _ = writeln!(output, "# TYPE velesdb_plan_cache_size gauge");
-    let _ = writeln!(
-        output,
-        "velesdb_plan_cache_size {}",
-        cache_stats.l1_size + cache_stats.l2_size
-    );
-    let _ = writeln!(output);
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_size gauge").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_size {}",
+            cache_stats.l1_size + cache_stats.l2_size
+        )
+        .is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
 
-    let _ = writeln!(
+    if writeln!(
         output,
         "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate"
-    );
-    let _ = writeln!(output, "# TYPE velesdb_plan_cache_hit_rate gauge");
-    let _ = writeln!(
-        output,
-        "velesdb_plan_cache_hit_rate {:.4}",
-        cache_metrics.hit_rate()
-    );
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_hit_rate gauge").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_hit_rate {:.4}",
+            cache_metrics.hit_rate()
+        )
+        .is_err()
+        // M-7: trailing blank line for Prometheus text format conformance.
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
 
     (
         StatusCode::OK,
