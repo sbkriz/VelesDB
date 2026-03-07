@@ -68,7 +68,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 - [x] **DOC-02**: rustdoc complet API publique `velesdb-core` — tous les types/fonctions publics ont doc comment
 - [x] **DOC-03**: OpenAPI spec v1.5 — nouveaux endpoints sparse + streaming documentes, generee depuis annotations
 - [x] **DOC-04**: Guide migration v1.4 -> v1.5 — breaking changes `QuantizationConfig`, VelesQL `SPARSE`, bincode wire-format
-- [ ] **DOC-05**: `BENCHMARKS.md` v1.5 — resultats reels PQ recall@k, sparse search latency, streaming throughput
+- [x] **DOC-05**: `BENCHMARKS.md` v1.5 — resultats reels PQ recall@k, sparse search latency, streaming throughput
 - [x] **DOC-06**: `CHANGELOG.md` v1.5 — complet avec toutes les features, fixes, breaking changes
 
 ### Release (REL)
@@ -157,7 +157,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | DOC-02 | Phase 9: Documentation | Complete |
 | DOC-03 | Phase 9: Documentation | Complete |
 | DOC-04 | Phase 9: Documentation | Complete |
-| DOC-05 | Phase 9: Documentation | Pending |
+| DOC-05 | Phase 9: Documentation | Complete |
 | DOC-06 | Phase 9: Documentation | Complete |
 | REL-01 | Phase 10: Release Readiness | Pending |
 | REL-02 | Phase 10: Release Readiness | Pending |

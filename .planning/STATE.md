@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 09-02-PLAN.md
-last_updated: "2026-03-07T17:25:12.454Z"
-last_activity: 2026-03-07 — Phase 09 Plan 01 complete (README + CHANGELOG v1.5)
+stopped_at: Completed 09-04-PLAN.md
+last_updated: "2026-03-07T17:34:31Z"
+last_activity: 2026-03-07 — Phase 09 Plan 04 complete (v1.5 benchmarks with PQ, sparse, hybrid)
 progress:
   total_phases: 10
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 31
-  completed_plans: 29
+  completed_plans: 31
   percent: 100
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 9 of 10 (Documentation) -- IN PROGRESS
-Plan: 2 of 5 in current phase (3 complete)
-Status: Phase 09 Plan 02 complete -- Rustdoc + OpenAPI spec
-Last activity: 2026-03-07 — Phase 09 Plan 02 complete (zero-warning rustdoc + OpenAPI 3.0 spec)
+Plan: 4 of 5 in current phase (4 complete)
+Status: Phase 09 Plan 04 complete -- v1.5 benchmarks
+Last activity: 2026-03-07 — Phase 09 Plan 04 complete (v1.5 benchmarks with PQ, sparse, hybrid)
 
 Progress: [██████████] 100% (29/32 plans in phases 1-9 complete)
 
@@ -74,6 +74,7 @@ Progress: [██████████] 100% (29/32 plans in phases 1-9 compl
 | Phase 09 P01 | 4 min | 2 tasks | 2 files |
 | Phase 09 P02 | 7 min | 2 tasks | 15 files |
 | Phase 09 P03 | 6 | 2 tasks | 4 files |
+| Phase 09 P04 | 17 min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -172,6 +173,9 @@ Recent decisions affecting current work:
 - [Phase 09]: VelesQL spec bumped to v2.2.0 with SPARSE_NEAR, FUSE BY, TRAIN QUANTIZER grammar
 - [09-02]: Backtick code formatting for private item references in rustdoc (avoids broken intra-doc links without losing readability)
 - [09-02]: Graph handler submodules elevated to pub for utoipa paths macro resolution
+- [09-04]: Preserved v1.4.1 SIMD kernel numbers since SIMD layer unchanged in v1.5
+- [09-04]: Hybrid search section uses estimated latency from component benchmarks (no dedicated hybrid bench)
+- [09-04]: PQ recall@10 of 30.6% on 128D/5K reported as-is (expected for standard PQ without OPQ)
 - [09-02]: OpenAPI spec regeneration via cargo test generate_openapi_spec_files pattern
 
 ### Pending Todos
@@ -186,7 +190,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T17:24:30Z
-Stopped at: Completed 09-02-PLAN.md
+Last session: 2026-03-07T17:34:31Z
+Stopped at: Completed 09-04-PLAN.md
 Resume file: None
-Next action: Proceed to Phase 09 remaining plans (04, 05)
+Next action: Proceed to Phase 09 Plan 05 (final docs plan)
