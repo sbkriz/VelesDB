@@ -464,6 +464,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::cast_possible_truncation)]
     async fn test_stream_searchable_immediately() {
         let (_dir, coll) = test_collection(4);
         let config = StreamingConfig {
@@ -504,6 +505,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::cast_precision_loss)]
     async fn test_stream_delta_rebuild_no_data_loss() {
         let (_dir, coll) = test_collection(4);
         // Pre-insert some points via direct upsert (these go into HNSW)

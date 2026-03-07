@@ -74,6 +74,25 @@ impl Collection {
     ///
     /// When the delta buffer is inactive (no rebuild in progress), this is
     /// a no-op that returns results unchanged.
+    #[cfg(feature = "persistence")]
+    #[inline]
+    pub(crate) fn merge_delta(
+        &self,
+        results: Vec<(u64, f32)>,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Vec<(u64, f32)> {
+        crate::collection::streaming::merge_with_delta(
+            results,
+            &self.delta_buffer,
+            query,
+            k,
+            metric,
+        )
+    }
+
+    #[cfg(not(feature = "persistence"))]
     #[inline]
     pub(crate) fn merge_delta(
         &self,
@@ -82,20 +101,7 @@ impl Collection {
         _k: usize,
         _metric: DistanceMetric,
     ) -> Vec<(u64, f32)> {
-        #[cfg(feature = "persistence")]
-        {
-            crate::collection::streaming::merge_with_delta(
-                results,
-                &self.delta_buffer,
-                _query,
-                _k,
-                _metric,
-            )
-        }
-        #[cfg(not(feature = "persistence"))]
-        {
-            results
-        }
+        results
     }
 }
 
