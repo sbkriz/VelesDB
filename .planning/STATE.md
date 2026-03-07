@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-03-07T13:58:29Z"
-last_activity: 2026-03-07 — Phase 07 Plan 01 complete (StreamIngester + DeltaBuffer stub)
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-03-07T14:20:13Z"
+last_activity: 2026-03-07 — Phase 07 complete (REST endpoint + WASM verification)
 progress:
   total_phases: 10
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 23
-  completed_plans: 21
-  percent: 63
+  completed_plans: 23
+  percent: 70
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 7 — Streaming Inserts (Plan 01 complete, 2 remaining)
+**Current focus:** Phase 7 — Streaming Inserts (all 3 plans complete)
 
 ## Current Position
 
-Phase: 7 of 10 (Streaming Inserts) — executing
-Plan: 1 of 3 in current phase
-Status: Plan 01 complete — StreamIngester + DeltaBuffer stub wired into Collection
-Last activity: 2026-03-07 — Phase 07 Plan 01 complete (StreamIngester + DeltaBuffer stub)
+Phase: 7 of 10 (Streaming Inserts) — complete
+Plan: 3 of 3 in current phase
+Status: Phase 07 complete — REST endpoint + WASM verification done
+Last activity: 2026-03-07 — Phase 07 Plan 03 complete (REST endpoint + WASM verification)
 
-Progress: [██████░░░░] 63% (21/23 plans complete)
+Progress: [███████░░░] 70% (23/23 plans in phases 1-7 complete)
 
 ## Performance Metrics
 
@@ -65,6 +65,8 @@ Progress: [██████░░░░] 63% (21/23 plans complete)
 | Phase 06 P01 | 23 min | 2 tasks | 9 files |
 | Phase 06 P02 | 17 min | 2 tasks | 7 files |
 | Phase 07 P01 | 14 min | 2 tasks | 6 files |
+| Phase 07 P02 | 18 min | 2 tasks | 7 files |
+| Phase 07 P03 | 18 min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -139,6 +141,8 @@ Recent decisions affecting current work:
 - [07-01]: BackpressureError maps both Full and Closed channel states to BufferFull
 - [07-01]: Lock order position 10 for delta_buffer (after sparse_indexes at 9)
 - [07-01]: allow(dead_code) on stream_ingester/delta_buffer fields (wired in Plan 02)
+- [07-03]: plan_cache gated behind persistence feature (QueryPlan depends on persistence-gated velesql types)
+- [07-03]: merge_delta elevated to pub(crate) for cross-module access (graph_api.rs needs it)
 
 ### Pending Todos
 
@@ -152,7 +156,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T13:58:29Z
-Stopped at: Completed 07-01-PLAN.md
-Resume file: .planning/phases/07-streaming-inserts/07-01-SUMMARY.md
-Next action: Execute 07-02-PLAN.md (DeltaBuffer search integration)
+Last session: 2026-03-07T14:20:13Z
+Stopped at: Completed 07-03-PLAN.md
+Resume file: .planning/phases/07-streaming-inserts/07-03-SUMMARY.md
+Next action: Phase 07 complete — proceed to Phase 08 (SDK)
