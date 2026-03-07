@@ -1,327 +1,256 @@
-# 📊 VelesDB Performance Benchmarks
+# VelesDB Performance Benchmarks
 
-*Last updated: February 2, 2026 (v1.4.1 - SIMD Tiered Dispatch + Inline Optimization EPIC-052/077/081)*
+*Last updated: March 7, 2026 (v1.5 -- PQ Quantization, Sparse Search, Hybrid Search)*
 
 ---
 
-## 🚀 SIMD Performance Results (Post-EPIC-052)
+## Test Environment
 
-### Hardware Configuration
-- **CPU**: Intel Core i9-14900K (24 cores, 32 threads, AVX2 native)
-- **RAM**: 64GB DDR5
-- **GPU**: NVIDIA RTX 4090 (for GPU benchmarks)
-- **OS**: Windows 11 (Power Mode: "Performances élevées")
-- **Rust**: 1.85, `--release`, `target-cpu=native`
-- **Tests**: 2411 passing, 82.30% coverage
+| Parameter | Value |
+|-----------|-------|
+| **CPU** | Intel Core i9-14900KF (24 cores, 32 threads, AVX2) |
+| **RAM** | 64 GB DDR5 |
+| **OS** | Microsoft Windows 11 Professionnel |
+| **Rust** | rustc 1.92.0 (ded5c06cf 2025-12-08) |
+| **Build** | `--release`, `target-cpu=native`, LTO thin, codegen-units=1 |
+| **Framework** | Criterion.rs with `--noplot` |
 
-### SIMD Kernel Benchmarks (LTO thin, codegen-units=1)
+Hardware configuration captured in `benchmarks/machine-config.json`.
 
-| Operation | 128D | 384D | **768D** | **1536D** | **3072D** |
-|-----------|------|------|----------|-----------|-----------|
-| **dot_product** | 4.05ns | 9.71ns | **18.68ns** | **32.91ns** | **70.73ns** |
-| **euclidean** | 8.59ns | 11.56ns | **20.88ns** | 43.80ns | 81.69ns |
-| **cosine** | 7.87ns | 19.67ns | **37.26ns** | 58.09ns | 110.13ns |
-| **hamming** | 6.25ns | 9.78ns | **18.99ns** | 38.35ns | 82.01ns |
-| **jaccard** | 5.00ns | 11.61ns | **22.81ns** | 47.72ns | 93.63ns |
+---
 
-### 📈 Throughput Analysis
+## 1. Dense Search Baseline (SIMD Kernels)
+
+SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via `simd_dispatch`. These numbers are unchanged from v1.4.1 (EPIC-052/077/081) as the SIMD layer was not modified in v1.5.
+
+### SIMD Kernel Latency
+
+| Operation | 128D | 384D | 768D | 1536D | 3072D |
+|-----------|------|------|------|-------|-------|
+| **Dot Product** | 4.05 ns | 9.71 ns | 18.68 ns | 32.91 ns | 70.73 ns |
+| **Euclidean** | 8.59 ns | 11.56 ns | 20.88 ns | 43.80 ns | 81.69 ns |
+| **Cosine** | 7.87 ns | 19.67 ns | 37.26 ns | 58.09 ns | 110.13 ns |
+| **Hamming** | 6.25 ns | 9.78 ns | 18.99 ns | 38.35 ns | 82.01 ns |
+| **Jaccard** | 5.00 ns | 11.61 ns | 22.81 ns | 47.72 ns | 93.63 ns |
+
+*Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
+
+### Cosine Similarity (v1.5 Fresh Run)
+
+Confirmed v1.5 cosine performance via `simd_benchmark` (March 2026):
+
+| Dimension | Native Kernel | Engine Dispatch | Overhead |
+|-----------|---------------|-----------------|----------|
+| 384D | 18.0 ns | 18.8 ns | 4.6% |
+| 768D | 35.1 ns | 35.6 ns | 1.4% |
+| 1536D | 56.0 ns | 63.3 ns | 13.0% |
+
+Engine dispatch overhead is minimal at typical embedding dimensions (384D--768D).
+
+### Throughput
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 18.68ns | **41.1 Gelem/s** |
-| 1536D | 32.91ns | **46.6 Gelem/s** |
-| 3072D | 70.73ns | **43.4 Gelem/s** |
+| 768D | 18.68 ns | 41.1 Gelem/s |
+| 1536D | 32.91 ns | 46.6 Gelem/s |
+| 3072D | 70.73 ns | 43.4 Gelem/s |
 
-### 🎯 Key Achievements
+### Batch Distance Computation
 
-#### ✅ Major Performance Gains (EPIC-052/077/081)
-- **Dot Product**: 18.5ns @ 768D → **41.6 Gelem/s**
-- **Cosine tiered dispatch**: 2-acc (64-1023D) + 4-acc (>1024D) pour éviter register pressure
-- **Jaccard**: 22.8ns @ 768D (avant 28.1ns)
-- **Hamming**: 19.0ns @ 768D (avant 36.2ns)
-
-#### ✅ Inline Optimization (EPIC-081)
-- **`#[inline(always)]`** on hot-path functions: `dot_product_native`, `cosine_similarity_native`, `squared_l2_native`
-- **Cosine 768D**: -16.6% improvement (48ns → 27ns)
-- **Cosine 1536D**: -6.2% improvement
-- **Dot 3072D**: -10% improvement
+| Benchmark | Latency | Per-Vector |
+|-----------|---------|------------|
+| Native 1000x768D | 38.3 us | 38.3 ns |
+| Engine 1000x768D | 38.8 us | 38.8 ns |
 
 ---
 
-## 🔄 HNSW Insert Performance
+## 2. PQ Recall and Latency
 
-| Operation | Vectors | Time | Throughput |
-|-----------|---------|------|------------|
-| **Sequential Insert** | 1,000 × 768D | 614ms | **1,628 vec/s** |
-| **Parallel Insert** | 1,000 × 768D | 443ms | **2,259 vec/s** |
+Product Quantization (PQ) trades recall for memory compression and faster approximate search. Benchmarked with Criterion.
 
-**Parallel insert** provides **38% speedup** over sequential.
+### PQ Recall (pq_recall_benchmark)
+
+**Setup:** 5,000 vectors, 128D, L2 distance, 10 clusters, 50 queries, k=10.
+
+| Mode | Recall@10 | Search Latency (50 queries) | Per-Query |
+|------|-----------|----------------------------|-----------|
+| **Full Precision** | 87.6% | 19.1 ms | 382 us |
+| **PQ (m=auto, rescore)** | 30.6% | 30.6 ms | 612 us |
+
+Notes:
+- Full-precision recall is 87.6% (not 100%) because HNSW is approximate search.
+- PQ recall@10 of 30.6% on 128D/5K vectors is expected for standard PQ without OPQ -- low dimensionality limits subspace quality.
+- Rescore oversampling (default 4x) is applied.
+
+### PQ vs SQ8 vs Full HNSW Latency (pq_hnsw_benchmark)
+
+**Setup:** 2,000 vectors, 64D, L2 distance, top-20 search.
+
+| Storage Mode | Search Latency | Recall@50 | Compression |
+|--------------|---------------|-----------|-------------|
+| **Full Precision** | 24.9 us | baseline | 1x |
+| **SQ8** | 25.2 us | 100% | 4x |
+| **PQ** | 257.6 us | 68.0% | ~16-32x |
+
+Key findings:
+- **SQ8 is the best general-purpose mode**: zero recall loss with 4x compression and identical latency.
+- PQ search is slower due to ADC (Asymmetric Distance Computation) table lookups, but delivers 16--32x compression for memory-constrained deployments.
+- PQ recall improves significantly with higher dimensionality (256D+) and OPQ rotation.
+
+*Run `cargo bench -p velesdb-core --bench pq_recall_benchmark -- --noplot` to regenerate recall numbers.*
+*Run `cargo bench -p velesdb-core --bench pq_hnsw_benchmark -- --noplot` to regenerate latency comparison.*
 
 ---
 
-## 🌐 Competitive Analysis (State of the Art 2025)
+## 3. Sparse Search Latency
+
+Sparse vector search uses an inverted index with MaxScore optimization for early termination.
+
+### Sparse Search (sparse_benchmark)
+
+**Setup:** 10,000 documents, BM25-style sparse vectors, Criterion.
+
+| Benchmark | Latency (estimate) | Notes |
+|-----------|--------------------|-------|
+| **Insert 10K sequential** | 69.3 ms | 6.93 us/doc |
+| **Insert 10K parallel (4 threads)** | 159.4 ms | Concurrent, includes contention |
+| **Search top-10, 10K corpus** | 757 us | MaxScore pruning active |
+| **Search top-100, 10K corpus** | 762 us | Minimal cost for larger k |
+| **Concurrent 16-thread (8 insert + 8 search)** | 189.3 ms | Mixed read/write workload |
+
+Latency percentiles are not separately measured by Criterion (which reports confidence intervals). The estimates above represent the mean of the sampling distribution.
+
+| Metric | Value |
+|--------|-------|
+| **MaxScore threshold** | 30% coverage (total postings > 0.3 * doc_count * query_nnz) |
+| **Accumulator strategy** | Dense array up to 10M doc IDs, FxHashMap above |
+| **Linear scan fallback** | When coverage exceeds threshold |
+
+*Run `cargo bench -p velesdb-core --bench sparse_benchmark -- --noplot` to regenerate.*
+
+---
+
+## 4. Hybrid Search
+
+Hybrid search combines dense vector similarity with sparse keyword matching using Reciprocal Rank Fusion (RRF, k=60) or Relative Score Fusion (RSF).
+
+No dedicated hybrid benchmark suite exists yet. Performance can be estimated from the individual components:
+
+| Component | Latency (10K corpus) | Source |
+|-----------|---------------------|--------|
+| Dense HNSW search (k=10, 768D) | ~57 us | hnsw_benchmark |
+| Sparse search (top-10, 10K) | ~757 us | sparse_benchmark |
+| RRF fusion overhead | negligible (score merging) | -- |
+| **Estimated hybrid total** | **~815 us** | Dense + Sparse + fusion |
+
+The RRF fusion step is a simple score merge with no distance computation, so hybrid latency is dominated by the sparse search branch. For workloads where sparse search is the bottleneck, the MaxScore optimization provides early termination on high-selectivity queries.
+
+To run a hybrid search benchmark when available:
+```bash
+cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
+```
+
+---
+
+## 5. HNSW Vector Search
+
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **Search k=10** (10K/768D) | 57 us | 9.2K qps |
+| **Search k=50** | 90 us | -- |
+| **Search k=100** | 174 us | -- |
+| **Insert 1K x 768D** | 696 ms | 1.4K elem/s |
+| **Parallel Insert 1K x 768D** | 443 ms | 2,259 vec/s |
+
+### HNSW Recall Profiles (10K/128D)
+
+| Profile | Recall@10 | Latency P50 |
+|---------|-----------|-------------|
+| Fast (ef=64) | 92.2% | 36 us |
+| Balanced (ef=128) | 98.8% | 57 us |
+| Accurate (ef=256) | 100.0% | 130 us |
+| Perfect (ef=2048) | 100% | 200 us |
+
+Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+
+---
+
+## 6. ColumnStore Filtering
+
+| Scale | ColumnStore | JSON Scan | Speedup |
+|-------|-------------|-----------|---------|
+| 10K rows | 8.6 us | 397 us | 46x |
+| 100K rows | 88 us | 3.9 ms | 44x |
+| 500K rows | 136 us | 18.6 ms | 137x |
+
+---
+
+## 7. VelesQL Parser
+
+| Mode | Latency | Throughput |
+|------|---------|------------|
+| Simple Parse | 1.4 us | 707K qps |
+| Vector Query | 2.0 us | 490K qps |
+| Complex Query | 7.9 us | 122K qps |
+| **Cache Hit** | **84 ns** | **12M qps** |
+| EXPLAIN Plan | 61 ns | 16M qps |
+
+---
+
+## 8. Graph (EdgeStore)
+
+| Operation | Latency |
+|-----------|---------|
+| **get_neighbors (degree 10)** | 155 ns |
+| **get_neighbors (degree 50)** | 508 ns |
+| **add_edge** | 278 ns |
+| **BFS depth 3** | 3.6 us |
+| **Parallel reads (8 threads)** | 346 us |
+
+---
+
+## 9. Competitive Analysis
 
 ### SIMD Distance Kernels
 
 | Library | Dot Product 1536D | Notes |
 |---------|-------------------|-------|
-| **VelesDB** | **32ns** | AVX2 4-acc, native Rust |
-| SimSIMD | ~25-30ns | AVX-512, C library |
-| NumPy | ~200-400ns | BLAS backend |
-| SciPy | ~300-500ns | No SIMD optimization |
-
-**VelesDB** is **competitive with SimSIMD** and **10-15x faster than NumPy/SciPy**.
+| **VelesDB** | **32 ns** | AVX2 4-acc, native Rust |
+| SimSIMD | ~25-30 ns | AVX-512, C library |
+| NumPy | ~200-400 ns | BLAS backend |
+| SciPy | ~300-500 ns | No SIMD optimization |
 
 ### Vector Database Search Latency
 
 | Database | Search Latency | Scale | Notes |
 |----------|---------------|-------|-------|
-| **VelesDB** | **< 1ms** | 10K | Local, in-memory HNSW |
-| Milvus | < 10ms p50 | 1M+ | Distributed |
-| Qdrant | 20-50ms | 1M+ | Cloud/distributed |
-| pgvector | 45-100ms | 100K+ | PostgreSQL extension |
-| Redis | ~5ms | 1M+ | In-memory |
-
-**VelesDB excels for local/embedded use cases** with sub-millisecond latency.
-
-### Insert Throughput
-
-| Database | Insert Rate | Notes |
-|----------|-------------|-------|
-| **VelesDB** | **2,259 vec/s** | Single machine, parallel |
-| Milvus | Highest indexing | Distributed, batch |
-| Qdrant | ~1,000 vec/s | Single node |
+| **VelesDB** | **< 1 ms** | 10K | Local, in-memory HNSW |
+| Milvus | < 10 ms p50 | 1M+ | Distributed |
+| Qdrant | 20-50 ms | 1M+ | Cloud/distributed |
+| pgvector | 45-100 ms | 100K+ | PostgreSQL extension |
+| Redis | ~5 ms | 1M+ | In-memory |
 
 ---
 
-## 🎯 VelesDB Positioning
-
-### ✅ Where VelesDB Excels
-1. **Local-first / Edge**: Sub-ms latency, no network overhead
-2. **Embedded**: 15MB binary, zero dependencies
-3. **SIMD Performance**: Competitive with state-of-the-art
-4. **Privacy**: Data never leaves device
-
-### 📈 Optimization Opportunities
-1. **Batch Insert**: Implement batch indexing for higher throughput
-2. **AVX-512**: Enable on supported hardware (i9-14900K has AVX2 only)
-3. **Quantization**: int8/int4 vectors for memory efficiency
-4. **GPU Acceleration**: CUDA/WebGPU for large-scale search
-
----
-
-## 🚀 v1.2.0 Headline
-
-| Metric | Baseline | VelesDB | Winner |
-|--------|----------|---------|--------|
-| **SIMD Dot Product (1536D)** | 280ns (Naive) | **110ns** | **VelesDB 2.5x** ✅ |
-| **HNSW Search (10K/768D)** | ~50ms (pgvector) | **57µs** | **VelesDB 877x** ✅ |
-| **ColumnStore Filter (100K)** | 3.9ms (JSON) | **88µs** | **VelesDB 44x** ✅ |
-| **VelesQL Parse** | N/A | **84ns** (cache) | **VelesDB** ✅ |
-| **Recall@10** | 100% | **100%** | **VelesDB Perfect** ✅ |
-
-### When to Choose VelesDB
-
-- ✅ **Ultra-low latency** — Microsecond-level search on local datasets
-- ✅ **Embedded/Desktop** — Native Rust integration with zero network overhead
-- ✅ **On-Prem/Edge** — Single binary, no dependencies
-- ✅ **WASM/Browser** — Client-side vector search capability
-
-### When to Choose pgvector
-
-- ✅ Existing PostgreSQL infrastructure
-- ✅ Need 100% recall
-
----
-
-## ⚡ SIMD Performance Summary (i9-14900K AVX2 4-acc)
-
-| Operation | 384D | 768D | 1536D | vs v1.4.0 |
-|-----------|------|------|-------|-----------|
-| **Dot Product** | **9.7ns** | **18.7ns** | **32.9ns** | **Baseline** |
-| **Euclidean** | 13.4ns | 20.9ns | 43.8ns | **Improved** |
-| **Cosine** | 19.7ns | 37.3ns | 58.1ns | **-13%** ✅ |
-
-### Stratégie Adaptative (EPIC-PERF-003) - Optimisée Feb 2026
-
-Le dispatch s'adapte automatiquement au CPU détecté avec des seuils optimisés basés sur la recherche state-of-the-art:
-
-| CPU Détecté | Implémentation | Seuils | Gain typique |
-|-------------|----------------|--------|--------------|
-| **AVX-512** (Xeon, serveurs) | 512-bit 4-acc | >= 512 éléments | 15-25% |
-| **AVX2** (Core 12th/13th/14th gen, Ryzen) | 256-bit 4-acc | >= 256 | 15-37% |
-| **AVX2** | 256-bit 2-acc | 64-255 | Baseline |
-| **AVX2 petits vecteurs** | 256-bit 1-acc | **16-63** | **Meilleur ratio overhead/perf** |
-| **AVX2 tiny** | Scalar | **< 16** | Évite overhead SIMD |
-| **ARM NEON** | 128-bit 1-acc | >= 4 | Baseline |
-
-**Optimisations implémentées:**
-- **Tail unrolling**: Remainder déroulé (4→2→1 éléments) pour éviter les boucles
-- **Warmup AVX-512**: 3 itérations avant mesure pour stabiliser la fréquence CPU
-- **Dispatch optimisé**: Scalar < 16 éléments (évite overhead SIMD setup)
-
-### EPIC-073 SIMD Pipeline Optimizations
-
-| Feature | Description | Performance |
-|---------|-------------|-------------|
-| **Multi-level Prefetch** | L1/L2/L3 cache hints | 10-30% cold cache improvement |
-| **Jaccard 4-way ILP** | Instruction-level parallelism | **2.3x** faster than baseline |
-| **Binary Jaccard POPCNT** | Hardware popcount | **10x** faster for u64 packed |
-| **Batch Dot Product** | M×N matrix computation | Amortized overhead |
-| **Batch Top-K** | Multi-query similarity | Cache reuse optimization |
-
----
-
-## 🔍 HNSW Vector Search
-
-| Operation | Latency | Throughput |
-|-----------|---------|------------|
-| **Search k=10** | 57µs | 9.2K qps |
-| **Search k=50** | 90µs | - |
-| **Search k=100** | 174µs | - |
-| **Insert 1K×768D** | 696ms | 1.4K elem/s |
-
----
-
-## 🔍 ColumnStore Filtering
-
-| Scale | ColumnStore | JSON | Speedup |
-|-------|-------------|------|---------|
-| 10K rows | 8.6µs | 397µs | **46x** |
-| 100K rows | 88µs | 3.9ms | **44x** |
-| 500K rows | 136µs | 18.6ms | **137x** |
-
----
-
-## 📝 VelesQL Parser
-
-| Mode | Latency | Throughput |
-|------|---------|------------|
-| Simple Parse | 1.4µs | 707K qps |
-| Vector Query | 2.0µs | 490K qps |
-| Complex Query | 7.9µs | 122K qps |
-| **Cache Hit** | **84ns** | **12M qps** |
-| EXPLAIN Plan | 61ns | 16M qps |
-
-```rust
-use velesdb_core::velesql::QueryCache;
-let cache = QueryCache::new(1000);
-let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
-```
-
----
-
-## 📈 HNSW Recall Profiles (10K/128D)
-
-| Profile | Recall@10 | Latency P50 | Change vs v1.0 |
-|---------|-----------|-------------|----------------|
-| Fast (ef=64) | 92.2% | **36µs** | 🆕 new |
-| Balanced (ef=128) | 98.8% | **57µs** | 🚀 **-80%** |
-| Accurate (ef=256) | 100.0% | **130µs** | 🚀 **-72%** |
-| **Perfect (ef=2048)** | **100%** | **200µs** | 🚀 **-92%** |
-
-> **Note**: Recall@10 ≥95% guaranteed for Balanced mode and above.
-> 
-> **v1.1.0 Performance Gains**: EPIC-CORE-003 optimizations (LRU Cache, Trigram Index, Lock-free structures) delivered **72-92% latency improvements** across all modes.
-
-### ⚠️ Benchmark Interpretation Note
-
-**Criterion benchmarks** measure **batch execution time** (100 queries total). To get **per-query latency**, divide by 100:
-
-| Mode | Criterion Output | Per-Query Latency | Calculation |
-|------|-----------------|-------------------|-------------|
-| Fast | 3.6ms | **36µs** | 3.6ms ÷ 100 |
-| Balanced | 5.7ms | **57µs** | 5.7ms ÷ 100 |
-| Accurate | 13ms | **130µs** | 13ms ÷ 100 |
-| Perfect | 20ms | **200µs** | 20ms ÷ 100 |
-
-When comparing with other vector databases or previous VelesDB versions, always use **per-query latency** for accurate comparison.
-
----
-
-## 🚀 Parallel Performance
-
-| Operation | Speedup (8 cores) |
-|-----------|------------------|
-| Batch Search | **19x** |
-| Batch Insert | **18x** |
-
----
-
-## 🎯 Performance Targets by Scale
+## 10. Performance Targets by Scale
 
 | Dataset Size | Search P99 | Recall@10 | Status |
 |--------------|------------|-----------|--------|
-| 10K vectors | **<1ms** | ≥98% | ✅ Achieved |
-| 100K vectors | **<5ms** | ≥95% | ✅ Achieved (96.1%) |
-| 1M vectors | **<50ms** | ≥95% | 🎯 Target |
-
-> Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+| 10K vectors | < 1 ms | >= 98% | Achieved |
+| 100K vectors | < 5 ms | >= 95% | Achieved (96.1%) |
+| 1M vectors | < 50 ms | >= 95% | Target |
 
 ---
 
-## 🆕 v0.8.12 Native HNSW Implementation
+## Methodology
 
-VelesDB now includes a **custom Native HNSW implementation** based on 2024-2026 research papers (Flash Method, VSAG Framework).
+- **Hardware**: See Test Environment section above
+- **Framework**: Criterion.rs (`--release`, `--noplot`)
+- **Concurrency**: Tests run with `--test-threads=1` for isolation
+- **Reproducibility**: Seeded RNG for synthetic data generation
+- **Reporting**: Criterion `estimate` value (center of confidence interval)
 
-### Native vs hnsw_rs Comparison
-
-*Benchmarked January 8, 2026 — 5,000 vectors, 128D, Euclidean distance*
-
-| Operation | Native HNSW | hnsw_rs | Improvement |
-|-----------|-------------|---------|-------------|
-| **Search (100 queries)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
-| **Parallel Insert (5k)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
-| **Recall** | ~99% | baseline | Parity ✓ |
-
-### Why Native HNSW?
-
-- **No external dependency** — Full control over graph construction and search
-- **SIMD-optimized distances** — Custom AVX2/SSE implementations
-- **Lock-free reads** — Concurrent search without blocking
-- **Future-ready** — Foundation for int8 quantized graph traversal
-
+All benchmarks can be reproduced with:
 ```bash
-# Enable Native HNSW
-cargo build --features native-hnsw
-
-# Run comparison benchmark
-cargo bench --bench hnsw_comparison_benchmark
+cargo bench -p velesdb-core --bench <benchmark_name> -- --noplot
 ```
-
-📖 Full guide: [docs/reference/NATIVE_HNSW.md](reference/NATIVE_HNSW.md)
-
----
-
-## 🔥 v0.8.5 Optimizations
-
-- **Unified VelesQL execution** — `Collection::execute_query()` for all components
-- **Batch search with filters** — Individual filters per query in batch operations
-- **Buffer reuse** — Thread-local buffer for brute-force search (~40% allocation reduction)
-- **Adaptive HNSW params** — `for_dataset_size()` and `million_scale()` APIs
-- **32-wide SIMD unrolling** — 4x f32x8 accumulators for maximum ILP
-- **Pre-normalized functions** — `cosine_similarity_normalized()` ~40% faster
-- **SIMD-accelerated HNSW** — AVX2/SSE via `wide` crate
-- **Parallel insertion** — Rayon-based graph construction
-- **CPU prefetch hints** — L2 cache warming
-- **GPU acceleration** — [Roadmap](GPU_ACCELERATION_ROADMAP.md) for batch operations
-
----
-
-## 🔗 Graph (EdgeStore)
-
-| Operation | Latency |
-|-----------|---------|
-| **get_neighbors (degree 10)** | 155ns |
-| **get_neighbors (degree 50)** | 508ns |
-| **add_edge** | 278ns |
-| **BFS depth 3** | 3.6µs |
-| **Parallel reads (8 threads)** | 346µs |
-
----
-
-## 🧪 Methodology
-
-- **Hardware**: 8-core CPU, 32GB RAM
-- **Environment**: Rust 1.85, `--release`, `target-cpu=native`
-- **Framework**: Criterion.rs
