@@ -243,6 +243,13 @@ pub struct Collection {
 
     /// Cached CBO statistics with TTL (avoids O(n) scan per query).
     pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
+
+    /// Monotonic write generation counter (CACHE-01).
+    ///
+    /// Incremented once per mutation batch (upsert, `upsert_bulk`, `upsert_metadata`, delete).
+    /// Used by `CompiledPlanCache` to invalidate cached query plans when collection data changes.
+    /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
+    pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Collection {
@@ -250,6 +257,15 @@ impl Collection {
     #[allow(dead_code)]
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.sparse_indexes
+    }
+
+    /// Returns the current write generation counter.
+    ///
+    /// The counter starts at 0 and increments once per mutation batch.
+    #[must_use]
+    pub(crate) fn write_generation(&self) -> u64 {
+        self.write_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Extracts all string values from a JSON payload for text indexing.

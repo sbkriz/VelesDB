@@ -163,6 +163,10 @@ impl Collection {
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
 
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -216,6 +220,10 @@ impl Collection {
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
+
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
@@ -305,6 +313,10 @@ impl Collection {
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
+
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(inserted)
     }
@@ -437,6 +449,10 @@ impl Collection {
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
+
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }

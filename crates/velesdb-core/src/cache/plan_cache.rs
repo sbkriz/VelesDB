@@ -123,16 +123,13 @@ impl CompiledPlanCache {
     /// Looks up a compiled plan by key, recording hit/miss.
     #[must_use]
     pub fn get(&self, key: &PlanKey) -> Option<Arc<CompiledPlan>> {
-        match self.cache.get(key) {
-            Some(plan) => {
-                self.metrics.record_hit();
-                plan.reuse_count.fetch_add(1, Ordering::Relaxed);
-                Some(plan)
-            }
-            None => {
-                self.metrics.record_miss();
-                None
-            }
+        if let Some(plan) = self.cache.get(key) {
+            self.metrics.record_hit();
+            plan.reuse_count.fetch_add(1, Ordering::Relaxed);
+            Some(plan)
+        } else {
+            self.metrics.record_miss();
+            None
         }
     }
 

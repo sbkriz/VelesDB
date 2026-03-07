@@ -101,6 +101,7 @@ impl Collection {
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         collection.save_config()?;
@@ -200,6 +201,7 @@ impl Collection {
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         collection.save_config()?;
@@ -286,6 +288,7 @@ impl Collection {
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 
@@ -348,6 +351,7 @@ impl Collection {
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
 
         collection.save_config()?;

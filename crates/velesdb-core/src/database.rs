@@ -37,6 +37,17 @@ pub struct Database {
     >,
     /// Optional lifecycle observer (used by velesdb-premium for RBAC, audit, multi-tenant).
     observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
+    /// Monotonic DDL schema version counter (CACHE-01).
+    ///
+    /// Incremented on every create/drop collection operation.
+    /// Used by `CompiledPlanCache` to invalidate cached query plans.
+    schema_version: std::sync::atomic::AtomicU64,
+    /// Compiled query plan cache (CACHE-01).
+    ///
+    /// Stores recently compiled `QueryPlan` instances keyed by `PlanKey`.
+    /// Default sizing: L1 = 1K hot entries, L2 = 10K LRU entries.
+    #[allow(dead_code)]
+    compiled_plan_cache: crate::cache::CompiledPlanCache,
 }
 
 #[cfg(feature = "persistence")]
@@ -113,6 +124,8 @@ impl Database {
             metadata_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             collection_stats: parking_lot::RwLock::new(std::collections::HashMap::new()),
             observer,
+            schema_version: std::sync::atomic::AtomicU64::new(0),
+            compiled_plan_cache: crate::cache::CompiledPlanCache::new(1_000, 10_000),
         };
 
         // Auto-load all existing collections from disk (replaces manual load_collections()).
@@ -171,6 +184,10 @@ impl Database {
             .insert(name.to_string(), coll.inner.clone());
         self.vector_colls.write().insert(name.to_string(), coll);
 
+        // Bump schema version (CACHE-01 DDL invalidation).
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -178,6 +195,32 @@ impl Database {
     #[must_use]
     pub fn data_dir(&self) -> &std::path::Path {
         &self.data_dir
+    }
+
+    /// Returns the current DDL schema version counter.
+    #[must_use]
+    #[allow(dead_code)]
+    pub(crate) fn schema_version(&self) -> u64 {
+        self.schema_version
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Returns a reference to the compiled query plan cache.
+    #[must_use]
+    #[allow(dead_code)]
+    pub(crate) fn plan_cache(&self) -> &crate::cache::CompiledPlanCache {
+        &self.compiled_plan_cache
+    }
+
+    /// Returns the write generation for a named collection, if it exists.
+    ///
+    /// Checks the legacy registry first (covers all collection types).
+    #[must_use]
+    pub fn collection_write_generation(&self, name: &str) -> Option<u64> {
+        self.collections
+            .read()
+            .get(name)
+            .map(crate::Collection::write_generation)
     }
 
     /// Gets a reference to a collection by name.
@@ -384,6 +427,10 @@ impl Database {
             obs.on_collection_deleted(name);
         }
 
+        // Bump schema version (CACHE-01 DDL invalidation).
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -436,6 +483,11 @@ impl Database {
             };
             obs.on_collection_created(name, &kind);
         }
+
+        // Bump schema version (CACHE-01 DDL invalidation).
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -467,6 +519,11 @@ impl Database {
             };
             obs.on_collection_created(name, &kind);
         }
+
+        // Bump schema version (CACHE-01 DDL invalidation).
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -489,6 +546,11 @@ impl Database {
         if let Some(ref obs) = self.observer {
             obs.on_collection_created(name, &CollectionType::MetadataOnly);
         }
+
+        // Bump schema version (CACHE-01 DDL invalidation).
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -688,6 +750,9 @@ impl Database {
                 if let Some(ref obs) = self.observer {
                     obs.on_collection_created(name, collection_type);
                 }
+                // Bump schema version (CACHE-01 DDL invalidation).
+                self.schema_version
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(())
             }
         }

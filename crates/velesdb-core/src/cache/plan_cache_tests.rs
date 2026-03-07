@@ -146,6 +146,89 @@ fn plan_cache_compiled_plan_send_sync() {
     assert_send_sync::<CompiledPlanCache>();
 }
 
+// ---- write_generation on Collection ----
+
+#[cfg(feature = "persistence")]
+#[test]
+fn write_generation_starts_at_zero_and_increments() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll =
+        crate::Collection::create(dir.path().to_path_buf(), 4, crate::DistanceMetric::Cosine)
+            .unwrap();
+
+    assert_eq!(coll.write_generation(), 0, "should start at 0");
+
+    // Upsert a point to bump write_generation.
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    assert_eq!(coll.write_generation(), 1, "should be 1 after upsert");
+
+    // Delete to bump again.
+    coll.delete(&[1]).unwrap();
+    assert_eq!(coll.write_generation(), 2, "should be 2 after delete");
+}
+
+// ---- schema_version on Database ----
+
+#[cfg(feature = "persistence")]
+#[test]
+fn schema_version_increments_on_ddl() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    assert_eq!(db.schema_version(), 0, "should start at 0");
+
+    db.create_collection("test_sv", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+    assert_eq!(db.schema_version(), 1, "should be 1 after create");
+
+    db.delete_collection("test_sv").unwrap();
+    assert_eq!(db.schema_version(), 2, "should be 2 after delete");
+}
+
+// ---- collection_write_generation on Database ----
+
+#[cfg(feature = "persistence")]
+#[test]
+fn write_generation_accessible_from_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("wg_test", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+    assert_eq!(
+        db.collection_write_generation("wg_test"),
+        Some(0),
+        "new collection starts at 0"
+    );
+
+    let coll = db.get_collection("wg_test").unwrap();
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    assert_eq!(
+        db.collection_write_generation("wg_test"),
+        Some(1),
+        "should reflect upsert"
+    );
+    assert_eq!(
+        db.collection_write_generation("nonexistent"),
+        None,
+        "missing collection returns None"
+    );
+}
+
 // ---- Reuse count increments on get ----
 
 #[test]
