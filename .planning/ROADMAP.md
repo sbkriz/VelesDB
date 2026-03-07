@@ -130,9 +130,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — StreamIngester + StreamingConfig + WriteMode + DeltaBuffer stub + Collection wiring (STREAM-01, STREAM-02, STREAM-05)
-- [ ] 07-02-PLAN.md — DeltaBuffer search merge + rebuild coordination + searchable-immediately (STREAM-03, STREAM-04)
-- [ ] 07-03-PLAN.md — REST stream/insert endpoint + WASM exclusion verification (STREAM-01, STREAM-05)
+- [x] 07-01-PLAN.md — StreamIngester + StreamingConfig + WriteMode + DeltaBuffer stub + Collection wiring (STREAM-01, STREAM-02, STREAM-05)
+- [x] 07-02-PLAN.md — DeltaBuffer search merge + rebuild coordination + searchable-immediately (STREAM-03, STREAM-04)
+- [x] 07-03-PLAN.md — REST stream/insert endpoint + WASM exclusion verification (STREAM-01, STREAM-05)
 
 ### Phase 8: SDK Parity
 **Goal**: All SDK and integration surfaces expose the full v1.5 API — Python, TypeScript, WASM, Mobile, LangChain, LlamaIndex, and the Tauri plugin all support sparse vectors, PQ config, and streaming inserts

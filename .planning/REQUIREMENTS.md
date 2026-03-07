@@ -48,8 +48,8 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 
 - [x] **STREAM-01**: `StreamIngester` — bounded `tokio::sync::mpsc` channel, backpressure HTTP 429 quand buffer plein
 - [x] **STREAM-02**: Micro-batches draines dans HNSW — taille configurable (defaut 128 vecteurs), calibree contre le cout d'acquisition write lock HNSW
-- [ ] **STREAM-03**: Delta buffer pour inserts pendant HNSW rebuild — vecteurs recus mid-rebuild incorpores sans perte
-- [ ] **STREAM-04**: Insert-and-immediately-searchable garanti — recherche inclut le buffer en attente de drain
+- [x] **STREAM-03**: Delta buffer pour inserts pendant HNSW rebuild — vecteurs recus mid-rebuild incorpores sans perte
+- [x] **STREAM-04**: Insert-and-immediately-searchable garanti — recherche inclut le buffer en attente de drain
 - [x] **STREAM-05**: Exclusion WASM automatique via `#[cfg(feature = "persistence")]` — pas de tokio runtime en WASM
 
 ### SDK Parity (SDK)
@@ -143,8 +143,8 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | CACHE-04 | Phase 6: Query Plan Cache | Complete |
 | STREAM-01 | Phase 7: Streaming Inserts | Complete |
 | STREAM-02 | Phase 7: Streaming Inserts | Complete |
-| STREAM-03 | Phase 7: Streaming Inserts | Pending |
-| STREAM-04 | Phase 7: Streaming Inserts | Pending |
+| STREAM-03 | Phase 7: Streaming Inserts | Complete |
+| STREAM-04 | Phase 7: Streaming Inserts | Complete |
 | STREAM-05 | Phase 7: Streaming Inserts | Complete |
 | SDK-01 | Phase 8: SDK Parity | Pending |
 | SDK-02 | Phase 8: SDK Parity | Pending |

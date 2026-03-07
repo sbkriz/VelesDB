@@ -141,6 +141,10 @@ Recent decisions affecting current work:
 - [07-01]: BackpressureError maps both Full and Closed channel states to BufferFull
 - [07-01]: Lock order position 10 for delta_buffer (after sparse_indexes at 9)
 - [07-01]: allow(dead_code) on stream_ingester/delta_buffer fields (wired in Plan 02)
+- [07-02]: merge_delta as pub(crate) on Collection with cfg(persistence) gating (two impls)
+- [07-02]: Delta merge at search_ids_with_adc_if_pq level covers search/search_ids/search_with_filter
+- [07-02]: Delta-wins dedup: on ID conflict, delta score replaces HNSW score
+- [07-02]: delta_buffer visibility widened from pub(super) to pub(crate) for cross-module access
 - [07-03]: plan_cache gated behind persistence feature (QueryPlan depends on persistence-gated velesql types)
 - [07-03]: merge_delta elevated to pub(crate) for cross-module access (graph_api.rs needs it)
 
