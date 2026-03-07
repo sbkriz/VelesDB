@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-03-08
+
 ### Expert Rust Review Fixes
 
 - **R-1 — `# Panics` documentation in SIMD dispatch** (`simd_native/dispatch/{cosine,dot,euclidean,hamming}.rs`):

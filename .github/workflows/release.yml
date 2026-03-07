@@ -70,6 +70,36 @@ jobs:
           echo "📦 Version: $VERSION"
 
   # ===========================================================================
+  # 1b. Pre-publish Validation Gate (REL-05)
+  # ===========================================================================
+  validate-all:
+    name: Pre-publish validation
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "validate-all"
+      - name: Run workspace tests
+        run: |
+          cargo test --workspace --features persistence,gpu,update-check \
+            --exclude velesdb-python -- --test-threads=1
+      - name: Verify publish readiness
+        run: |
+          for crate in velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb; do
+            cargo publish --dry-run -p "$crate"
+          done
+
+  # ===========================================================================
   # 2. Build Binaries (Linux, Windows, macOS)
   # ===========================================================================
   build:
@@ -150,7 +180,7 @@ jobs:
   publish-crates:
     name: Publish crates.io
     runs-on: ubuntu-latest
-    needs: validate
+    needs: [validate, validate-all]
     if: |
       needs.validate.outputs.is_prerelease == 'false' &&
       (github.event_name == 'push' || inputs.publish_crates)
@@ -215,12 +245,48 @@ jobs:
           scripts/check-crates-io-versions.sh "${{ needs.validate.outputs.version }}" $CRATES_TO_PUBLISH
 
   # ===========================================================================
-  # 4. Publish to PyPI (each package independently)
+  # 4a. Publish to PyPI — Cross-platform wheels (REL-02)
   # ===========================================================================
-  publish-pypi:
+  publish-pypi-wheels:
+    name: PyPI wheels ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    needs: [validate, validate-all]
+    if: |
+      needs.validate.outputs.is_prerelease == 'false' &&
+      (github.event_name == 'push' || inputs.publish_pypi)
+    environment: pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { os: macos-14, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.11'
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          working-directory: crates/velesdb-python
+          args: --release --out dist
+          manylinux: ${{ matrix.manylinux || '' }}
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
+        with:
+          packages-dir: crates/velesdb-python/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+  # ===========================================================================
+  # 4b. Publish to PyPI — Pure Python packages
+  # ===========================================================================
+  publish-pypi-pure:
     name: Publish PyPI ${{ matrix.package }}
     runs-on: ubuntu-latest
-    needs: validate
+    needs: [validate, validate-all]
     if: |
       needs.validate.outputs.is_prerelease == 'false' &&
       (github.event_name == 'push' || inputs.publish_pypi)
@@ -229,7 +295,6 @@ jobs:
       fail-fast: false
       matrix:
         package:
-          - velesdb
           - langchain-velesdb
           - llamaindex-velesdb
     steps:
@@ -237,30 +302,6 @@ jobs:
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: '3.11'
-
-      - name: Setup Rust (velesdb only)
-        if: matrix.package == 'velesdb'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Build velesdb wheel
-        if: matrix.package == 'velesdb'
-        env:
-          PYTHONHOME: ""
-          PYTHONPATH: ""
-        run: |
-          pip install maturin
-          cd crates/velesdb-python
-          maturin build --release --out dist
-
-      - name: Publish velesdb to PyPI
-        if: matrix.package == 'velesdb'
-        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
-        with:
-          packages-dir: crates/velesdb-python/dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          skip-existing: true
 
       - name: Build langchain-velesdb
         if: matrix.package == 'langchain-velesdb'
@@ -298,7 +339,7 @@ jobs:
   publish-npm:
     name: Publish npm ${{ matrix.package }}
     runs-on: ubuntu-latest
-    needs: validate
+    needs: [validate, validate-all]
     if: |
       needs.validate.outputs.is_prerelease == 'false' &&
       (github.event_name == 'push' || inputs.publish_npm)
@@ -383,11 +424,16 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
 
-      - name: Generate changelog
+      - name: Extract release notes from CHANGELOG
         run: |
-          echo "## What's Changed" > RELEASE_NOTES.md
-          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          [ -n "$PREV" ] && git log --pretty="- %s" $PREV..HEAD >> RELEASE_NOTES.md || echo "- Initial release" >> RELEASE_NOTES.md
+          # Extract everything between ## [version] and the next ## [
+          sed -n '/^## \['"${{ needs.validate.outputs.version }}"'\]/,/^## \[/p' CHANGELOG.md | head -n -1 > RELEASE_NOTES.md
+          # Fallback to git log if CHANGELOG section not found
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "## What's Changed" > RELEASE_NOTES.md
+            PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            [ -n "$PREV" ] && git log --pretty="- %s" $PREV..HEAD >> RELEASE_NOTES.md || echo "- Initial release" >> RELEASE_NOTES.md
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
@@ -404,7 +450,7 @@ jobs:
   summary:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [validate, build, publish-crates, publish-pypi, publish-npm, github-release]
+    needs: [validate, build, publish-crates, publish-pypi-wheels, publish-pypi-pure, publish-npm, github-release]
     if: always()
     steps:
       - name: Summary
@@ -416,7 +462,8 @@ jobs:
           echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Binaries | ${{ needs.build.result == 'success' && '✅' || (needs.build.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| crates.io | ${{ needs.publish-crates.result == 'success' && '✅' || (needs.publish-crates.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| PyPI | ${{ needs.publish-pypi.result == 'success' && '✅' || (needs.publish-pypi.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyPI wheels | ${{ needs.publish-pypi-wheels.result == 'success' && '✅' || (needs.publish-pypi-wheels.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyPI pure | ${{ needs.publish-pypi-pure.result == 'success' && '✅' || (needs.publish-pypi-pure.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| npm | ${{ needs.publish-npm.result == 'success' && '✅' || (needs.publish-npm.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || (needs.github-release.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
