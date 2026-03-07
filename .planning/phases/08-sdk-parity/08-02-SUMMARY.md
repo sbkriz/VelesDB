@@ -119,6 +119,10 @@ None - no external service configuration required.
 - TypeScript SDK now has full v1.5 feature coverage (sparse, PQ, streaming)
 - Ready for remaining SDK parity plans and documentation phase
 
+## Self-Check: PASSED
+
+All 7 modified files verified present. Both task commits (7ad9cfc8, 8e2391ec) verified in git log.
+
 ---
 *Phase: 08-sdk-parity*
 *Completed: 2026-03-07*

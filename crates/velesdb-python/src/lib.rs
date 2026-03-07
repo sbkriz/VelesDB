@@ -371,6 +371,19 @@ impl Database {
     ///     >>> db.train_pq("documents", m=16, k=128, opq=True)
     #[pyo3(signature = (collection_name, m=8, k=256, opq=false))]
     fn train_pq(&self, collection_name: &str, m: usize, k: usize, opq: bool) -> PyResult<String> {
+        // Validate collection_name to prevent VelesQL injection via string interpolation.
+        // Only alphanumeric characters and underscores are accepted (same constraint
+        // as the collection name rules enforced at creation time).
+        if !collection_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(PyValueError::new_err(format!(
+                "Invalid collection name '{collection_name}': only ASCII letters, digits, \
+                 and underscores are allowed"
+            )));
+        }
+
         let mut query = format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}");
         if opq {
             query.push_str(", opq=true");

@@ -81,7 +81,9 @@ pub use state::VelesDbState;
 // ============================================================================
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 // Use DistanceMetric from velesdb_core
 use velesdb_core::DistanceMetric;
@@ -186,25 +188,25 @@ impl SimpleVectorIndex {
 }
 
 /// State for the simple vector index (used by `VelesDbExt`).
-pub struct SimpleIndexState(pub Arc<Mutex<SimpleVectorIndex>>);
+pub struct SimpleIndexState(pub Arc<RwLock<SimpleVectorIndex>>);
 
 /// Extension trait for easy access to `VelesDB` from Tauri `AppHandle`.
 pub trait VelesDbExt<R: Runtime> {
-    /// Returns a handle to the simple vector index.
-    fn velesdb(&self) -> SimpleIndexHandle;
+    /// Returns a handle to the simple vector index, or `None` if not initialized.
+    ///
+    /// Returns `None` when `init()` has not been called before this method.
+    fn velesdb(&self) -> Option<SimpleIndexHandle>;
 }
 
 impl<R: Runtime, T: Manager<R>> VelesDbExt<R> for T {
-    fn velesdb(&self) -> SimpleIndexHandle {
-        let Some(state) = self.try_state::<SimpleIndexState>() else {
-            panic!("SimpleIndexState not initialized. Did you call init()?");
-        };
-        SimpleIndexHandle(Arc::clone(&state.0))
+    fn velesdb(&self) -> Option<SimpleIndexHandle> {
+        self.try_state::<SimpleIndexState>()
+            .map(|state| SimpleIndexHandle(Arc::clone(&state.0)))
     }
 }
 
 /// Handle to interact with the simple vector index.
-pub struct SimpleIndexHandle(Arc<Mutex<SimpleVectorIndex>>);
+pub struct SimpleIndexHandle(Arc<RwLock<SimpleVectorIndex>>);
 
 impl SimpleIndexHandle {
     /// Inserts a vector with the given ID.
@@ -214,11 +216,7 @@ impl SimpleIndexHandle {
     /// Returns an error if the vector dimension doesn't match the index dimension.
     ///
     pub fn insert(&self, id: u64, vector: &[f32]) -> Result<()> {
-        let mut index = self
-            .0
-            .lock()
-            .map_err(|err| Error::InvalidConfig(format!("SimpleIndex lock poisoned: {err}")))?;
-        index.insert(id, vector)
+        self.0.write().insert(id, vector)
     }
 
     /// Searches for the k most similar vectors.
@@ -228,66 +226,36 @@ impl SimpleIndexHandle {
     /// Returns an error if the query dimension doesn't match the index dimension.
     ///
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
-        let index = self
-            .0
-            .lock()
-            .map_err(|err| Error::InvalidConfig(format!("SimpleIndex lock poisoned: {err}")))?;
-        index.search(query, k)
+        self.0.read().search(query, k)
     }
 
     /// Returns the number of vectors in the index.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal lock is poisoned.
-    ///
+    /// Returns `0` and logs an error if the index state is unavailable.
     #[must_use]
     pub fn len(&self) -> usize {
-        match self.0.lock() {
-            Ok(index) => index.len(),
-            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
-        }
+        self.0.read().len()
     }
 
     /// Returns true if the index is empty.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal lock is poisoned.
-    ///
+    /// Returns `true` and logs an error if the index state is unavailable.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        match self.0.lock() {
-            Ok(index) => index.is_empty(),
-            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
-        }
+        self.0.read().is_empty()
     }
 
     /// Returns the dimension of vectors in this index.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal lock is poisoned.
-    ///
+    /// Returns `0` and logs an error if the index state is unavailable.
     #[must_use]
     pub fn dimension(&self) -> usize {
-        match self.0.lock() {
-            Ok(index) => index.dimension(),
-            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
-        }
+        self.0.read().dimension()
     }
 
     /// Clears all vectors from the index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the internal lock is poisoned.
-    ///
     pub fn clear(&self) {
-        match self.0.lock() {
-            Ok(mut index) => index.clear(),
-            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
-        }
+        self.0.write().clear();
     }
 }
 
@@ -402,7 +370,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             let state = VelesDbState::new(db_path.clone());
             app.manage(state);
             // Initialize simple in-memory index for VelesDbExt trait (384 dimensions for AllMiniLML6V2)
-            let simple_index = SimpleIndexState(Arc::new(Mutex::new(SimpleVectorIndex::new(384))));
+            let simple_index = SimpleIndexState(Arc::new(RwLock::new(SimpleVectorIndex::new(384))));
             app.manage(simple_index);
             tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
             Ok(())

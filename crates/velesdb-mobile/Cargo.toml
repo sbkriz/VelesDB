@@ -22,6 +22,7 @@ uniffi = { version = "0.28", features = ["tokio"] }
 tokio = { version = "1.42", features = ["rt-multi-thread"] }
 thiserror = "2.0"
 serde_json = "1.0"
+tracing = "0.1"
 
 # iOS targets (add via: rustup target add <target>)
 # - aarch64-apple-ios (device)

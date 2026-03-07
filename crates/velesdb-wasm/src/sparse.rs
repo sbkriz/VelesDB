@@ -188,12 +188,14 @@ impl SparseIndex {
 /// Fuses pre-computed dense and sparse search results using Reciprocal Rank Fusion (RRF).
 ///
 /// Both `dense_results` and `sparse_results` should be JSON arrays of `[doc_id, score]` pairs.
-/// Returns a JSON array of `{doc_id, score}` objects, sorted by fused score descending.
+/// Returns a JSON array of `{doc_id, score}` objects, sorted by fused score descending,
+/// truncated to the top `k` entries.
 #[wasm_bindgen]
 pub fn hybrid_search_fuse(
     dense_results: JsValue,
     sparse_results: JsValue,
     rrf_k: u32,
+    k: usize,
 ) -> Result<JsValue, JsValue> {
     let dense: Vec<(u64, f32)> = serde_wasm_bindgen::from_value(dense_results)
         .map_err(|e| JsValue::from_str(&format!("Invalid dense_results: {e}")))?;
@@ -201,6 +203,8 @@ pub fn hybrid_search_fuse(
         .map_err(|e| JsValue::from_str(&format!("Invalid sparse_results: {e}")))?;
 
     // RRF: score(d) = sum over lists of 1 / (k + rank_in_list)
+    // N-06: rrf_k is a smoothing constant typically in [10, 100]; the precision
+    // loss from u32 → f32 is negligible (< 1 ULP for values < 2^24).
     let k_f32 = rrf_k as f32;
     let mut scores: std::collections::HashMap<u64, f32> = std::collections::HashMap::new();
 
@@ -216,6 +220,7 @@ pub fn hybrid_search_fuse(
         .map(|(doc_id, score)| SparseSearchResult { doc_id, score })
         .collect();
     results.sort_by(|a, b| b.score.total_cmp(&a.score));
+    results.truncate(k);
 
     serde_wasm_bindgen::to_value(&results)
         .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))

@@ -103,7 +103,13 @@ pub fn parse_fusion_strategy(
                 hit_weight,
             }
         }
-        _ => FusionStrategy::RRF { k: 60 },
+        unknown => {
+            tracing::warn!(
+                strategy = unknown,
+                "Unknown fusion strategy; falling back to RRF(k=60)"
+            );
+            FusionStrategy::RRF { k: 60 }
+        }
     }
 }
 

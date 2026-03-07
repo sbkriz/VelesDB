@@ -48,6 +48,10 @@ impl Collection {
             ))
         })?;
         let results = sparse_search(index, query, k);
+        // Explicit drop: `resolve_sparse_results` acquires the payload_storage read-lock,
+        // which is ordered after sparse_indexes in the Collection lock hierarchy.
+        // Releasing sparse_indexes here before entering resolve_sparse_results prevents
+        // a potential lock-ordering violation if the call path ever reacquires sparse_indexes.
         drop(indexes);
         Ok(self.resolve_sparse_results(&results, k))
     }

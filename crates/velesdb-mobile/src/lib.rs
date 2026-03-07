@@ -170,8 +170,15 @@ impl VelesDatabase {
         // Collection fields regardless of collection type.
         let path = self.inner.data_dir().join(&name);
         if path.join("config.json").exists() {
-            if let Ok(coll) = velesdb_core::VectorCollection::open(path) {
-                return Ok(Some(Arc::new(VelesCollection { inner: coll })));
+            match velesdb_core::VectorCollection::open(path) {
+                Ok(coll) => return Ok(Some(Arc::new(VelesCollection { inner: coll }))),
+                Err(e) => {
+                    tracing::warn!(
+                        collection = %name,
+                        error = %e,
+                        "VectorCollection::open failed for existing config; collection skipped"
+                    );
+                }
             }
         }
         Ok(None)
@@ -894,6 +901,7 @@ impl VelesCollection {
     /// * `vector` - Dense query vector
     /// * `sparse_vector` - Sparse query vector (parallel arrays)
     /// * `limit` - Maximum number of results
+    /// * `index_name` - Name of the sparse index (empty string or `None` for default)
     ///
     /// # Returns
     ///
@@ -903,9 +911,11 @@ impl VelesCollection {
         vector: Vec<f32>,
         sparse_vector: VelesSparseVector,
         limit: u32,
+        index_name: Option<String>,
     ) -> Result<Vec<SearchResult>, VelesError> {
         let core_sv = Self::to_core_sparse_vector(&sparse_vector);
         let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
+        let idx_name = index_name.unwrap_or_default();
 
         let results = self
             .inner
@@ -913,7 +923,7 @@ impl VelesCollection {
                 &vector,
                 &core_sv,
                 usize::try_from(limit).unwrap_or(usize::MAX),
-                "",
+                &idx_name,
                 &strategy,
             )
             .map_err(|e| VelesError::Database {
