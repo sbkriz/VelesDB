@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: executing
-stopped_at: Phase 08 Plan 02 complete
-last_updated: "2026-03-07T15:53:22Z"
-last_activity: 2026-03-07 — Phase 08 Plan 02 complete (TypeScript SDK sparse/PQ/streaming)
+stopped_at: Phase 08 Plan 03 complete
+last_updated: "2026-03-07T15:56:00Z"
+last_activity: 2026-03-07 — Phase 08 Plan 03 complete (Mobile + Tauri sparse/PQ/streaming)
 progress:
   total_phases: 10
   completed_phases: 7
-  total_plans: 26
-  completed_plans: 25
-  percent: 73
+  total_plans: 27
+  completed_plans: 26
+  percent: 74
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 8 — SDK Parity (plan 02 complete)
+**Current focus:** Phase 8 — SDK Parity (plan 03 complete)
 
 ## Current Position
 
 Phase: 8 of 10 (SDK Parity)
-Plan: 2 of 3 in current phase
-Status: Phase 08 Plan 02 complete — TypeScript SDK sparse/PQ/streaming
-Last activity: 2026-03-07 — Phase 08 Plan 02 complete (TypeScript SDK sparse/PQ/streaming)
+Plan: 3 of 4 in current phase
+Status: Phase 08 Plan 03 complete — Mobile + Tauri sparse/PQ/streaming
+Last activity: 2026-03-07 — Phase 08 Plan 03 complete (Mobile + Tauri sparse/PQ/streaming)
 
-Progress: [███████░░░] 73% (25/26 plans in phases 1-8 complete)
+Progress: [███████░░░] 74% (26/27 plans in phases 1-8 complete)
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ Progress: [███████░░░] 73% (25/26 plans in phases 1-8 comple
 | Phase 07 P02 | 18 min | 2 tasks | 7 files |
 | Phase 07 P03 | 18 min | 2 tasks | 12 files |
 | Phase 08 P02 | 6 min | 2 tasks | 7 files |
+| Phase 08 P03 | 9 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -152,6 +153,9 @@ Recent decisions affecting current work:
 - [08-02]: Lazy SparseIndex init in VectorStore (Option<SparseIndex>, populated on first sparse_insert)
 - [08-02]: WASM hybrid search uses RRF fusion (k=60) via existing hybrid_search_fuse
 - [08-02]: trainPq/streamInsert throw NOT_SUPPORTED in WASM mode
+- [08-03]: train_pq placed on VelesDatabase (not VelesCollection) since PQ training requires Database-level VelesQL execution
+- [08-03]: Parallel Vec<u32>/Vec<f32> for mobile sparse vectors (safer FFI mapping than HashMap)
+- [08-03]: cfg-gated dual invoke_handler blocks for persistence-dependent stream_insert command
 
 ### Pending Todos
 
@@ -165,7 +169,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T15:53:22Z
-Stopped at: Phase 08 Plan 02 complete
-Resume file: .planning/phases/08-sdk-parity/08-02-SUMMARY.md
-Next action: Continue Phase 08 — remaining SDK plans
+Last session: 2026-03-07T15:56:00Z
+Stopped at: Phase 08 Plan 03 complete
+Resume file: .planning/phases/08-sdk-parity/08-03-SUMMARY.md
+Next action: Continue Phase 08 — Plan 04 remaining

@@ -57,10 +57,10 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 - [ ] **SDK-01**: Python SDK — sparse upsert/search, PQ train/config, streaming insert propages dans velesdb-python
 - [x] **SDK-02**: TypeScript SDK — sparse vectors, PQ config, streaming insert dans `sdks/typescript`
 - [x] **SDK-03**: WASM module — sparse search sans persistence, plan cache actif (features compatibles no-persistence)
-- [ ] **SDK-04**: Mobile iOS/Android — bindings UniFFI mis a jour pour API v1.5 (sparse + PQ)
+- [x] **SDK-04**: Mobile iOS/Android — bindings UniFFI mis a jour pour API v1.5 (sparse + PQ)
 - [ ] **SDK-05**: LangChain VectorStore — hybrid dense+sparse supporte nativement via le VectorStore officiel
 - [ ] **SDK-06**: LlamaIndex integration — sparse + PQ config exposes dans le VectorStore
-- [ ] **SDK-07**: Tauri plugin — synchronise avec API core v1.5
+- [x] **SDK-07**: Tauri plugin — synchronise avec API core v1.5
 
 ### Documentation (DOC)
 
@@ -149,10 +149,10 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | SDK-01 | Phase 8: SDK Parity | Pending |
 | SDK-02 | Phase 8: SDK Parity | Complete |
 | SDK-03 | Phase 8: SDK Parity | Complete |
-| SDK-04 | Phase 8: SDK Parity | Pending |
+| SDK-04 | Phase 8: SDK Parity | Complete |
 | SDK-05 | Phase 8: SDK Parity | Pending |
 | SDK-06 | Phase 8: SDK Parity | Pending |
-| SDK-07 | Phase 8: SDK Parity | Pending |
+| SDK-07 | Phase 8: SDK Parity | Complete |
 | DOC-01 | Phase 9: Documentation | Pending |
 | DOC-02 | Phase 9: Documentation | Pending |
 | DOC-03 | Phase 9: Documentation | Pending |
