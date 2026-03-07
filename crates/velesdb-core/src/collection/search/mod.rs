@@ -15,6 +15,7 @@ pub mod query;
 mod query_validation_tests;
 #[cfg(test)]
 mod similarity_exec_tests;
+mod sparse;
 mod text;
 mod vector;
 #[cfg(test)]

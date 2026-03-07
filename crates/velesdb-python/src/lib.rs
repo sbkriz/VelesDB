@@ -348,6 +348,47 @@ impl Database {
     fn agent_memory(&self, dimension: Option<usize>) -> PyResult<agent::AgentMemory> {
         agent::AgentMemory::new(self, dimension)
     }
+
+    /// Train product quantization on a collection.
+    ///
+    /// Builds PQ codebooks from existing vectors, enabling compressed
+    /// storage and faster ADC-based search.
+    ///
+    /// Args:
+    ///     collection_name: Name of the collection to train on.
+    ///     m: Number of subspaces (dimension must be divisible by m). Default: 8.
+    ///     k: Number of centroids per subspace. Default: 256.
+    ///     opq: Whether to use Optimized Product Quantization. Default: False.
+    ///
+    /// Returns:
+    ///     Status message from the training operation.
+    ///
+    /// Raises:
+    ///     RuntimeError: If training fails (e.g., insufficient data, bad params).
+    ///
+    /// Example:
+    ///     >>> db.train_pq("documents", m=8, k=256)
+    ///     >>> db.train_pq("documents", m=16, k=128, opq=True)
+    #[pyo3(signature = (collection_name, m=8, k=256, opq=false))]
+    fn train_pq(&self, collection_name: &str, m: usize, k: usize, opq: bool) -> PyResult<String> {
+        let mut query = format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}");
+        if opq {
+            query.push_str(", opq=true");
+        }
+        query.push(')');
+
+        let parsed = velesdb_core::velesql::Parser::parse(&query).map_err(|e| {
+            PyValueError::new_err(format!("Failed to construct TRAIN query: {}", e.message))
+        })?;
+
+        let empty_params = std::collections::HashMap::new();
+        let results = self
+            .inner
+            .execute_query(&parsed, &empty_params)
+            .map_err(|e| PyRuntimeError::new_err(format!("PQ training failed: {e}")))?;
+
+        Ok(format!("PQ training complete: {} results", results.len()))
+    }
 }
 
 impl Database {
