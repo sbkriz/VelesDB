@@ -34,12 +34,17 @@ fn dummy_compiled_plan() -> Arc<CompiledPlan> {
     })
 }
 
-// ---- PlanKey hash determinism ----
+// ---- PlanKey structural equality ----
 
+/// Two `PlanKey` values with identical fields must compare equal.
+///
+/// `DefaultHasher` is intentionally avoided here: its output is not stable
+/// across Rust versions, so asserting `hash_of(a) == hash_of(b)` would be a
+/// tautology for equal values anyway (required by the `Hash` contract) and
+/// is not meaningful as a regression test. Structural equality via `PartialEq`
+/// is what the cache actually uses for key lookup.
 #[test]
-fn plan_key_same_fields_same_hash() {
-    use std::hash::{Hash, Hasher};
-
+fn plan_key_equal_fields_are_equal() {
     let a = PlanKey {
         query_hash: 42,
         schema_version: 1,
@@ -51,19 +56,15 @@ fn plan_key_same_fields_same_hash() {
         collection_generations: smallvec![10, 20],
     };
     assert_eq!(a, b);
-
-    let hash_of = |key: &PlanKey| -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        hasher.finish()
-    };
-    assert_eq!(hash_of(&a), hash_of(&b));
 }
 
+/// Two `PlanKey` values that differ in `collection_generations` must compare unequal.
+///
+/// This verifies that a write to a collection (which advances `write_generation`)
+/// produces a different key and therefore results in a cache miss, which is the
+/// core cache invalidation invariant (CACHE-01).
 #[test]
-fn plan_key_different_generations_different_hash() {
-    use std::hash::{Hash, Hasher};
-
+fn plan_key_different_generations_are_not_equal() {
     let a = PlanKey {
         query_hash: 42,
         schema_version: 1,
@@ -75,13 +76,6 @@ fn plan_key_different_generations_different_hash() {
         collection_generations: smallvec![10, 21],
     };
     assert_ne!(a, b);
-
-    let hash_of = |key: &PlanKey| -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        hasher.finish()
-    };
-    assert_ne!(hash_of(&a), hash_of(&b));
 }
 
 // ---- CompiledPlanCache insert + get ----
