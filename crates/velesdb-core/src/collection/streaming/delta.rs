@@ -5,6 +5,24 @@
 //! The search pipeline brute-force scans this buffer and merges results with
 //! HNSW results for immediate searchability via [`merge_with_delta`].
 //!
+//! # State machine
+//!
+//! The buffer transitions through three states encoded in [`DeltaBuffer::state`]:
+//!
+//! ```text
+//! INACTIVE (0) --activate()--> ACTIVE (1) --deactivate_and_drain()--> DRAINING (2) --> INACTIVE (0)
+//! ```
+//!
+//! - `push` / `extend`: only write when `ACTIVE`.
+//! - `search`: scan when `ACTIVE` or `DRAINING` (so concurrent searches during
+//!   drain still see the buffered vectors).
+//!
+//! Future: promote activate() to a CAS so double-activate is detectable (STREAM-02)
+//!
+//! Currently `activate()` is an unconditional store. A future hardening pass
+//! should use `compare_exchange(INACTIVE, ACTIVE)` and return `Err(())` on
+//! re-entrance to surface bugs during testing.
+//!
 //! # Lock ordering
 //!
 //! `DeltaBuffer` is at position **10** in the collection lock order
@@ -14,7 +32,14 @@
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Buffer is inactive — not accumulating writes.
+const INACTIVE: u8 = 0;
+/// Buffer is actively accumulating writes (HNSW rebuild in progress).
+const ACTIVE: u8 = 1;
+/// Buffer is draining — no new writes accepted, but still readable for search.
+const DRAINING: u8 = 2;
 
 /// Delta buffer for streaming inserts during HNSW rebuilds.
 ///
@@ -25,8 +50,8 @@ pub struct DeltaBuffer {
     /// Buffered `(point_id, vector)` pairs awaiting index insertion.
     points: RwLock<Vec<(u64, Vec<f32>)>>,
 
-    /// Whether the delta buffer is actively accumulating (rebuild in progress).
-    active: AtomicBool,
+    /// State machine: `INACTIVE` | `ACTIVE` | `DRAINING`.
+    state: AtomicU8,
 }
 
 impl DeltaBuffer {
@@ -35,7 +60,7 @@ impl DeltaBuffer {
     pub fn new() -> Self {
         Self {
             points: RwLock::new(Vec::new()),
-            active: AtomicBool::new(false),
+            state: AtomicU8::new(INACTIVE),
         }
     }
 
@@ -43,63 +68,113 @@ impl DeltaBuffer {
     /// (i.e., an HNSW rebuild is in progress).
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == ACTIVE
     }
 
     /// Activates the delta buffer (marks a rebuild as in progress).
     ///
     /// While active, the drain loop will push vectors into this buffer so
     /// that search can find them before they are indexed into HNSW.
+    ///
+    /// Idempotent: calling `activate()` when already active is a no-op.
     pub fn activate(&self) {
-        self.active.store(true, Ordering::Release);
+        self.state.store(ACTIVE, Ordering::Release);
     }
 
     /// Deactivates the buffer and drains all buffered points.
+    ///
+    /// Transitions `ACTIVE → DRAINING`, takes the points, then sets
+    /// `INACTIVE`. Any concurrent `search` call that observes `DRAINING`
+    /// will still scan the buffer (under a snapshot taken before this
+    /// method clears it).
     ///
     /// Returns the accumulated `(point_id, vector)` pairs for progressive
     /// merge into the newly rebuilt HNSW index. After this call, the buffer
     /// is empty and inactive.
     pub fn deactivate_and_drain(&self) -> Vec<(u64, Vec<f32>)> {
+        // Mark as DRAINING so concurrent searches can still observe the buffer
+        // while we hold the write lock.
+        self.state.store(DRAINING, Ordering::Release);
         let mut points = self.points.write();
-        self.active.store(false, Ordering::Release);
-        std::mem::take(&mut *points)
+        let drained = std::mem::take(&mut *points);
+        // Set INACTIVE before releasing the lock so there is no observable
+        // window where state == DRAINING but the buffer is already empty.
+        self.state.store(INACTIVE, Ordering::Release);
+        drop(points);
+        drained
     }
 
     /// Pushes a single entry into the delta buffer.
+    ///
+    /// No-op if the buffer is not in `ACTIVE` state. The check is performed
+    /// **inside** the write lock to close the TOCTOU window between `is_active()`
+    /// and the actual write.
     pub fn push(&self, id: u64, vector: Vec<f32>) {
-        self.points.write().push((id, vector));
+        let mut points = self.points.write();
+        if self.state.load(Ordering::Acquire) == ACTIVE {
+            points.push((id, vector));
+        }
     }
 
     /// Extends the delta buffer with multiple entries.
+    ///
+    /// No-op if the buffer is not in `ACTIVE` state. The check is performed
+    /// **inside** the write lock to close the TOCTOU window between `is_active()`
+    /// and the actual write.
     pub fn extend(&self, entries: impl IntoIterator<Item = (u64, Vec<f32>)>) {
-        self.points.write().extend(entries);
+        let mut points = self.points.write();
+        if self.state.load(Ordering::Acquire) == ACTIVE {
+            points.extend(entries);
+        }
     }
 
     /// Returns the number of buffered entries.
+    ///
+    /// Takes a single read lock. Use [`stats`](Self::stats) when both `len`
+    /// and `is_empty` are needed to avoid two separate lock acquisitions.
     #[must_use]
     pub fn len(&self) -> usize {
         self.points.read().len()
     }
 
     /// Returns `true` if the buffer contains no entries.
+    ///
+    /// Delegates to `len() == 0` (single lock acquisition).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.points.read().is_empty()
+        self.len() == 0
+    }
+
+    /// Returns `(len, is_empty)` under a single read lock.
+    ///
+    /// Prefer this over calling `len()` and `is_empty()` separately when both
+    /// values are needed, to avoid acquiring the read lock twice.
+    #[must_use]
+    pub fn stats(&self) -> (usize, bool) {
+        let len = self.points.read().len();
+        (len, len == 0)
     }
 
     /// Brute-force searches the delta buffer for the k nearest neighbors.
     ///
-    /// Returns an empty `Vec` if the buffer is not active. Otherwise computes
-    /// distances using `metric.calculate()` (which dispatches to SIMD kernels),
-    /// sorts by the metric's ordering, and truncates to `k`.
+    /// Returns an empty `Vec` if the buffer is neither `ACTIVE` nor `DRAINING`.
+    /// Takes a brief read lock to snapshot the points, releases it, then
+    /// computes distances on the snapshot to avoid holding the lock during
+    /// potentially expensive distance calculations.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
-        if !self.is_active() {
+        let current_state = self.state.load(Ordering::Acquire);
+        if current_state != ACTIVE && current_state != DRAINING {
             return Vec::new();
         }
 
-        let points = self.points.read();
-        let mut results: Vec<(u64, f32)> = points
+        // Snapshot under a brief read lock, then release before computing distances.
+        let snapshot: Vec<(u64, Vec<f32>)> = self.points.read().clone();
+        if snapshot.is_empty() {
+            return Vec::new();
+        }
+
+        let mut results: Vec<(u64, f32)> = snapshot
             .iter()
             .map(|(id, vec)| (*id, metric.calculate(query, vec)))
             .collect();
@@ -118,9 +193,9 @@ impl Default for DeltaBuffer {
 
 /// Merges HNSW search results with delta buffer brute-force results.
 ///
-/// If the delta buffer is not active, returns `hnsw_results` unchanged.
-/// Otherwise, performs a brute-force scan of the delta, deduplicates by ID
-/// (delta entries win on conflict since they may be more recent), sorts by
+/// If the delta buffer is not active (or draining), returns `hnsw_results`
+/// unchanged. Otherwise, performs a brute-force scan of the delta, deduplicates
+/// by ID (delta entries win on conflict since they may be more recent), sorts by
 /// the metric's ordering, and truncates to `k`.
 #[must_use]
 pub fn merge_with_delta(
@@ -130,7 +205,8 @@ pub fn merge_with_delta(
     k: usize,
     metric: DistanceMetric,
 ) -> Vec<(u64, f32)> {
-    if !delta.is_active() {
+    let current_state = delta.state.load(Ordering::Acquire);
+    if current_state != ACTIVE && current_state != DRAINING {
         return hnsw_results;
     }
 
@@ -193,12 +269,21 @@ mod tests {
     fn test_stream_delta_search_returns_empty_when_inactive() {
         let buf = DeltaBuffer::new();
         buf.push(1, vec![1.0, 0.0, 0.0]);
-        // buffer is NOT active
+        // buffer is NOT active — push() is a no-op when inactive
         let results = buf.search(&[1.0, 0.0, 0.0], 10, DistanceMetric::Cosine);
         assert!(
             results.is_empty(),
             "inactive delta should return no results"
         );
+    }
+
+    #[test]
+    fn test_stream_delta_push_noop_when_inactive() {
+        let buf = DeltaBuffer::new();
+        // push and extend are no-ops when inactive (C-1 guard)
+        buf.push(1, vec![1.0, 0.0]);
+        buf.extend(vec![(2, vec![0.0, 1.0])]);
+        assert_eq!(buf.len(), 0, "push/extend should be no-ops when inactive");
     }
 
     #[test]
@@ -311,7 +396,18 @@ mod tests {
     #[test]
     fn test_stream_delta_extend() {
         let buf = DeltaBuffer::new();
+        buf.activate();
         buf.extend(vec![(1, vec![1.0]), (2, vec![2.0]), (3, vec![3.0])]);
         assert_eq!(buf.len(), 3);
+    }
+
+    #[test]
+    fn test_stream_delta_stats() {
+        let buf = DeltaBuffer::new();
+        buf.activate();
+        buf.push(1, vec![1.0]);
+        let (len, is_empty) = buf.stats();
+        assert_eq!(len, 1);
+        assert!(!is_empty);
     }
 }

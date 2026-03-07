@@ -14,7 +14,4 @@ mod ingester;
 #[cfg(feature = "persistence")]
 pub use delta::merge_with_delta;
 #[cfg(feature = "persistence")]
-#[allow(unused_imports)]
-pub(crate) use ingester::WriteMode;
-#[cfg(feature = "persistence")]
 pub use ingester::{BackpressureError, StreamIngester, StreamingConfig};

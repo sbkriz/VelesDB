@@ -538,6 +538,25 @@ impl VectorCollection {
         self.inner.stream_insert(point)
     }
 
+    /// Pushes `(id, vector)` entries into the delta buffer if it is active.
+    ///
+    /// No-op when the delta buffer is inactive. This is the public interface
+    /// used by streaming upsert handlers (e.g., NDJSON stream endpoint) to
+    /// keep the delta buffer in sync after a successful `upsert_bulk` call.
+    #[cfg(feature = "persistence")]
+    pub fn push_to_delta_if_active(&self, entries: &[(u64, Vec<f32>)]) {
+        self.inner.push_to_delta_if_active(entries);
+    }
+
+    /// Returns `true` if the delta buffer is currently active (HNSW rebuild
+    /// in progress). External callers can use this to decide whether to
+    /// snapshot entries for delta before a `upsert_bulk` call.
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub fn is_delta_active(&self) -> bool {
+        self.inner.delta_buffer.is_active()
+    }
+
     /// Executes a raw VelesQL string.
     /// # Errors
     pub fn execute_query_str(

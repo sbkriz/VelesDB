@@ -3,7 +3,6 @@
 use crate::collection::types::Collection;
 use crate::point::Point;
 
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
@@ -19,7 +18,13 @@ use tokio::sync::Notify;
 /// | `buffer_size`      | 10 000   |
 /// | `batch_size`       | 128      |
 /// | `flush_interval_ms`| 50       |
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Future: persist StreamingConfig in CollectionConfig (STREAM-04)
+///
+/// `StreamingConfig` is currently runtime-only. A future pass should
+/// serialize it into `CollectionConfig` so the pipeline is automatically
+/// restored on `Collection::open`.
+#[derive(Debug, Clone)]
 pub struct StreamingConfig {
     /// Capacity of the bounded mpsc channel (backpressure threshold).
     pub buffer_size: usize,
@@ -45,7 +50,13 @@ impl Default for StreamingConfig {
 ///
 /// Distinguishes between API-driven writes (synchronous upsert) and
 /// streaming-driven writes (micro-batch drain).
-#[allow(dead_code)]
+///
+/// Future: integrate WriteMode into StreamingConfig (STREAM-03)
+///
+/// `WriteMode` is currently unused. Once streaming-specific write paths
+/// (e.g., bypass WAL for low-latency inserts) are implemented, wire this
+/// into the flush pipeline.
+#[allow(dead_code)] // Tracked: STREAM-03
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WriteMode {
     /// Standard synchronous API upsert.
@@ -54,25 +65,24 @@ pub(crate) enum WriteMode {
     Streaming,
 }
 
-/// Error returned when the streaming channel is at capacity.
-#[derive(Debug)]
+/// Error returned when the streaming channel cannot accept a point.
+#[derive(Debug, thiserror::Error)]
 pub enum BackpressureError {
     /// The ingestion buffer is full; the caller should retry after a short delay.
+    #[error("streaming buffer is full (backpressure)")]
     BufferFull,
+
     /// Streaming is not configured on this collection.
+    #[error("streaming is not configured on this collection")]
     NotConfigured,
-}
 
-impl std::fmt::Display for BackpressureError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BufferFull => write!(f, "streaming buffer is full (backpressure)"),
-            Self::NotConfigured => write!(f, "streaming is not configured on this collection"),
-        }
-    }
+    /// The drain task has exited; the streaming pipeline is no longer functional.
+    ///
+    /// This is a fatal condition — the server should respond 503 Service Unavailable
+    /// and the collection may need to be reconfigured.
+    #[error("streaming drain task has exited; the ingestion pipeline is dead")]
+    DrainTaskDead,
 }
-
-impl std::error::Error for BackpressureError {}
 
 /// Streaming ingestion handle for a single collection.
 ///
@@ -121,16 +131,17 @@ impl StreamIngester {
     /// Attempts to send a point into the streaming channel.
     ///
     /// Returns immediately. If the channel is at capacity, returns
-    /// [`BackpressureError::BufferFull`].
+    /// [`BackpressureError::BufferFull`]. If the drain task has exited
+    /// (channel closed), returns [`BackpressureError::DrainTaskDead`].
     ///
     /// # Errors
     ///
-    /// Returns [`BackpressureError::BufferFull`] when the bounded channel is full.
+    /// - [`BackpressureError::BufferFull`] — the bounded channel is at capacity.
+    /// - [`BackpressureError::DrainTaskDead`] — the drain task exited unexpectedly.
     pub fn try_send(&self, point: Point) -> Result<(), BackpressureError> {
-        self.sender.try_send(point).map_err(|_| {
-            // Both Full and Closed map to BufferFull: a closed channel means the
-            // drain task exited, which is functionally equivalent to being full.
-            BackpressureError::BufferFull
+        self.sender.try_send(point).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => BackpressureError::BufferFull,
+            mpsc::error::TrySendError::Closed(_) => BackpressureError::DrainTaskDead,
         })
     }
 
@@ -182,11 +193,15 @@ async fn drain_loop(
 
     loop {
         tokio::select! {
-            // Branch 1: shutdown signal
+            // Branch 1: shutdown signal — drain remaining channel items in
+            // micro-batches (M-1: flush at batch_size to bound memory usage).
             () = shutdown.notified() => {
-                // Drain any remaining items from the channel.
                 while let Ok(point) = rx.try_recv() {
                     batch.push(point);
+                    // Flush at batch_size boundaries to avoid unbounded accumulation.
+                    if batch.len() >= batch_size {
+                        flush_batch(&collection, &mut batch).await;
+                    }
                 }
                 if !batch.is_empty() {
                     flush_batch(&collection, &mut batch).await;
@@ -325,7 +340,7 @@ mod tests {
         assert!(result.is_err(), "should return error when buffer full");
         match result.unwrap_err() {
             BackpressureError::BufferFull => {} // expected
-            other @ BackpressureError::NotConfigured => panic!("expected BufferFull, got: {other}"),
+            other => panic!("expected BufferFull, got: {other}"),
         }
 
         ingester.shutdown().await;
@@ -408,8 +423,10 @@ mod tests {
         ingester.try_send(make_point(10, 4)).expect("send");
         ingester.try_send(make_point(11, 4)).expect("send");
 
-        // Small yield to ensure points are in the channel
-        tokio::task::yield_now().await;
+        // Sleep long enough to ensure the drain loop has received the points
+        // from the channel before shutdown is signalled (N-5: yield_now()
+        // is not sufficient — the drain loop may not have been scheduled yet).
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Shutdown should flush remaining
         ingester.shutdown().await;

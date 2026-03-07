@@ -262,8 +262,12 @@ pub struct Collection {
     ///
     /// `None` when streaming is not configured. Wrapped in `RwLock` so that
     /// the ingester can be lazily initialized or swapped at runtime.
+    ///
+    /// Future: wire StreamIngester creation into collection open/config (STREAM-01)
+    ///
+    /// `enable_streaming()` initialises this field at runtime. A future pass should
+    /// persist `StreamingConfig` in `CollectionConfig` and restore it on `open`.
     #[cfg(feature = "persistence")]
-    #[allow(dead_code)] // Wired in streaming Plan 02
     pub(super) stream_ingester: Arc<RwLock<Option<StreamIngester>>>,
 
     /// Delta buffer for vectors pending HNSW index insertion (STREAM-02).
@@ -311,12 +315,35 @@ impl Collection {
         }
     }
 
-    /// Returns a reference to the delta buffer.
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Creates a [`StreamIngester`] with the given `config` and stores it in
+    /// the `stream_ingester` field. Points can then be submitted via
+    /// [`stream_insert`](Self::stream_insert).
+    ///
+    /// Calling this when streaming is already active replaces the existing
+    /// ingester (the old drain task is aborted via `Drop`).
+    ///
+    /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
     #[cfg(feature = "persistence")]
-    #[must_use]
-    #[allow(dead_code)] // Wired in streaming Plan 02
-    pub(crate) fn delta_buffer(&self) -> &Arc<DeltaBuffer> {
-        &self.delta_buffer
+    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
+        use crate::collection::streaming::StreamIngester;
+        let ingester = StreamIngester::new(self.clone(), config);
+        *self.stream_ingester.write() = Some(ingester);
+    }
+
+    /// Pushes entries into the delta buffer if it is currently active.
+    ///
+    /// This is a convenience method for callers (e.g., the REST upsert handlers)
+    /// that do not have direct access to the delta buffer internals.
+    ///
+    /// No-op when the delta buffer is inactive.
+    #[cfg(feature = "persistence")]
+    pub fn push_to_delta_if_active(&self, entries: &[(u64, Vec<f32>)]) {
+        if self.delta_buffer.is_active() {
+            self.delta_buffer
+                .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
+        }
     }
 }
 

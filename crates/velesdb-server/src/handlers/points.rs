@@ -64,14 +64,26 @@ fn convert_sparse_inputs(
     Ok(Some(result))
 }
 
+/// Accumulates statistics over an NDJSON stream upsert operation.
 #[derive(Default)]
 struct StreamUpsertStats {
     inserted: usize,
     malformed: usize,
     failed_upserts: usize,
+    /// Number of HTTP/transport errors encountered while reading the request body.
+    ///
+    /// A non-zero value means the stream was truncated mid-transfer; the response
+    /// `inserted` count is therefore a lower bound on how many points were actually
+    /// sent by the client.
+    network_errors: u64,
 }
 
-fn parse_ndjson_line(line: &str, batch: &mut Vec<Point>, stats: &mut StreamUpsertStats) {
+fn parse_ndjson_line(
+    line: &str,
+    batch: &mut Vec<Point>,
+    stats: &mut StreamUpsertStats,
+    point_id_hint: Option<u64>,
+) {
     if line.is_empty() {
         return;
     }
@@ -80,13 +92,28 @@ fn parse_ndjson_line(line: &str, batch: &mut Vec<Point>, stats: &mut StreamUpser
         Ok(point) => batch.push(point),
         Err(error) => {
             stats.malformed += 1;
-            tracing::warn!(error = %error, "Skipping malformed NDJSON point");
+            // N-2: include point ID in the warning when it is available from context.
+            if let Some(id) = point_id_hint {
+                tracing::warn!(
+                    error = %error,
+                    point_id = id,
+                    "Skipping malformed NDJSON point"
+                );
+            } else {
+                tracing::warn!(error = %error, "Skipping malformed NDJSON point");
+            }
         }
     }
 }
 
-async fn flush_point_batch(
-    collection: VectorCollection,
+/// Flushes a batch and — if the collection's delta buffer is active — also
+/// pushes the entries into the buffer for immediate searchability.
+///
+/// This is the correct call-site replacement for `flush_point_batch` in the
+/// NDJSON stream handler. It avoids the ownership problem (collection is moved
+/// into `spawn_blocking`) by snapshotting delta entries before the move.
+async fn flush_point_batch_with_delta(
+    collection: &VectorCollection,
     batch: &mut Vec<Point>,
     stats: &mut StreamUpsertStats,
 ) {
@@ -97,8 +124,28 @@ async fn flush_point_batch(
     let points = std::mem::take(batch);
     let batch_size = points.len();
 
-    match tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await {
-        Ok(Ok(inserted)) => stats.inserted += inserted,
+    // Snapshot (id, vector) pairs for delta before moving `points` into spawn_blocking.
+    // Only allocate when delta is active to keep the hot path allocation-free.
+    // Uses the public `is_delta_active()` API — does not access `inner` directly.
+    #[cfg(feature = "persistence")]
+    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.is_delta_active() {
+        points.iter().map(|p| (p.id, p.vector.clone())).collect()
+    } else {
+        Vec::new()
+    };
+
+    let coll = collection.clone();
+    match tokio::task::spawn_blocking(move || coll.upsert_bulk(&points)).await {
+        Ok(Ok(inserted)) => {
+            stats.inserted += inserted;
+
+            // C-3: push into the delta buffer after a successful upsert so that
+            // search can find these points before HNSW is rebuilt.
+            #[cfg(feature = "persistence")]
+            if !delta_entries.is_empty() {
+                collection.push_to_delta_if_active(&delta_entries);
+            }
+        }
         Ok(Err(error)) => {
             stats.failed_upserts += batch_size;
             tracing::error!(
@@ -168,7 +215,13 @@ pub async fn upsert_points(
     }
 
     // CRITICAL: upsert_bulk is blocking (HNSW insertion + I/O)
-    // Must use spawn_blocking to avoid blocking the async runtime
+    // Must use spawn_blocking to avoid blocking the async runtime.
+    //
+    // NOTE: This handler intentionally does NOT push points to the delta buffer.
+    // The delta buffer is only used by the streaming ingest path
+    // (`stream_upsert_points`) during a background HNSW rebuild. Standard
+    // upserts go directly through `upsert_bulk`, which inserts straight into
+    // the HNSW index and WAL — no buffering needed.
     let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
     match result {
@@ -198,6 +251,13 @@ pub async fn upsert_points(
 }
 
 /// Stream upsert points using NDJSON.
+///
+/// Accepts a `application/x-ndjson` body. Each line is a JSON-encoded [`Point`].
+/// Points are accumulated into micro-batches and flushed via `upsert_bulk`.
+///
+/// The response body includes a `network_errors` field: a non-zero value means
+/// the HTTP body stream was truncated (e.g., client disconnect or proxy error),
+/// and the server may have received fewer points than the client sent (M-7).
 #[utoipa::path(
     post,
     path = "/collections/{name}/points/stream",
@@ -246,17 +306,23 @@ pub async fn stream_upsert_points(
                 while let Some(newline_pos) = buffer.iter().position(|byte| *byte == b'\n') {
                     let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
                     let line = String::from_utf8_lossy(&line_bytes);
-                    parse_ndjson_line(line.trim(), &mut batch, &mut stats);
+                    // N-2: attempt to extract an `id` field for the warning log
+                    let id_hint = serde_json::from_str::<serde_json::Value>(line.trim())
+                        .ok()
+                        .and_then(|v| v.get("id").and_then(|id| id.as_u64()));
+                    parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
 
                     if batch.len() >= STREAM_BATCH_SIZE
                         || (!batch.is_empty() && last_flush.elapsed() >= STREAM_BATCH_MAX_WAIT)
                     {
-                        flush_point_batch(collection.clone(), &mut batch, &mut stats).await;
+                        flush_point_batch_with_delta(&collection, &mut batch, &mut stats).await;
                         last_flush = Instant::now();
                     }
                 }
             }
             Err(error) => {
+                // M-7: count network errors so clients can detect partial delivery.
+                stats.network_errors += 1;
                 tracing::warn!(error = %error, "Error while reading request body stream");
             }
         }
@@ -264,10 +330,13 @@ pub async fn stream_upsert_points(
 
     if !buffer.is_empty() {
         let line = String::from_utf8_lossy(&buffer);
-        parse_ndjson_line(line.trim(), &mut batch, &mut stats);
+        let id_hint = serde_json::from_str::<serde_json::Value>(line.trim())
+            .ok()
+            .and_then(|v| v.get("id").and_then(|id| id.as_u64()));
+        parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
     }
 
-    flush_point_batch(collection, &mut batch, &mut stats).await;
+    flush_point_batch_with_delta(&collection, &mut batch, &mut stats).await;
 
     if stats.inserted > 0 {
         state.db.notify_upsert(&name, stats.inserted);
@@ -277,7 +346,8 @@ pub async fn stream_upsert_points(
         "message": "Stream processed",
         "inserted": stats.inserted,
         "malformed": stats.malformed,
-        "failed_upserts": stats.failed_upserts
+        "failed_upserts": stats.failed_upserts,
+        "network_errors": stats.network_errors
     }))
     .into_response()
 }
@@ -285,8 +355,11 @@ pub async fn stream_upsert_points(
 /// Stream-insert a single point via the bounded ingestion channel.
 ///
 /// Returns 202 Accepted on success, 429 Too Many Requests when the buffer is
-/// full (with `Retry-After: 0.1` header), and 404 when the collection is not
-/// found.
+/// full (with `Retry-After: 1` header per RFC 7231), 503 Service Unavailable
+/// when the drain task has exited, and 404 when the collection is not found.
+///
+/// This handler is `async` to satisfy Axum's handler contract; it does not
+/// perform any async I/O internally (the channel send is non-blocking).
 #[utoipa::path(
     post,
     path = "/collections/{name}/stream/insert",
@@ -297,12 +370,12 @@ pub async fn stream_upsert_points(
     request_body = StreamInsertRequest,
     responses(
         (status = 202, description = "Point accepted into streaming buffer"),
-        (status = 429, description = "Streaming buffer full — retry after delay", body = ErrorResponse),
+        (status = 429, description = "Streaming buffer full — retry after 1 second", body = ErrorResponse),
+        (status = 503, description = "Streaming drain task has exited — collection must be reconfigured", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 409, description = "Streaming not configured", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn stream_insert(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -324,22 +397,47 @@ pub async fn stream_insert(
         }
     };
 
+    // M-3: validate vector dimension before sending into the channel.
+    let expected_dim = collection.dimension();
+    if req.vector.len() != expected_dim {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "Vector dimension mismatch: collection expects {expected_dim}, \
+                     got {}",
+                    req.vector.len()
+                ),
+            }),
+        )
+            .into_response();
+    }
+
     let point = Point::new(req.id, req.vector, req.payload);
 
     match collection.stream_insert(point) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(BackpressureError::BufferFull) => {
             let mut headers = axum::http::HeaderMap::new();
-            headers.insert("Retry-After", axum::http::HeaderValue::from_static("0.1"));
+            // N-1: RFC 7231 §7.1.3 requires Retry-After to be a non-negative integer (seconds).
+            headers.insert("Retry-After", axum::http::HeaderValue::from_static("1"));
             (
                 StatusCode::TOO_MANY_REQUESTS,
                 headers,
                 Json(ErrorResponse {
-                    error: "Stream buffer full, retry after 100ms".to_string(),
+                    error: "Stream buffer full, retry after 1s".to_string(),
                 }),
             )
                 .into_response()
         }
+        Err(BackpressureError::DrainTaskDead) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Streaming drain task has exited; the collection must be reconfigured"
+                    .to_string(),
+            }),
+        )
+            .into_response(),
         Err(BackpressureError::NotConfigured) => (
             StatusCode::CONFLICT,
             Json(ErrorResponse {
@@ -417,7 +515,6 @@ pub async fn get_point(
         (status = 404, description = "Point or collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn delete_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,

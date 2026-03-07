@@ -239,6 +239,7 @@ impl Collection {
     /// - Any vector has incorrect dimension
     /// - More than 10 vectors are provided (configurable limit)
     #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::too_many_lines)]
     pub fn multi_query_search(
         &self,
         vectors: &[&[f32]],
@@ -285,10 +286,21 @@ impl Collection {
             _ => top_k * 2,
         };
 
+        let metric = self.config.read().metric;
+
         // Execute parallel batch search
         let batch_results =
             self.index
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+
+        // Merge with delta buffer per query before fusion (C-2: was bypassed).
+        let batch_results: Vec<Vec<(u64, f32)>> = batch_results
+            .into_iter()
+            .zip(vectors)
+            .map(|(query_results, query)| {
+                self.merge_delta(query_results, query, overfetch_k, metric)
+            })
+            .collect();
 
         // Apply filter if present (pre-fusion filtering)
         let filtered_results: Vec<Vec<(u64, f32)>> = if let Some(f) = filter {
@@ -402,9 +414,20 @@ impl Collection {
             _ => top_k * 2,
         };
 
+        let metric = self.config.read().metric;
+
         let batch_results =
             self.index
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+
+        // Merge with delta buffer per query before fusion (C-2: was bypassed).
+        let batch_results: Vec<Vec<(u64, f32)>> = batch_results
+            .into_iter()
+            .zip(vectors)
+            .map(|(query_results, query)| {
+                self.merge_delta(query_results, query, overfetch_k, metric)
+            })
+            .collect();
 
         let fused = fusion
             .fuse(batch_results)

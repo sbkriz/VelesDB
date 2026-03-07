@@ -130,13 +130,18 @@ impl Collection {
                 actual: vector_query.len(),
             });
         }
+        let metric = config.metric;
         drop(config);
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
 
-        // Get vector search results (more than k to allow for fusion)
-        let vector_results = self.index.search(vector_query, k * 2);
+        // Overfetch for RRF fusion; merge delta buffer entries before fusion so
+        // vectors inserted during an ongoing HNSW rebuild are not missed.
+        let overfetch_k = k * 2;
+        let raw_vector_results = self.index.search(vector_query, overfetch_k);
+        let vector_results =
+            self.merge_delta(raw_vector_results, vector_query, overfetch_k, metric);
 
         // Get BM25 text search results
         let text_results = self.text_index.search(text_query, k * 2);
@@ -238,16 +243,20 @@ impl Collection {
                 actual: vector_query.len(),
             });
         }
+        let metric = config.metric;
         drop(config);
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
 
-        // Get more candidates for filtering
+        // Overfetch for post-filter recall; merge delta buffer entries before
+        // fusion so vectors inserted during an ongoing HNSW rebuild are not missed.
         let candidates_k = k.saturating_mul(4).max(k + 10);
 
         // Get vector search results
-        let vector_results = self.index.search(vector_query, candidates_k);
+        let raw_vector_results = self.index.search(vector_query, candidates_k);
+        let vector_results =
+            self.merge_delta(raw_vector_results, vector_query, candidates_k, metric);
 
         // Get BM25 text search results
         let text_results = self.text_index.search(text_query, candidates_k);
