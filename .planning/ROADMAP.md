@@ -177,7 +177,11 @@ Plans:
   2. PyPI wheels are available for linux-x86_64, linux-aarch64, macos-arm64, and windows-x86_64 — a fresh `pip install velesdb` on each platform installs without errors
   3. `@wiscale/velesdb` and `@wiscale/velesdb-wasm` at version 1.5.0 are published on npm — `npm install @wiscale/velesdb` works
   4. The GitHub Release includes binary artifacts for Linux, macOS ARM, macOS Intel, and Windows, plus structured release notes listing all v1.5 features and breaking changes
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 10-01-PLAN.md — Version bump 1.5.0 + cargo publish dry-run validation (REL-01, REL-05)
+- [ ] 10-02-PLAN.md — Release workflow: PyPI matrix + structured notes + npm verification + validation gate (REL-02, REL-03, REL-04, REL-05)
 
 ## Progress
 
@@ -195,4 +199,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
 | 8. SDK Parity | 3/4 | In Progress|  |
 | 9. Documentation | 4/4 | Complete   | 2026-03-07 |
-| 10. Release Readiness | 0/TBD | Not started | - |
+| 10. Release Readiness | 0/2 | Not started | - |
