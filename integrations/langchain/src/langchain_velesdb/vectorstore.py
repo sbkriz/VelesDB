@@ -152,8 +152,6 @@ class VelesDBVectorStore(VectorStore):
                     metric=self._metric,
                     storage_mode=self._storage_mode,
                 )
-                # Reload to get the collection object
-                self._collection = db.get_collection(self._collection_name)
         return self._collection
 
     @staticmethod
@@ -203,6 +201,13 @@ class VelesDBVectorStore(VectorStore):
 
         # Hybrid dense+sparse path
         if sparse_vector is not None:
+            if filter is not None:
+                return collection.search(
+                    vector=query_embedding,
+                    sparse_vector=sparse_vector,
+                    top_k=k,
+                    filter=filter,
+                )
             return collection.search(
                 vector=query_embedding,
                 sparse_vector=sparse_vector,
@@ -354,7 +359,11 @@ class VelesDBVectorStore(VectorStore):
         Returns:
             List of (Document, score) tuples.
         """
+        validate_text(query)
+        validate_k(k)
         sparse_vector = kwargs.get("sparse_vector")
+        if sparse_vector is not None:
+            validate_sparse_vector(sparse_vector)
         query_embedding = self._embedding.embed_query(query)
         results = self._run_vector_search(
             query_embedding, k, sparse_vector=sparse_vector,
