@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# PSEUDOCODE: This file is not directly runnable.
+# It requires the VelesDB Python SDK compiled via PyO3:
+#   cd crates/velesdb-python && maturin develop
+# For a runnable example using the real SDK, see examples/python/multimodel_notebook.py
 """
 Graph Traversal Examples for VelesDB Python SDK
 
