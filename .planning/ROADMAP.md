@@ -74,3 +74,25 @@ Plans:
 | 15. LangChain & LlamaIndex v1.5 Parity | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 16. Traceability & EXPLAIN Cosmetic Fixes | v1.5 | 1/1 | Complete | 2026-03-08 |
 | 17. Hybrid Query Test & Demo Coverage | 2/2 | Complete    | 2026-03-08 | — |
+
+### Phase 18: Documentation code audit — verify all code snippets in READMEs, guides, and docs match real API usage
+
+**Goal:** Verify and fix every code snippet across all project documentation (READMEs, guides, specs, migration docs) to match real API signatures in Rust, Python, WASM, REST, and CLI. Mark unsupported VelesQL syntax (FUSE BY) as planned, and label business-scenario pseudocode clearly.
+
+**Requirements:** DOC-01, DOC-02, DOC-03, DOC-04
+
+| ID | Requirement |
+|----|-------------|
+| DOC-01 | Python snippets use correct velesdb.Database class, get_collection() accessor, and keyword arguments (vector=, top_k=) |
+| DOC-02 | REST snippets use correct routes (no /v1/ prefix) and parameters (top_k, not limit) |
+| DOC-03 | VelesQL snippets use implemented syntax (USING FUSION, not FUSE BY); FUSE BY marked as planned |
+| DOC-04 | No documentation references nonexistent methods (search_with_quality, db.search, get_all) |
+
+**Depends on:** Phase 17
+**Plans:** 4 plans
+
+Plans:
+- [ ] 18-01-PLAN.md — Fix root README Python snippets and migration guide API mismatches
+- [ ] 18-02-PLAN.md — Fix SEARCH_MODES.md and mark FUSE BY as planned in VelesQL spec files
+- [ ] 18-03-PLAN.md — Fix WASM README routes, npm package names, Python/Core README, NATIVE_HNSW
+- [ ] 18-04-PLAN.md — Fix API reference/installation/getting-started, audit TBD files, project-wide final sweep
