@@ -235,7 +235,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 13. Recall Benchmark Multi-Distribution | 1/1 | Complete    | 2026-03-08 |
 | 14. README Documentation Audit | 2/2 | Complete    | 2026-03-08 |
 | 15. LangChain & LlamaIndex v1.5 Parity | 2/2 | Complete    | 2026-03-08 |
-| 16. Traceability & EXPLAIN Cosmetic Fixes | 0/0 | Pending     |  |
+| 16. Traceability & EXPLAIN Cosmetic Fixes | 0/1 | In Progress |  |
 
 ### Phase 13: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
 
@@ -284,4 +284,7 @@ Plans:
   2. `QueryPlan.to_tree()` formatter includes `cache_hit` and `plan_reuse_count` fields
   3. QUAL-06 checkbox is `[x]` and traceability status is `Complete` in REQUIREMENTS.md
 
+**Plans:** 1 plan
+
 Plans:
+- [ ] 16-01-PLAN.md -- Wire EXPLAIN endpoint to Database::explain_query + to_tree cache fields + QUAL-06 traceability (CACHE-04, QUAL-06)
