@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v1.5 Open-Core Parity** — Phases 1-16 (shipped 2026-03-08)
+- 🔄 **v1.6 Hybrid Query Credibility** — Phase 17 (in progress)
 
 ## Phases
 
@@ -30,6 +31,28 @@ Full details: `.planning/milestones/v1.5-ROADMAP.md`
 
 </details>
 
+### Phase 17: Hybrid Query Test & Demo Coverage
+
+**Goal:** Prove VelesDB's core value proposition with executable tests and real demos. Every claim — vector+graph+sparse in one query — must be backed by an integration test that executes the query end-to-end, asserts ranked results, and validates multi-signal fusion. Demos must run without scaffolding.
+
+**Milestone:** v1.6 Hybrid Query Credibility
+
+**Requirements:** HYB-01, HYB-02, HYB-03, HYB-04, HYB-05
+
+| ID | Requirement |
+|----|-------------|
+| HYB-01 | Integration test executes a single VelesQL MATCH+similarity+scalar-filter query on a controlled corpus and asserts result identity and ranking order |
+| HYB-02 | Integration test validates BM25+cosine hybrid fusion: corpus where signals diverge, assert fusion outranks each signal alone |
+| HYB-03 | Integration test uses real GraphCollection edges and validates MATCH traversal combined with similarity in one executed query |
+| HYB-04 | Python examples use real VelesDB API calls (not pseudocode/print); non-runnable examples clearly labeled as pseudocode |
+| HYB-05 | `ecommerce_recommendation` example demonstrates Vector+Graph fusion via VelesQL or engine-level call, not manual HashMap merge |
+
+**Plans:** 2 plans
+
+Plans:
+- [ ] 17-01-PLAN.md — Integration tests: HYB-01 (NEAR + scalar filter + ranking identity), HYB-02 (fusion ranking differs from pure vector), HYB-03 (graph MATCH traversal with real edges)
+- [ ] 17-02-PLAN.md — Example fixes: HYB-05 (ecommerce QUERY 4 → hybrid_search()), HYB-04 (Python PSEUDOCODE headers)
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -50,3 +73,4 @@ Full details: `.planning/milestones/v1.5-ROADMAP.md`
 | 14. README Documentation Audit | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 15. LangChain & LlamaIndex v1.5 Parity | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 16. Traceability & EXPLAIN Cosmetic Fixes | v1.5 | 1/1 | Complete | 2026-03-08 |
+| 17. Hybrid Query Test & Demo Coverage | v1.6 | 0/2 | In Progress | — |
