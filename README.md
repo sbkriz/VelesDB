@@ -63,7 +63,8 @@ SELECT * FROM my_collection WHERE vector NEAR $query LIMIT 10
 ```python
 # Python SDK
 db.train_pq("my_collection", m=8, k=256)
-results = db.search("my_collection", vector=query_vec, top_k=10)
+collection = db.get_collection("my_collection")
+results = collection.search(vector=query_vec, top_k=10)
 ```
 
 ### Sparse Vector Search -- SPLADE/BM42-Compatible
@@ -108,12 +109,13 @@ Bounded channel with backpressure (HTTP 429 when full). Inserted vectors are imm
 
 ```python
 # Python SDK -- stream inserts without blocking
-db.stream_insert("my_collection", points=[
+collection = db.get_collection("my_collection")
+collection.stream_insert([
     {"id": "p1", "vector": vec1, "payload": {"text": "hello"}},
     {"id": "p2", "vector": vec2, "payload": {"text": "world"}},
 ])
 # Immediately searchable -- no rebuild wait
-results = db.search("my_collection", vector=query_vec, top_k=10)
+results = collection.search(vector=query_vec, top_k=10)
 ```
 
 ### Query Plan Cache -- Compiled Plan Reuse
@@ -425,7 +427,7 @@ import velesdb
 db = velesdb.Database("./my_vectors")
 collection = db.create_collection("docs", dimension=768, metric="cosine")
 collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
-results = collection.search([...], top_k=10)
+results = collection.search(vector=[...], top_k=10)
 ```
 
 ```bash
@@ -838,6 +840,7 @@ LIMIT 12
 **Problem:** "Flag transactions that look suspicious based on pattern + network + history"
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- Detect fraud: semantic pattern + transaction network + account history
 MATCH (tx:Transaction)-[:FROM]->(account:Account)-[:LINKED_TO*1..3]->(related:Account)
 WHERE 
@@ -885,6 +888,7 @@ RETURN treatment.name, AVG(success_rate) as effectiveness
 **Problem:** "My AI agent needs conversation history + knowledge base + user preferences"
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- Agent memory: semantic recall + conversation graph + user context
 MATCH (user:User)-[:HAD_CONVERSATION]->(conv:Conversation)
       -[:CONTAINS]->(message:Message)
@@ -1201,10 +1205,11 @@ LIMIT 8
 **Goal:** Find similar malware patterns observed in the last 7 days
 
 ```sql
-SELECT malware_hash, threat_level, first_seen 
-FROM threat_intel 
-WHERE 
-  vector NEAR $current_threat_embedding 
+-- PSEUDOCODE: conceptual query, not executable VelesQL
+SELECT malware_hash, threat_level, first_seen
+FROM threat_intel
+WHERE
+  vector NEAR $current_threat_embedding
   AND first_seen > NOW() - INTERVAL '7 days'
   AND threat_level > 0.8
 ORDER BY similarity() DESC, first_seen DESC
