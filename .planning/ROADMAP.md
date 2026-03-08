@@ -73,4 +73,4 @@ Plans:
 | 14. README Documentation Audit | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 15. LangChain & LlamaIndex v1.5 Parity | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 16. Traceability & EXPLAIN Cosmetic Fixes | v1.5 | 1/1 | Complete | 2026-03-08 |
-| 17. Hybrid Query Test & Demo Coverage | 2/2 | Complete   | 2026-03-08 | — |
+| 17. Hybrid Query Test & Demo Coverage | 2/2 | Complete    | 2026-03-08 | — |
