@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: parity
 status: completed
-stopped_at: Completed 15-02-PLAN.md
-last_updated: "2026-03-08T13:37:41.142Z"
-last_activity: 2026-03-08 — Completed Phase 15 Plan 02 (LlamaIndex v1.5 parity)
+stopped_at: Completed 16-01-PLAN.md
+last_updated: "2026-03-08T14:39:31Z"
+last_activity: 2026-03-08 — Completed Phase 16 Plan 01 (EXPLAIN cache wiring + QUAL-06 traceability)
 progress:
   total_phases: 16
-  completed_phases: 15
-  total_plans: 41
-  completed_plans: 41
-  percent: 90
+  completed_phases: 16
+  total_plans: 42
+  completed_plans: 42
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 15 — LangChain & LlamaIndex v1.5 Parity (Plan 02 complete)
+**Current focus:** Phase 16 — Traceability & EXPLAIN Cosmetic Fixes (Plan 01 complete -- MILESTONE COMPLETE)
 
 ## Current Position
 
-Phase: 15 of 16 (LangChain & LlamaIndex v1.5 Parity) -- IN PROGRESS
-Plan: 2 of 2 in current phase
-Status: Completed 15-02-PLAN.md
-Last activity: 2026-03-08 — Completed Phase 15 Plan 02 (LlamaIndex v1.5 parity)
+Phase: 16 of 16 (Traceability & EXPLAIN Cosmetic Fixes) -- COMPLETED
+Plan: 1 of 1 in current phase
+Status: Completed 16-01-PLAN.md
+Last activity: 2026-03-08 — Completed Phase 16 Plan 01 (EXPLAIN cache wiring + QUAL-06 traceability)
 
-Progress: [█████████░] 90% (41/41 plans complete, 1 phase pending)
+Progress: [██████████] 100% (42/42 plans complete, 0 phases pending)
 
 ## Performance Metrics
 
@@ -84,6 +84,7 @@ Progress: [█████████░] 90% (41/41 plans complete, 1 phase pe
 | Phase 14 P01 | 3 min | 2 tasks | 1 files |
 | Phase 14 P02 | 2 | 2 tasks | 1 files |
 | Phase 15 P01 | 2 | 2 tasks | 4 files |
+| Phase 16 P01 | 8 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -210,6 +211,7 @@ Recent decisions affecting current work:
 - [15-02]: stream_insert returns int (point count) rather than list of IDs for streaming semantics
 - [Phase 15-01]: sparse_vector passed via kwargs.get() in similarity_search to preserve VectorStore ABC signature
 - [Phase 15-01]: stream_insert returns int count rather than list of IDs (streaming semantics)
+- [16-01]: Graceful fallback: explain_query errors map to (None, None) cache fields rather than failing the request
 
 ### Roadmap Evolution
 
@@ -230,7 +232,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T13:33:30Z
-Stopped at: Completed 15-02-PLAN.md
+Last session: 2026-03-08T14:39:31Z
+Stopped at: Completed 16-01-PLAN.md
 Resume file: None
-Next action: Phase 16 (Traceability & EXPLAIN cosmetic fixes)
+Next action: v1.5 milestone complete -- all 16 phases and 42 plans executed
