@@ -89,10 +89,11 @@ Plans:
 | DOC-04 | No documentation references nonexistent methods (search_with_quality, db.search, get_all) |
 
 **Depends on:** Phase 17
-**Plans:** 4/4 plans complete
+**Plans:** 5 plans (4 complete + 1 gap closure)
 
 Plans:
 - [x] 18-01-PLAN.md — Fix root README Python snippets and migration guide API mismatches
-- [ ] 18-02-PLAN.md — Fix SEARCH_MODES.md and mark FUSE BY as planned in VelesQL spec files
-- [ ] 18-03-PLAN.md — Fix WASM README routes, npm package names, Python/Core README, NATIVE_HNSW
-- [ ] 18-04-PLAN.md — Fix API reference/installation/getting-started, audit TBD files, project-wide final sweep
+- [x] 18-02-PLAN.md — Fix SEARCH_MODES.md and mark FUSE BY as planned in VelesQL spec files
+- [x] 18-03-PLAN.md — Fix WASM README routes, npm package names, Python/Core README, NATIVE_HNSW
+- [x] 18-04-PLAN.md — Fix API reference/installation/getting-started, audit TBD files, project-wide final sweep
+- [ ] 18-05-PLAN.md — Gap closure: mark FUSE BY as planned in migration guide (DOC-03)

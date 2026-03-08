@@ -130,21 +130,35 @@ The `SPARSE_NEAR` clause accepts a `SparseVectorExpr` which has two variants:
 - **Literal**: inline sparse vector data
 - **Parameter**: a `$name` reference resolved at runtime
 
-#### FUSE BY Clause
+#### FUSE BY Clause -- PLANNED SYNTAX
+
+> **Note:** `FUSE BY` is planned syntax (not yet implemented in the v1.5 grammar). Use `USING FUSION(...)` for hybrid fusion queries today.
 
 Combine dense and sparse search results with a fusion strategy:
 
 ```sql
+-- PLANNED: syntax not yet implemented
 -- Reciprocal Rank Fusion (default k=60)
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RRF(k=60)
+FUSE BY RRF(k=60)  -- PLANNED: not yet implemented
 LIMIT 10
 
+-- PLANNED: syntax not yet implemented
 -- Reciprocal Score Fusion with weights
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)
+FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)  -- PLANNED: not yet implemented
+LIMIT 10
+```
+
+**Current working syntax (v1.5):**
+
+```sql
+-- Use USING FUSION(...) instead of FUSE BY:
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 ```
 
@@ -160,7 +174,7 @@ Training is explicit and not automatic. The quantizer must be trained before PQ-
 
 ### Impact
 
-If you maintain a custom VelesQL parser (e.g., in a third-party SDK), it must be updated to handle `SPARSE_NEAR`, `FUSE BY`, and `TRAIN QUANTIZER`. The conformance test suite (`conformance/velesql_parser_cases.json`) includes test cases for the new syntax.
+If you maintain a custom VelesQL parser (e.g., in a third-party SDK), it must be updated to handle `SPARSE_NEAR` and `TRAIN QUANTIZER`. (`FUSE BY` is planned syntax -- the current working equivalent is `USING FUSION(...)`.)
 
 ---
 
@@ -265,7 +279,7 @@ When both dense and sparse vectors are provided in a search request, RRF with `k
 - [ ] Re-create collections and re-import data
 - [ ] Update exhaustive `QuantizationConfig` match arms to include `ProductQuantization`
 - [ ] Add `sparse_vector: None` to all `Point` struct literals
-- [ ] Update any custom VelesQL parsers for `SPARSE_NEAR`, `FUSE BY`, `TRAIN QUANTIZER`
+- [ ] Update any custom VelesQL parsers for `SPARSE_NEAR`, `TRAIN QUANTIZER` (note: `FUSE BY` is planned -- use `USING FUSION(...)` for now)
 - [ ] Update REST API client code to handle new fields if applicable
 - [ ] Run test suite to verify no regressions
 
@@ -287,7 +301,7 @@ When both dense and sparse vectors are provided in a search request, RRF with `k
 
 ### Q: What if my VelesQL queries do not use the new syntax?
 
-**A:** Existing v1.4 VelesQL queries continue to work without modification. The new syntax (`SPARSE_NEAR`, `FUSE BY`, `TRAIN QUANTIZER`) is additive.
+**A:** Existing v1.4 VelesQL queries continue to work without modification. The new syntax (`SPARSE_NEAR`, `TRAIN QUANTIZER`) is additive. (`FUSE BY` is planned for a future release -- use `USING FUSION(...)` for hybrid fusion.)
 
 ### Q: Is the REST API backward compatible?
 
