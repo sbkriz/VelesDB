@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-03-08T11:00:47.901Z"
-last_activity: "2026-03-08 — Phase 13 Plan 01 complete (multi-distribution recall benchmarks: clustered, binary, exact baselines)"
+status: in-progress
+stopped_at: Phase 14 Plan 01 complete
+last_updated: "2026-03-08T12:07:33.000Z"
+last_activity: "2026-03-08 — Phase 14 Plan 01 complete (README versions, metrics, badges, structural cleanup)"
 progress:
   total_phases: 14
   completed_phases: 13
-  total_plans: 37
-  completed_plans: 37
+  total_plans: 38
+  completed_plans: 38
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 13 — Recall Benchmark Multi-Distribution Coverage (COMPLETE)
+**Current focus:** Phase 14 — README Documentation Audit (IN PROGRESS)
 
 ## Current Position
 
-Phase: 13 of 14 (Recall Benchmark Multi-Distribution Coverage) -- COMPLETE
-Plan: 1 of 1 in current phase (1 complete)
-Status: Phase 13 Plan 01 complete -- multi-distribution recall benchmarks (clustered, binary, exact baselines)
-Last activity: 2026-03-08 — Phase 13 Plan 01 complete (multi-distribution recall benchmarks: clustered, binary, exact baselines)
+Phase: 14 of 14 (README Documentation Audit) -- IN PROGRESS
+Plan: 1 of 2 in current phase (1 complete)
+Status: Phase 14 Plan 01 complete -- README versions, metrics, badges, structural cleanup
+Last activity: 2026-03-08 — Phase 14 Plan 01 complete (README versions, metrics, badges, structural cleanup)
 
-Progress: [██████████] 100% (37/37 plans complete)
+Progress: [██████████] 100% (38/38 plans complete)
 
 ## Performance Metrics
 
@@ -81,6 +81,7 @@ Progress: [██████████] 100% (37/37 plans complete)
 | Phase 11 P02 | 12 min | 1 tasks | 2 files |
 | Phase 12 P01 | 5 min | 2 tasks | 6 files |
 | Phase 13 P01 | 7 min | 2 tasks | 3 files |
+| Phase 14 P01 | 3 min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -197,6 +198,9 @@ Recent decisions affecting current work:
 - [12-01]: OpenAPI spec version corrected from 0.1.1 to 1.5.0 in source, test, and generated specs
 - [13-01]: Clustered data achieves 1.0 recall with ef_search=512 on 5K vectors -- no ceiling issue at this scale
 - [13-01]: Binary {0,1} data achieves 0.904 recall with default ef_search=128
+- [14-01]: LoC count updated from ~133,000 to ~48,000 (actual crates/ workspace wc -l count)
+- [14-01]: Tests badge replaced with dynamic GitHub Actions CI badge (shields.io workflow status)
+- [14-01]: .deb install example uses <VERSION> placeholder with link to GitHub Releases
 
 ### Roadmap Evolution
 
@@ -215,7 +219,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T10:57:07Z
-Stopped at: Completed 13-01-PLAN.md
-Resume file: .planning/phases/13-recall-benchmark-multi-distribution-coverage-uniform-clustered-sparse-binary/13-01-SUMMARY.md
-Next action: Phase 14 (README documentation audit)
+Last session: 2026-03-08T12:07:33Z
+Stopped at: Completed 14-01-PLAN.md
+Resume file: .planning/phases/14-readme-documentation-audit/14-01-SUMMARY.md
+Next action: Phase 14 Plan 02 (API reference gaps, snippet validation)
