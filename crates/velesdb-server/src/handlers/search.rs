@@ -185,10 +185,23 @@ pub async fn search(
                 // "rsf" is the canonical REST alias for `FusionStrategy::RelativeScore`
                 // (maps to `FusionStrategyType::Rsf` in the core enum).
                 // "relative_score" is accepted as a more descriptive synonym.
-                "rsf" | "relative_score" => velesdb_core::FusionStrategy::RelativeScore {
-                    dense_weight: f.dense_w.unwrap_or(0.5),
-                    sparse_weight: f.sparse_w.unwrap_or(0.5),
-                },
+                "rsf" | "relative_score" => {
+                    match velesdb_core::FusionStrategy::relative_score(
+                        f.dense_w.unwrap_or(0.5),
+                        f.sparse_w.unwrap_or(0.5),
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(ErrorResponse {
+                                    error: format!("Invalid RSF fusion weights: {e}"),
+                                }),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
                 other => {
                     return (
                         StatusCode::BAD_REQUEST,
