@@ -235,13 +235,13 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 
 ### Phase 13: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** The PQ recall benchmark suite covers clustered Gaussian (6 variants) and binary {0,1} (2 variants) distributions alongside the existing uniform coverage, with exact search baselines validating ground truth on all three distributions
+**Requirements**: PQ-07
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 13 to break down)
+- [ ] 13-01-PLAN.md — Multi-distribution recall benchmarks: clustered (6 variants), binary (2 variants), exact baselines (PQ-07)
 
 ### Phase 14: README documentation audit
 

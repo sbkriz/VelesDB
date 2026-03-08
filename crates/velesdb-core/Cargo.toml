@@ -118,6 +118,7 @@ tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
 clap = { version = "4.5", features = ["derive"] }
+rand_distr = "0.4"
 
 # Loom for concurrency testing (EPIC-023) - optional dependency, not dev-dependency
 [dependencies.loom]
@@ -325,4 +326,8 @@ harness = false
 
 [[bench]]
 name = "sparse_benchmark"
+harness = false
+
+[[bench]]
+name = "pq_recall_multidist"
 harness = false
