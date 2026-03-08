@@ -79,7 +79,8 @@ VelesDB expose 5 **presets** prédéfinis via l'enum `SearchQuality` :
 - Prototypage rapide
 
 ```rust
-collection.search_with_quality(&query, 10, SearchQuality::Fast);
+// ef_search = max(64, k * 2) = 64
+collection.search_with_ef(&query, 10, 64)?;
 ```
 
 ---
@@ -118,7 +119,8 @@ collection.search(&query, 10);
 - Détection de plagiat
 
 ```rust
-collection.search_with_quality(&query, 10, SearchQuality::Accurate);
+// ef_search = max(256, k * 8) = 256
+collection.search_with_ef(&query, 10, 256)?;
 ```
 
 ---
@@ -137,7 +139,8 @@ collection.search_with_quality(&query, 10, SearchQuality::Accurate);
 - Déduplication critique
 
 ```rust
-collection.search_with_quality(&query, 10, SearchQuality::HighRecall);
+// ef_search = max(1024, k * 32) = 1024
+collection.search_with_ef(&query, 10, 1024)?;
 ```
 
 ---
@@ -157,7 +160,8 @@ collection.search_with_quality(&query, 10, SearchQuality::HighRecall);
 - Petits datasets critiques (< 50K vecteurs)
 
 ```rust
-collection.search_with_quality(&query, 10, SearchQuality::Perfect);
+// Brute-force search: 100% recall guaranteed
+collection.search_brute_force(&query, 10)?;
 ```
 
 > ⚠️ **Attention** : Le mode Perfect effectue un scan complet de tous les vecteurs. À éviter pour les datasets > 500K vecteurs en temps réel.
@@ -223,13 +227,12 @@ VelesDB stocke les sparse vectors comme des paires `(indice, valeur)` :
 ```json
 {
   "sparse_vector": {
-    "default": {
-      "indices": [42, 156, 891, 2048],
-      "values":  [0.8, 0.3, 0.5, 0.1]
-    }
+    "default": {42: 0.8, 156: 0.3, 891: 0.5, 2048: 0.1}
   }
 }
 ```
+
+> **Note**: The REST API also accepts the parallel-array format (`{indices: [...], values: [...]}`) for backward compatibility.
 
 Les sparse vectors supportent les **named vectors** : un point peut avoir plusieurs sparse vectors nommes (par exemple `"bm25"`, `"splade"`).
 
@@ -275,7 +278,7 @@ LIMIT 20
 curl -X POST http://localhost:8080/collections/docs/search/sparse \
   -H "Content-Type: application/json" \
   -d '{
-    "sparse_vector": {"indices": [42, 156, 891], "values": [0.8, 0.3, 0.5]},
+    "sparse_vector": {42: 0.8, 156: 0.3, 891: 0.5},
     "top_k": 10
   }'
 ```
@@ -283,13 +286,13 @@ curl -X POST http://localhost:8080/collections/docs/search/sparse \
 ### Exemple Python SDK
 
 ```python
-from velesdb import VelesDB
+import velesdb
 
-db = VelesDB("./data")
-coll = db.collection("docs")
+db = velesdb.Database("./data")
+coll = db.get_collection("docs")
 
 results = coll.search(
-    sparse_vector={"indices": [42, 156, 891], "values": [0.8, 0.3, 0.5]},
+    sparse_vector={42: 0.8, 156: 0.3, 891: 0.5},
     top_k=10
 )
 ```
@@ -320,13 +323,13 @@ La recherche hybride combine la recherche **dense** (embeddings semantiques) et 
 -- Hybrid search avec RRF
 SELECT * FROM products
 WHERE vector NEAR $embedding AND vector SPARSE_NEAR $bm25
-FUSE BY RRF(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 
 -- Hybrid search avec poids explicites
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)
+USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 LIMIT 20
 ```
 
@@ -337,7 +340,7 @@ curl -X POST http://localhost:8080/collections/docs/search \
   -H "Content-Type: application/json" \
   -d '{
     "vector": [0.1, 0.2, 0.3, ...],
-    "sparse_vector": {"indices": [42, 156], "values": [0.8, 0.3]},
+    "sparse_vector": {42: 0.8, 156: 0.3},
     "top_k": 10
   }'
 ```
@@ -349,7 +352,7 @@ Quand les deux champs `vector` et `sparse_vector` sont fournis, VelesDB execute 
 ```python
 results = coll.search(
     vector=[0.1, 0.2, 0.3, ...],
-    sparse_vector={"indices": [42, 156], "values": [0.8, 0.3]},
+    sparse_vector={42: 0.8, 156: 0.3},
     top_k=10
 )
 ```
@@ -381,7 +384,7 @@ score_rrf(d) = 1/(k + rank_dense(d)) + 1/(k + rank_sparse(d))
 
 **VelesQL :**
 ```sql
-FUSE BY RRF(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 ```
 
 ### RSF (Reciprocal Score Fusion)
@@ -405,7 +408,7 @@ La normalisation est min-max par branche. `dense_weight + sparse_weight` doit va
 
 **VelesQL :**
 ```sql
-FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)
+USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 ```
 
 ### Comparaison RRF vs RSF
@@ -570,27 +573,19 @@ SearchQuality::Accurate
 ### Rust
 
 ```rust
-use velesdb_core::{Collection, SearchQuality};
+use velesdb_core::Collection;
 
-// Méthode 1: Mode par défaut (Balanced)
+// Méthode 1: Mode par défaut (Balanced, ef_search=128)
 let results = collection.search(&query_vector, 10)?;
 
-// Méthode 2: Mode explicite
-let results = collection.search_with_quality(
-    &query_vector, 
-    10, 
-    SearchQuality::HighRecall
-)?;
+// Méthode 2: ef_search personnalisé (haute précision)
+let results = collection.search_with_ef(&query_vector, 10, 1024)?;
 
-// Méthode 3: ef_search personnalisé
-let results = collection.search_with_ef(&query_vector, 10, 512)?;
+// Méthode 3: ef_search pour mode rapide
+let results = collection.search_with_ef(&query_vector, 10, 64)?;
 
 // Méthode 4: Mode parfait (bruteforce)
-let results = collection.search_with_quality(
-    &query_vector, 
-    10, 
-    SearchQuality::Perfect
-)?;
+let results = collection.search_brute_force(&query_vector, 10)?;
 ```
 
 ### REST API
@@ -706,8 +701,8 @@ velesdb> SEARCH TOP 10 IN products WHERE vector NEAR $v;
 
 ```rust
 // Benchmark recall
-let ann_results = collection.search_with_quality(&query, 10, SearchQuality::Balanced);
-let exact_results = collection.search_with_quality(&query, 10, SearchQuality::Perfect);
+let ann_results = collection.search(&query, 10)?;           // Balanced (ef_search=128)
+let exact_results = collection.search_brute_force(&query, 10)?; // Perfect (100% recall)
 
 let recall = calculate_recall(&ann_results, &exact_results);
 println!("Recall@10: {:.1}%", recall * 100.0);
