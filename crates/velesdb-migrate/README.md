@@ -524,9 +524,9 @@ velesdb-migrate run --config migration.yaml --batch-size 100
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `batch_size` | integer | `1000` | Points extracted per batch |
-| `workers` | integer | `4` | Parallel workers (not yet implemented) |
-| `checkpoint_enabled` | boolean | `true` | Enable resume support |
-| `checkpoint_path` | string | auto | Custom checkpoint file path |
+| `workers` | integer | `4` | Parallel point preparation workers before batch write |
+| `checkpoint_enabled` | boolean | `true` | Enable checkpoint/resume between successful batches |
+| `checkpoint_path` | string | auto | Custom checkpoint file path for resume state |
 | `dry_run` | boolean | `false` | Preview only, don't write |
 | `continue_on_error` | boolean | `false` | Skip failed points |
 | `field_mappings` | map | `{}` | Rename fields during migration |
@@ -660,12 +660,12 @@ Error: Out of memory
 If migration fails midway:
 
 ```bash
-# The checkpoint file stores progress
-# Just re-run the same command
+# The checkpoint file stores the last successful batch offset
+# Just re-run the same command to resume from that point
 velesdb-migrate run --config migration.yaml
 
-# Or start fresh by removing checkpoint
-rm .velesdb_migrate_checkpoint.json
+# Or start fresh by removing the checkpoint file
+rm ./velesdb_data/.velesdb_migrate_checkpoint_<source>_<collection>.json
 velesdb-migrate run --config migration.yaml
 ```
 

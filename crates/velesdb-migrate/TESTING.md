@@ -25,6 +25,9 @@ $env:SUPABASE_ID_COL = "id"
 # Depuis le dossier velesdb-core
 cd /path/to/velesdb-core
 
+# Tests E2E locaux déterministes contre velesdb-core (JSON/CSV + checkpoint + workers)
+cargo test -p velesdb-migrate --test pipeline_e2e
+
 # Tous les tests d'intégration
 cargo test -p velesdb-migrate --test integration_test -- --ignored --nocapture
 
@@ -34,6 +37,14 @@ cargo test -p velesdb-migrate --test integration_test test_dimension_detection_a
 ```
 
 ### Tests disponibles
+
+### Tests E2E locaux
+
+| Test | Description |
+|------|-------------|
+| `pipeline_e2e` | Valide l'écriture réelle dans `velesdb-core`, la reprise par checkpoint, `dry_run`, `continue_on_error` et la cohérence `workers` |
+
+### Tests avec sources réelles
 
 | Test | Description |
 |------|-------------|
