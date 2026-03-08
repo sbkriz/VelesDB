@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-03-08T10:03:46Z"
-last_activity: 2026-03-08 — Phase 12 Plan 01 complete (traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment)
+stopped_at: Phase 13 Plan 01 complete
+last_updated: "2026-03-08T10:57:07Z"
+last_activity: 2026-03-08 — Phase 13 Plan 01 complete (multi-distribution recall benchmarks: clustered, binary, exact baselines)
 progress:
-  total_phases: 12
-  completed_phases: 12
-  total_plans: 36
-  completed_plans: 36
+  total_phases: 14
+  completed_phases: 13
+  total_plans: 37
+  completed_plans: 37
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 12 — Traceability & Cosmetic Cleanup (COMPLETE)
+**Current focus:** Phase 13 — Recall Benchmark Multi-Distribution Coverage (COMPLETE)
 
 ## Current Position
 
-Phase: 12 of 12 (Traceability & Cosmetic Cleanup) -- COMPLETE
+Phase: 13 of 14 (Recall Benchmark Multi-Distribution Coverage) -- COMPLETE
 Plan: 1 of 1 in current phase (1 complete)
-Status: Phase 12 Plan 01 complete -- traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment
-Last activity: 2026-03-08 — Phase 12 Plan 01 complete (traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment)
+Status: Phase 13 Plan 01 complete -- multi-distribution recall benchmarks (clustered, binary, exact baselines)
+Last activity: 2026-03-08 — Phase 13 Plan 01 complete (multi-distribution recall benchmarks: clustered, binary, exact baselines)
 
-Progress: [██████████] 100% (36/36 plans complete)
+Progress: [██████████] 100% (37/37 plans complete)
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ Progress: [██████████] 100% (36/36 plans complete)
 | Phase 11 P01 | 8 min | 2 tasks | 2 files |
 | Phase 11 P02 | 12 min | 1 tasks | 2 files |
 | Phase 12 P01 | 5 min | 2 tasks | 6 files |
+| Phase 13 P01 | 7 min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -194,6 +195,8 @@ Recent decisions affecting current work:
 - [11-02]: Kept 5K vectors (not 20K) since uniform random data achieves 0.99+ recall at 5K with ef_search=128
 - [12-01]: QUAL-02, QUAL-07, PQ-ADV-01, QUANT-ADV-01 traceability already correct -- no fixes needed
 - [12-01]: OpenAPI spec version corrected from 0.1.1 to 1.5.0 in source, test, and generated specs
+- [13-01]: Clustered data achieves 1.0 recall with ef_search=512 on 5K vectors -- no ceiling issue at this scale
+- [13-01]: Binary {0,1} data achieves 0.904 recall with default ef_search=128
 
 ### Roadmap Evolution
 
@@ -212,7 +215,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T09:58:10Z
-Stopped at: Completed 12-01-PLAN.md
-Resume file: None
-Next action: All phases complete
+Last session: 2026-03-08T10:57:07Z
+Stopped at: Completed 13-01-PLAN.md
+Resume file: .planning/phases/13-recall-benchmark-multi-distribution-coverage-uniform-clustered-sparse-binary/13-01-SUMMARY.md
+Next action: Phase 14 (README documentation audit)

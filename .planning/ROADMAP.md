@@ -232,6 +232,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 10. Release Readiness | 2/2 | Complete    | 2026-03-07 |
 | 11. PQ Recall Benchmark Hardening | 2/2 | Complete    | 2026-03-08 |
 | 12. Traceability & Cosmetic Cleanup | 1/1 | Complete    | 2026-03-08 |
+| 13. Recall Benchmark Multi-Distribution | 1/1 | Complete    | 2026-03-08 |
 
 ### Phase 13: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
 
@@ -241,7 +242,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 **Plans:** 1 plan
 
 Plans:
-- [ ] 13-01-PLAN.md — Multi-distribution recall benchmarks: clustered (6 variants), binary (2 variants), exact baselines (PQ-07)
+- [x] 13-01-PLAN.md — Multi-distribution recall benchmarks: clustered (6 variants), binary (2 variants), exact baselines (PQ-07) (completed 2026-03-08)
 
 ### Phase 14: README documentation audit
 
