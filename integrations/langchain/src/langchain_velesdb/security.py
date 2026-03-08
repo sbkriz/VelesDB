@@ -3,6 +3,7 @@
 Provides input validation, sanitization, and security constants.
 """
 
+import math
 import os
 import re
 from pathlib import Path
@@ -321,15 +322,19 @@ def validate_sparse_vector(sparse_vector: Any) -> dict:
         )
 
     for key, value in sparse_vector.items():
-        if not isinstance(key, int):
+        if isinstance(key, bool) or not isinstance(key, int):
             raise SecurityError(
                 f"Sparse vector keys must be int (term IDs), "
                 f"got {type(key).__name__} for key {key!r}"
             )
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise SecurityError(
                 f"Sparse vector values must be int or float (weights), "
                 f"got {type(value).__name__} for key {key}"
+            )
+        if isinstance(value, float) and not math.isfinite(value):
+            raise SecurityError(
+                f"Sparse vector weights must be finite, got {value} for key {key}"
             )
 
     return sparse_vector

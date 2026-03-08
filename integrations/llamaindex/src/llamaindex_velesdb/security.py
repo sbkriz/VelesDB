@@ -3,6 +3,7 @@
 Provides input validation, sanitization, and security constants.
 """
 
+import math
 import os
 import re
 from typing import Any, Optional
@@ -294,7 +295,7 @@ def validate_url(url: str) -> str:
     return url
 
 
-def validate_sparse_vector(sparse_vector: dict) -> dict:
+def validate_sparse_vector(sparse_vector: Any) -> dict:
     """Validate a sparse vector dictionary.
 
     Sparse vectors map integer term IDs to float weights.
@@ -319,13 +320,17 @@ def validate_sparse_vector(sparse_vector: dict) -> dict:
         )
 
     for key, value in sparse_vector.items():
-        if not isinstance(key, int):
+        if isinstance(key, bool) or not isinstance(key, int):
             raise SecurityError(
                 f"Sparse vector keys must be integers (term IDs), got {type(key).__name__}"
             )
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise SecurityError(
                 f"Sparse vector values must be int or float (weights), got {type(value).__name__}"
+            )
+        if isinstance(value, float) and not math.isfinite(value):
+            raise SecurityError(
+                f"Sparse vector weights must be finite, got {value} for key {key}"
             )
 
     return sparse_vector
