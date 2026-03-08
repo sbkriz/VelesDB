@@ -89,7 +89,7 @@ Plans:
 | DOC-04 | No documentation references nonexistent methods (search_with_quality, db.search, get_all) |
 
 **Depends on:** Phase 17
-**Plans:** 5 plans (4 complete + 1 gap closure)
+**Plans:** 5/5 plans complete
 
 Plans:
 - [x] 18-01-PLAN.md — Fix root README Python snippets and migration guide API mismatches

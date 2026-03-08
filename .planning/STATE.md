@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 18-04-PLAN.md
-last_updated: "2026-03-08T18:12:13.911Z"
-last_activity: "2026-03-08 - Completed 18-02: Fix SEARCH_MODES.md and VelesQL spec FUSE BY planned syntax"
+stopped_at: Completed 18-05-PLAN.md
+last_updated: "2026-03-08T18:27:36.825Z"
+last_activity: "2026-03-08 - Completed 18-04: Final doc sweep - API reference, getting-started, TBD files audit"
 progress:
   total_phases: 2
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 7
+  completed_plans: 7
   percent: 100
 ---
 
@@ -89,6 +89,7 @@ Progress: [██████████] 100% (6/6 plans complete, 0 phases pe
 | Phase 17 P01 | 4 min | 2 tasks | 1 files |
 | Phase 18 P03 | 2 | 2 tasks | 5 files |
 | Phase 18 P04 | 2 | 2 tasks | 5 files |
+| Phase 18 P05 | 1 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -218,6 +219,7 @@ Recent decisions affecting current work:
 - [16-01]: Graceful fallback: explain_query errors map to (None, None) cache fields rather than failing the request
 - [Phase 18]: velesdb-core README exports (Filter, Condition, metrics) verified correct against lib.rs -- no changes needed
 - [Phase 18]: TypeScript VelesDB class in @wiscale/velesdb-sdk is correct SDK usage, not a bad pattern
+- [Phase 18]: Followed same planned-syntax pattern from 18-02 for FUSE BY markers in migration guide
 
 ### Roadmap Evolution
 
@@ -245,7 +247,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T18:12:13.909Z
-Stopped at: Completed 18-04-PLAN.md
+Last session: 2026-03-08T18:27:36.822Z
+Stopped at: Completed 18-05-PLAN.md
 Resume file: None
 Next action: Execute 18-03-PLAN.md
