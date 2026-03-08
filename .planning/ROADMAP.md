@@ -194,7 +194,7 @@ Plans:
   3. Results are recorded in `benchmarks/baseline.json` alongside existing benchmarks
 
 Plans:
-- [ ] 11-01-PLAN.md — Fix recall threshold + explicit training config + add benchmark variants (PQ-07)
+- [x] 11-01-PLAN.md — Fix recall threshold + explicit training config + add benchmark variants (PQ-07) (completed 2026-03-08)
 
 ### Phase 12: Traceability & Cosmetic Cleanup
 **Goal**: All stale traceability entries are corrected and cosmetic version/naming issues are resolved — REQUIREMENTS.md accurately reflects reality
@@ -228,5 +228,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. SDK Parity | 3/4 | In Progress|  |
 | 9. Documentation | 4/4 | Complete   | 2026-03-07 |
 | 10. Release Readiness | 2/2 | Complete    | 2026-03-07 |
-| 11. PQ Recall Benchmark Hardening | 0/1 | Not Started |  |
+| 11. PQ Recall Benchmark Hardening | 1/1 | Complete | 2026-03-08 |
 | 12. Traceability & Cosmetic Cleanup | 0/2 | Not Started |  |
