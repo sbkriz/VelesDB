@@ -280,7 +280,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (22+ endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
 | **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
 | **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
-| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb`   |
+| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb-sdk`   |
 | **🌍 WASM** | [velesdb-wasm](crates/velesdb-wasm) | Browser-side vector search               | `npm i @wiscale/velesdb-wasm` |
 | **📱 Mobile** | [velesdb-mobile](crates/velesdb-mobile) | iOS (Swift) & Android (Kotlin)           | [Build instructions](#-mobile-build) |
 | **🖥️ Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) | Tauri v2 AI-powered apps               | `cargo add tauri-plugin-velesdb` |

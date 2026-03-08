@@ -75,7 +75,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 
 - [x] **REL-01**: Tous crates versionnes `1.5.0`, publies sur crates.io dans l'ordre des dependances (velesdb-core en premier)
 - [x] **REL-02**: PyPI — wheels cross-platform via maturin CI matrix (linux-x86_64, linux-aarch64, macos-arm64, windows-x86_64)
-- [x] **REL-03**: npm — `@wiscale/velesdb` et `@wiscale/velesdb-wasm` publies avec version 1.5.0
+- [x] **REL-03**: npm — @wiscale/velesdb-sdk et @wiscale/velesdb-wasm publies avec version 1.5.0
 - [x] **REL-04**: GitHub Release — notes de release structurees + artefacts binaires (Linux, macOS ARM, macOS Intel, Windows)
 - [x] **REL-05**: CI release matrix — validation cross-platform automatique avant toute publication
 

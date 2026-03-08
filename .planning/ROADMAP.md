@@ -175,7 +175,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. All workspace crates are at version 1.5.0 and `velesdb-core` is successfully published to crates.io before dependent crates — no dependency-order publish failures
   2. PyPI wheels are available for linux-x86_64, linux-aarch64, macos-arm64, and windows-x86_64 — a fresh `pip install velesdb` on each platform installs without errors
-  3. `@wiscale/velesdb` and `@wiscale/velesdb-wasm` at version 1.5.0 are published on npm — `npm install @wiscale/velesdb` works
+  3. `@wiscale/velesdb-sdk` and `@wiscale/velesdb-wasm` at version 1.5.0 are published on npm — `npm install @wiscale/velesdb-sdk` works
   4. The GitHub Release includes binary artifacts for Linux, macOS ARM, macOS Intel, and Windows, plus structured release notes listing all v1.5 features and breaking changes
 **Plans**: 2 plans
 
@@ -195,7 +195,7 @@ Plans:
 
 Plans:
 - [x] 11-01-PLAN.md — Fix recall threshold + explicit training config + add benchmark variants (PQ-07) (completed 2026-03-08)
-- [ ] 11-02-PLAN.md — Increase dataset size to achieve 0.92+ recall threshold (PQ-07 gap closure)
+- [x] 11-02-PLAN.md — Increase dataset size to achieve 0.92+ recall threshold (PQ-07 gap closure) (completed 2026-03-08)
 
 ### Phase 12: Traceability & Cosmetic Cleanup
 **Goal**: All stale traceability entries are corrected and cosmetic version/naming issues are resolved — REQUIREMENTS.md accurately reflects reality
@@ -208,9 +208,10 @@ Plans:
   3. OpenAPI spec version is `1.5.0` (not `0.1.1`)
   4. REL-03 naming is consistent between REQUIREMENTS.md and actual npm package name
 
+**Plans**: 1 plan
+
 Plans:
-- [ ] 12-01-PLAN.md — Fix stale traceability checkboxes + status entries (QUAL-02, QUAL-07, PQ-ADV-01, QUANT-ADV-01)
-- [ ] 12-02-PLAN.md — OpenAPI version fix + REL-03 naming alignment
+- [ ] 12-01-PLAN.md — Traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment (QUAL-02, QUAL-07, PQ-ADV-01, QUANT-ADV-01)
 
 ## Progress
 
@@ -229,5 +230,25 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. SDK Parity | 3/4 | In Progress|  |
 | 9. Documentation | 4/4 | Complete   | 2026-03-07 |
 | 10. Release Readiness | 2/2 | Complete    | 2026-03-07 |
-| 11. PQ Recall Benchmark Hardening | 2/2 | Complete   | 2026-03-08 |
-| 12. Traceability & Cosmetic Cleanup | 0/2 | Not Started |  |
+| 11. PQ Recall Benchmark Hardening | 2/2 | Complete    | 2026-03-08 |
+| 12. Traceability & Cosmetic Cleanup | 0/1 | Not Started |  |
+
+### Phase 13: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 13 to break down)
+
+### Phase 14: README documentation audit
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 13
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 14 to break down)
