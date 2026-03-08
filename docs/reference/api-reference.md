@@ -711,10 +711,10 @@ collections = db.list_collections()
 
 # Points
 collection.upsert([{"id": 1, "vector": [...], "payload": {...}}])
-point = collection.get(1)
+points = collection.get([1])
 collection.delete([1, 2, 3])
 
 # Search (supports numpy arrays)
-results = collection.search(query_vector, top_k=10)
-results = collection.search(np.array([...], dtype=np.float32), top_k=10)
+results = collection.search(vector=query_vector, top_k=10)
+results = collection.search(vector=np.array([...], dtype=np.float32), top_k=10)
 ```

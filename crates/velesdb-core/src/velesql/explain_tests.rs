@@ -13,7 +13,7 @@ fn test_plan_from_simple_select() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -41,7 +41,7 @@ fn test_plan_from_vector_search() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "embeddings".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("query".to_string()),
@@ -70,7 +70,7 @@ fn test_plan_with_filter() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
@@ -106,7 +106,7 @@ fn test_plan_to_tree_format() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("q".to_string()),
@@ -138,7 +138,7 @@ fn test_plan_to_json() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -166,7 +166,7 @@ fn test_plan_with_offset() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "items".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -194,7 +194,7 @@ fn test_filter_strategy_post_filter_default() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
@@ -246,7 +246,7 @@ fn test_plan_display_impl() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
-        from_alias: None,
+        from_alias: vec![],
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -297,6 +297,8 @@ fn test_index_lookup_node_cost() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     // IndexLookup cost should be much lower than TableScan
@@ -307,6 +309,8 @@ fn test_index_lookup_node_cost() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     assert!(plan.estimated_cost_ms < scan_plan.estimated_cost_ms);
@@ -324,6 +328,8 @@ fn test_index_lookup_render_tree() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     // Act
@@ -352,6 +358,8 @@ fn test_index_lookup_json_serialization() {
         estimated_cost_ms: 0.0001,
         index_used: Some(IndexType::Property),
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     // Act
@@ -362,6 +370,58 @@ fn test_index_lookup_json_serialization() {
     assert!(json.contains("Document"));
     assert!(json.contains("category"));
     assert!(json.contains("tech"));
+}
+
+// =========================================================================
+// Cache hit / plan reuse count in to_tree() output
+// =========================================================================
+
+#[test]
+fn test_plan_to_tree_cache_hit_present() {
+    let plan = QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "docs".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        cache_hit: Some(true),
+        plan_reuse_count: Some(42),
+    };
+
+    let tree = plan.to_tree();
+    assert!(
+        tree.contains("Cache hit: true"),
+        "tree should contain cache hit line"
+    );
+    assert!(
+        tree.contains("Plan reuse count: 42"),
+        "tree should contain plan reuse count line"
+    );
+}
+
+#[test]
+fn test_plan_to_tree_cache_hit_absent() {
+    let plan = QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "docs".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
+    };
+
+    let tree = plan.to_tree();
+    assert!(
+        !tree.contains("Cache hit"),
+        "tree should NOT contain cache hit when None"
+    );
+    assert!(
+        !tree.contains("Plan reuse count"),
+        "tree should NOT contain plan reuse count when None"
+    );
 }
 
 // =========================================================================
@@ -456,6 +516,8 @@ fn test_explain_output_struct() {
         estimated_cost_ms: 1.0,
         index_used: None,
         filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
     };
 
     let output = ExplainOutput {

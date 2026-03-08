@@ -19,6 +19,7 @@ impl Parser {
             match p.as_rule() {
                 Rule::match_query => return Self::parse_match_query(p),
                 Rule::compound_query => return Self::parse_compound_query(p),
+                Rule::train_stmt => return Self::parse_train_stmt(p),
                 Rule::insert_stmt => return Self::parse_insert_stmt(p),
                 Rule::update_stmt => return Self::parse_update_stmt(p),
                 _ => {}
@@ -27,7 +28,7 @@ impl Parser {
         Err(ParseError::syntax(
             0,
             "",
-            "Expected MATCH, SELECT, INSERT, or UPDATE query",
+            "Expected MATCH, SELECT, INSERT, UPDATE, or TRAIN query",
         ))
     }
 
@@ -37,7 +38,7 @@ impl Parser {
         let mut distinct = crate::velesql::DistinctMode::None;
         let mut columns = SelectColumns::All;
         let mut from = String::new();
-        let mut from_alias = None;
+        let mut from_alias: Vec<String> = Vec::new();
         let mut joins = Vec::new();
         let mut where_clause = None;
         let mut order_by = None;
@@ -52,11 +53,19 @@ impl Parser {
                 Rule::distinct_modifier => distinct = crate::velesql::DistinctMode::All,
                 Rule::select_list => columns = Self::parse_select_list(inner_pair)?,
                 Rule::from_clause => {
-                    let (table, alias) = Self::parse_from_clause(inner_pair);
+                    let (table, aliases) = Self::parse_from_clause(inner_pair);
                     from = table;
-                    from_alias = alias;
+                    from_alias = aliases;
                 }
-                Rule::join_clause => joins.push(Self::parse_join_clause(inner_pair)?),
+                Rule::join_clause => {
+                    let join = Self::parse_join_clause(inner_pair)?;
+                    // BUG-8: Collect JOIN aliases into from_alias so all
+                    // aliases visible in scope are available to the executor.
+                    if let Some(ref alias) = join.alias {
+                        from_alias.push(alias.clone());
+                    }
+                    joins.push(join);
+                }
                 Rule::where_clause => where_clause = Some(Self::parse_where_clause(inner_pair)?),
                 Rule::group_by_clause => group_by = Some(Self::parse_group_by_clause(inner_pair)),
                 Rule::having_clause => having = Some(Self::parse_having_clause(inner_pair)?),

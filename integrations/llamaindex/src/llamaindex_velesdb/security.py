@@ -3,6 +3,7 @@
 Provides input validation, sanitization, and security constants.
 """
 
+import math
 import os
 import re
 from typing import Any, Optional
@@ -17,6 +18,7 @@ MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096  # Max path length
 ALLOWED_METRICS = {"cosine", "euclidean", "dot", "hamming", "jaccard"}
 ALLOWED_STORAGE_MODES = {"full", "sq8", "binary"}
+MAX_SPARSE_VECTOR_SIZE = 100_000  # Max sparse vector entries
 DEFAULT_TIMEOUT_MS = 30_000  # 30 seconds max timeout
 
 
@@ -291,6 +293,47 @@ def validate_url(url: str) -> str:
         raise SecurityError("URL contains invalid characters")
     
     return url
+
+
+def validate_sparse_vector(sparse_vector: Any) -> dict:
+    """Validate a sparse vector dictionary.
+
+    Sparse vectors map integer term IDs to float weights.
+
+    Args:
+        sparse_vector: Dictionary mapping term IDs (int) to weights (int or float).
+
+    Returns:
+        Validated sparse vector.
+
+    Raises:
+        SecurityError: If the sparse vector is invalid.
+    """
+    if not isinstance(sparse_vector, dict):
+        raise SecurityError(
+            f"Sparse vector must be a dict, got {type(sparse_vector).__name__}"
+        )
+
+    if len(sparse_vector) > MAX_SPARSE_VECTOR_SIZE:
+        raise SecurityError(
+            f"Sparse vector size {len(sparse_vector)} exceeds maximum of {MAX_SPARSE_VECTOR_SIZE}"
+        )
+
+    for key, value in sparse_vector.items():
+        if isinstance(key, bool) or not isinstance(key, int):
+            raise SecurityError(
+                f"Sparse vector keys must be integers (term IDs), got {type(key).__name__}"
+            )
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise SecurityError(
+                f"Sparse vector values must be int or float (weights), got {type(value).__name__}"
+            )
+        if isinstance(value, float) and not math.isfinite(value):
+            raise SecurityError(
+                f"Sparse vector weights must be finite, got {value} for key {key}"
+            )
+
+    return sparse_vector
 
 
 def validate_weight(weight: float, name: str = "weight") -> float:

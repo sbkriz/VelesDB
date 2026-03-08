@@ -65,31 +65,37 @@ fn test_executor_having_count_filter() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         },
         Point {
             id: 4,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "science"})),
+            sparse_vectors: None,
         },
         Point {
             id: 5,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "science"})),
+            sparse_vectors: None,
         },
         Point {
             id: 6,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "history"})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -120,21 +126,25 @@ fn test_executor_having_avg_filter() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A", "price": 200})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A", "price": 300})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "B", "price": 50})),
+            sparse_vectors: None,
         },
         Point {
             id: 4,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "B", "price": 50})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -161,16 +171,19 @@ fn test_executor_having_sum_filter() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "X", "amount": 100})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "X", "amount": 200})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "Y", "amount": 50})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -199,6 +212,7 @@ fn test_executor_having_without_groupby_returns_error() {
         id: 1,
         vector: vec![0.1; 4],
         payload: Some(serde_json::json!({"value": 10})),
+        sparse_vectors: None,
     }];
     collection.upsert(points).unwrap();
 

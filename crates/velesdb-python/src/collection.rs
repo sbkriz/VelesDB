@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::collection_helpers::{
-    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, point_to_dict,
-    search_result_to_dict, search_results_to_dicts, search_results_to_multimodel_dicts,
+    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vector,
+    parse_sparse_vectors_from_point, point_to_dict, search_result_to_dict, search_results_to_dicts,
+    search_results_to_multimodel_dicts,
 };
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 use crate::FusionStrategy;
@@ -95,28 +96,20 @@ impl Collection {
 
                 let payload: Option<serde_json::Value> = match point_dict.get("payload") {
                     Some(p) => {
-                        let payload_str: String = p
-                            .call_method0(py, "__str__")
-                            .and_then(|s| s.extract(py))
-                            .ok()
-                            .unwrap_or_default();
-
-                        if let Ok(json_val) = serde_json::from_str(&payload_str) {
-                            Some(json_val)
-                        } else {
-                            let dict: HashMap<String, PyObject> =
-                                p.extract(py).ok().unwrap_or_default();
-                            let json_map: serde_json::Map<String, serde_json::Value> = dict
-                                .into_iter()
-                                .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
-                                .collect();
-                            Some(serde_json::Value::Object(json_map))
-                        }
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
+                        let json_map: serde_json::Map<String, serde_json::Value> = dict
+                            .into_iter()
+                            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+                            .collect();
+                        Some(serde_json::Value::Object(json_map))
                     }
                     None => None,
                 };
 
-                core_points.push(Point::new(id, vector, payload));
+                let sparse_vectors = parse_sparse_vectors_from_point(py, &point_dict)?;
+                core_points.push(Point::with_sparse(id, vector, payload, sparse_vectors));
             }
 
             let count = core_points.len();
@@ -142,8 +135,9 @@ impl Collection {
 
                 let payload: serde_json::Value = match point_dict.get("payload") {
                     Some(p) => {
-                        let dict: HashMap<String, PyObject> =
-                            p.extract(py).ok().unwrap_or_default();
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
                         let json_map: serde_json::Map<String, serde_json::Value> = dict
                             .into_iter()
                             .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
@@ -188,8 +182,9 @@ impl Collection {
 
                 let payload: Option<serde_json::Value> = match point_dict.get("payload") {
                     Some(p) => {
-                        let dict: HashMap<String, PyObject> =
-                            p.extract(py).ok().unwrap_or_default();
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
                         let json_map: serde_json::Map<String, serde_json::Value> = dict
                             .into_iter()
                             .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
@@ -208,15 +203,62 @@ impl Collection {
         })
     }
 
-    /// Search for similar vectors.
-    #[pyo3(signature = (vector, top_k = 10))]
-    fn search(&self, vector: PyObject, top_k: usize) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    /// Search for similar vectors (dense, sparse, or hybrid).
+    ///
+    /// Supports three modes depending on which arguments are provided:
+    /// - Dense only: `search(vector, top_k=10)` (backward compatible)
+    /// - Sparse only: `search(sparse_vector={0: 1.5, 3: 0.8}, top_k=10)`
+    /// - Hybrid: `search(vector, sparse_vector={...}, top_k=10)` (fused with RRF k=60)
+    ///
+    /// Args:
+    ///     vector: Dense query vector (list or numpy array). Optional if sparse_vector is given.
+    ///     sparse_vector: Sparse query as dict[int, float] or scipy sparse. Optional if vector is given.
+    ///     top_k: Number of results to return (default: 10).
+    ///
+    /// Returns:
+    ///     List of dicts with id, score, and payload.
+    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10))]
+    fn search(
+        &self,
+        vector: Option<PyObject>,
+        sparse_vector: Option<PyObject>,
+        top_k: usize,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let query_vector = extract_vector(py, &vector)?;
-            let results = self
-                .inner
-                .search(&query_vector, top_k)
-                .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {}", e)))?;
+            let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
+            let sparse = sparse_vector
+                .as_ref()
+                .map(|sv| parse_sparse_vector(py, sv))
+                .transpose()?;
+
+            let results = match (dense, sparse) {
+                (Some(d), Some(s)) => {
+                    // Hybrid dense+sparse with RRF
+                    let strategy = CoreFusionStrategy::RRF { k: 60 };
+                    self.inner
+                        .hybrid_sparse_search(&d, &s, top_k, &strategy)
+                        .map_err(|e| {
+                            PyRuntimeError::new_err(format!("Hybrid search failed: {e}"))
+                        })?
+                }
+                (Some(d), None) => {
+                    // Dense-only (backward compatible)
+                    self.inner
+                        .search(&d, top_k)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}")))?
+                }
+                (None, Some(s)) => {
+                    // Sparse-only
+                    self.inner.sparse_search_default(&s, top_k).map_err(|e| {
+                        PyRuntimeError::new_err(format!("Sparse search failed: {e}"))
+                    })?
+                }
+                (None, None) => {
+                    return Err(PyValueError::new_err(
+                        "At least one of 'vector' or 'sparse_vector' must be provided",
+                    ));
+                }
+            };
 
             Ok(search_results_to_dicts(py, results))
         })
@@ -749,6 +791,75 @@ impl Collection {
                     dict
                 })
                 .collect())
+        })
+    }
+
+    // ========================================================================
+    // Streaming Insert (SDK-01)
+    // ========================================================================
+
+    /// Insert points via the streaming ingestion channel.
+    ///
+    /// Points are buffered and merged asynchronously into the HNSW index.
+    /// This is faster than `upsert` for high-throughput workloads but offers
+    /// eventual consistency (points appear in search after buffer merge).
+    ///
+    /// Args:
+    ///     points: List of point dicts (same format as upsert).
+    ///
+    /// Returns:
+    ///     Number of points successfully queued.
+    ///
+    /// Raises:
+    ///     RuntimeError: If the streaming buffer is full or not configured.
+    ///
+    /// Example:
+    ///     >>> count = collection.stream_insert([
+    ///     ...     {"id": 1, "vector": [...], "payload": {"key": "value"}}
+    ///     ... ])
+    #[pyo3(signature = (points))]
+    fn stream_insert(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
+        Python::with_gil(|py| {
+            let mut count = 0usize;
+
+            for point_dict in points {
+                let id: u64 = point_dict
+                    .get("id")
+                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
+                    .extract(py)?;
+
+                let vector_obj = point_dict
+                    .get("vector")
+                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
+                let vector = extract_vector(py, vector_obj)?;
+
+                let payload: Option<serde_json::Value> = match point_dict.get("payload") {
+                    Some(p) => {
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
+                        let json_map: serde_json::Map<String, serde_json::Value> = dict
+                            .into_iter()
+                            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+                            .collect();
+                        Some(serde_json::Value::Object(json_map))
+                    }
+                    None => None,
+                };
+
+                let sparse_vectors = parse_sparse_vectors_from_point(py, &point_dict)?;
+                let point = Point::with_sparse(id, vector, payload, sparse_vectors);
+
+                self.inner.stream_insert(point).map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "Stream insert failed (buffer full or not configured): {e}"
+                    ))
+                })?;
+
+                count += 1;
+            }
+
+            Ok(count)
         })
     }
 }

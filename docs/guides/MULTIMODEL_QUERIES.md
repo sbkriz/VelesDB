@@ -23,7 +23,7 @@ for r in results:
 
 ### TypeScript
 ```typescript
-import { VelesDB } from 'velesdb-client';
+import { VelesDB } from '@wiscale/velesdb-sdk';
 
 const db = new VelesDB({ baseUrl: 'http://localhost:8080' });
 await db.init();

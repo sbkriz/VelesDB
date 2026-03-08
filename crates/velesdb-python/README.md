@@ -110,7 +110,7 @@ batch_results = collection.batch_search(
     top_k=5
 )
 
-# Multi-query fusion search (MQG pipelines) ⭐ NEW
+# Multi-query fusion search (MQG pipelines)
 from velesdb import FusionStrategy
 
 results = collection.multi_query_search(
@@ -153,7 +153,7 @@ is_empty = collection.is_empty()
 # Flush to disk
 collection.flush()
 
-# VelesQL query (v0.8.5+)
+# VelesQL query
 results = collection.query(
     "SELECT * FROM vectors WHERE category = 'tech' LIMIT 10"
 )

@@ -89,18 +89,14 @@ class VectorStore {
 
   // Methods
   insert(id: bigint, vector: Float32Array): void;
-  insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;  // v0.8.5+
-  insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
+  insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;  insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
   search(query: Float32Array, k: number): Array<[bigint, number]>;
-  search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;  // v0.8.5+
-  text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;  // v0.8.5+
-  get(id: bigint): {id, vector, payload} | null;  // v0.8.5+
-  remove(id: bigint): boolean;
+  search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;  text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;  get(id: bigint): {id, vector, payload} | null;  remove(id: bigint): boolean;
   clear(): void;
   reserve(additional: number): void;  // Pre-allocate memory
   memory_usage(): number;  // Accurate for each storage mode
   
-  // ⭐ NEW v1.1.0
+  //
   multi_query_search(vectors: Float32Array, num_vectors: number, k: number, strategy?: string, rrf_k?: number): Array<[bigint, number]>;
   hybrid_search(vector: Float32Array, text_query: string, k: number, vector_weight?: number, field?: string): Array<{id, score, payload}>;
   batch_search(vectors: Float32Array, num_vectors: number, k: number): Array<Array<[bigint, number]>>;
@@ -111,7 +107,7 @@ class VectorStore {
 }
 ```
 
-### Filter Format (v0.8.5+)
+### Filter Format
 
 ```javascript
 // Equality filter
@@ -256,11 +252,12 @@ The WASM build is optimized for client-side use cases but has some limitations c
 |---------|------|-------------|
 | Vector search (NEAR) | ✅ | ✅ |
 | Metadata filtering | ✅ | ✅ |
+| Hybrid search (vector + BM25) | ✅ | ✅ |
+| Full-text search (BM25) | ✅ | ✅ |
+| Multi-query fusion (MQG) | ✅ | ✅ |
+| Batch search | ✅ | ✅ |
 | Full VelesQL queries | ❌ | ✅ |
-| Hybrid search (vector + BM25) | ❌ | ✅ |
 | Knowledge Graph operations | ❌ | ✅ |
-| MATCH clause (full-text) | ❌ | ✅ |
-| NEAR_FUSED (multi-query fusion) | ❌ | ✅ |
 | JOIN operations | ❌ | ✅ |
 | Aggregations (GROUP BY) | ❌ | ✅ |
 | Persistence | IndexedDB | Disk (mmap) |
@@ -289,8 +286,7 @@ const results = store.search_with_filter(queryVector, 10, {
 
 Consider using the [REST server](https://github.com/cyberlife-coder/VelesDB) if you need:
 
-- **Full VelesQL support** - Complex SQL-like queries
-- **Hybrid search** - Combine semantic + keyword search
+- **Full VelesQL support** - Complex SQL-like queries with JOINs and aggregations
 - **Knowledge Graph** - Entity relationships and graph traversal
 - **Large datasets** - More than 100K vectors
 - **Server-side processing** - Centralized vector database
@@ -304,15 +300,15 @@ const store = new VectorStore(768, 'cosine');
 const results = store.search(query, 10);
 
 // REST (server-side) - using fetch
-const response = await fetch('http://localhost:8080/v1/collections/docs/search', {
+const response = await fetch('http://localhost:8080/collections/docs/search', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ vector: query, limit: 10 })
+  body: JSON.stringify({ vector: query, top_k: 10 })
 });
 const results = await response.json();
 
 // REST with VelesQL
-const response = await fetch('http://localhost:8080/v1/query', {
+const response = await fetch('http://localhost:8080/query', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({

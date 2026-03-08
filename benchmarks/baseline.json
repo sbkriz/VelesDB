@@ -1,37 +1,64 @@
 {
-  "version": "1.0.0",
-  "description": "VelesDB Performance Baseline (EPIC-026/US-002)",
-  "recorded_at": "2026-02-20",
+  "version": "1.5.0",
+  "description": "VelesDB Performance Baseline v1.5 — Phase 11 PQ recall benchmark hardening (6 variants, 0.92 thresholds)",
+  "recorded_at": "2026-03-08",
   "environment": {
-    "rust_version": "1.83.0",
-    "features": "simd",
-    "runner": "github-hosted ubuntu-latest"
+    "rust_version": "1.92.0",
+    "features": "persistence,gpu,update-check",
+    "runner": "local (i9-14900KF, Windows 11)"
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 6730000000,
-      "std_ns": 550000000,
+      "mean_ns": 3997165150.0,
+      "std_ns": 400000000,
       "threshold_percent": 15
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 331820,
+      "mean_ns": 329167.0,
       "std_ns": 45000,
       "threshold_percent": 15
     },
-    "hnsw_insert": {
-      "mean_ns": 50000000,
-      "std_ns": 3000000,
+    "smoke_hybrid/vector_plus_filter": {
+      "mean_ns": 179910.0,
+      "std_ns": 20000,
       "threshold_percent": 15
     },
-    "hnsw_search_k10": {
-      "mean_ns": 1000000,
-      "std_ns": 100000,
-      "threshold_percent": 15
+    "pq_recall/pq_recall_m8_k256_rescore": {
+      "recall_at_10": null,
+      "threshold_recall": 0.92,
+      "notes": "PQ m=8 k=256, rescore=4x, 5K/128d uniform random dataset"
+    },
+    "pq_recall/full_precision_baseline": {
+      "recall_at_10": null,
+      "threshold_recall": 0.95,
+      "notes": "Full precision HNSW reference, 5K/128d uniform random dataset"
+    },
+    "pq_recall/pq_recall_m8_k256_no_rescore": {
+      "recall_at_10": null,
+      "threshold_recall": 0.20,
+      "notes": "No rescore - raw HNSW with PQ distances"
+    },
+    "pq_recall/opq_recall_m8_k256_rescore": {
+      "recall_at_10": null,
+      "threshold_recall": 0.92,
+      "notes": "OPQ with PCA rotation, 5K/128d uniform random dataset"
+    },
+    "pq_recall/rabitq_recall_128d": {
+      "recall_at_10": null,
+      "threshold_recall": 0.80,
+      "notes": "RaBitQ 32x compression, HNSW search path"
+    },
+    "pq_recall/pq_recall_m8_k256_oversampling8": {
+      "recall_at_10": null,
+      "threshold_recall": 0.92,
+      "notes": "PQ with 8x oversampling, 5K/128d uniform random dataset"
     }
   },
   "notes": [
-    "Smoke baseline refreshed from main CI run 22241009537",
-    "Threshold of 15% is aligned with docs/reference/PERFORMANCE_SLO.md",
-    "Recalibrate on dedicated performance host before release cut"
+    "Baseline captured after Phase 01 foundation fixes (postcard migration, PQ hardening, BUG-8)",
+    "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
+    "Machine: i9-14900KF, 64GB RAM, Windows 11 Pro",
+    "pq_recall entries hardened in Phase 11 — 6 variants with explicit m=8 k=256 training via VelesQL",
+    "PQ recall thresholds restored to 0.92 (PQ-07 contract) with uniform random data (replaces clustered data that hit HNSW recall ceiling)"
   ]
 }

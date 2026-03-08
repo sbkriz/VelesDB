@@ -1,0 +1,223 @@
+//! Integration tests for hybrid dense+sparse search execution.
+
+use crate::collection::types::Collection;
+use crate::index::sparse::SparseVector;
+use crate::point::Point;
+use std::collections::{BTreeMap, HashMap};
+use tempfile::TempDir;
+
+/// Helper: create a collection and insert points with both dense and sparse vectors.
+fn setup_hybrid_collection() -> (TempDir, Collection) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("hybrid_col");
+    let col = Collection::create(path, 4, crate::distance::DistanceMetric::Cosine)
+        .expect("Failed to create collection");
+
+    // Insert 12 points with varying dense + sparse profiles.
+    // Points 0-5: have both dense and sparse vectors (term 1, 2).
+    // Points 6-9: dense only.
+    // Points 10-11: have sparse only (dense vector still required by collection schema).
+    let mut points = Vec::new();
+    for i in 0u64..12 {
+        #[allow(clippy::cast_precision_loss)]
+        let fi = i as f32;
+        let dense = vec![fi / 12.0, 0.5, 0.3, 0.1];
+        let sparse = if (6..10).contains(&i) {
+            None
+        } else {
+            let mut map = BTreeMap::new();
+            // Different weights per point so sparse search produces ranking.
+            #[allow(clippy::cast_precision_loss)]
+            let w = 1.0 + i as f32;
+            map.insert(
+                String::new(), // default sparse index name
+                SparseVector::new(vec![(1, w), (2, 0.5)]),
+            );
+            Some(map)
+        };
+        points.push(Point {
+            id: i,
+            vector: dense,
+            payload: Some(serde_json::json!({ "idx": i })),
+            sparse_vectors: sparse,
+        });
+    }
+    col.upsert(points).expect("upsert failed");
+    (dir, col)
+}
+
+// -----------------------------------------------------------------------
+// Sparse-only tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_sparse_only_search() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let sparse_query = SparseVector::new(vec![(1, 1.0), (2, 1.0)]);
+    let svs = crate::velesql::SparseVectorSearch {
+        vector: crate::velesql::SparseVectorExpr::Literal(sparse_query),
+        index_name: None,
+    };
+
+    let results = col
+        .execute_sparse_search(&svs, &HashMap::new(), None, 5)
+        .expect("sparse search failed");
+
+    assert!(!results.is_empty(), "Should find sparse results");
+    assert!(results.len() <= 5, "Should respect limit");
+
+    // Results should be ordered by score descending.
+    for i in 1..results.len() {
+        assert!(
+            results[i - 1].score >= results[i].score,
+            "Results must be sorted by score descending: {} < {}",
+            results[i - 1].score,
+            results[i].score
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
+// Hybrid dense+sparse with RRF
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_hybrid_dense_sparse_rrf() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    // Dense query: close to point 11 (0.917, 0.5, 0.3, 0.1)
+    let dense_query = vec![0.9, 0.5, 0.3, 0.1];
+
+    // Sparse query: strong match for term 1 (points with high term-1 weight win)
+    let sparse_query = SparseVector::new(vec![(1, 1.0), (2, 1.0)]);
+    let svs = crate::velesql::SparseVectorSearch {
+        vector: crate::velesql::SparseVectorExpr::Literal(sparse_query),
+        index_name: None,
+    };
+
+    let results = col
+        .execute_hybrid_search(&dense_query, &svs, &HashMap::new(), None, 10)
+        .expect("hybrid search failed");
+
+    assert!(!results.is_empty(), "Hybrid search should return results");
+
+    // Verify fused results contain docs from both dense and sparse hits.
+    let result_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    // Point 11 should be present (has both dense proximity and sparse vector).
+    assert!(
+        result_ids.contains(&11),
+        "Point 11 should appear in hybrid results (dense-close + sparse-hit)"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Hybrid with RSF strategy
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_hybrid_dense_sparse_rsf() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let dense_query = vec![0.9, 0.5, 0.3, 0.1];
+    let sparse_query = SparseVector::new(vec![(1, 1.0), (2, 1.0)]);
+    let svs = crate::velesql::SparseVectorSearch {
+        vector: crate::velesql::SparseVectorExpr::Literal(sparse_query),
+        index_name: None,
+    };
+
+    let rsf_strategy = crate::fusion::FusionStrategy::relative_score(0.6, 0.4).unwrap();
+
+    let results = col
+        .execute_hybrid_search_with_strategy(
+            &dense_query,
+            &svs,
+            &HashMap::new(),
+            None,
+            10,
+            &rsf_strategy,
+        )
+        .expect("hybrid RSF search failed");
+
+    assert!(
+        !results.is_empty(),
+        "RSF hybrid search should return results"
+    );
+
+    // Results should be scored and ordered
+    for i in 1..results.len() {
+        assert!(
+            results[i - 1].score >= results[i].score,
+            "RSF results should be sorted descending"
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
+// Graceful degradation: one branch empty
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_hybrid_empty_sparse_branch() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let dense_query = vec![0.9, 0.5, 0.3, 0.1];
+    // Query on a term that no document has -> empty sparse branch
+    let sparse_query = SparseVector::new(vec![(99999, 1.0)]);
+    let svs = crate::velesql::SparseVectorSearch {
+        vector: crate::velesql::SparseVectorExpr::Literal(sparse_query),
+        index_name: None,
+    };
+
+    let results = col
+        .execute_hybrid_search(&dense_query, &svs, &HashMap::new(), None, 5)
+        .expect("hybrid search with empty sparse should succeed");
+
+    // Should gracefully fall back to dense-only results.
+    assert!(
+        !results.is_empty(),
+        "Should return dense results when sparse is empty"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Sparse vector parameter resolution
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_resolve_sparse_vector_structured() {
+    let mut params = HashMap::new();
+    params.insert(
+        "sv".to_string(),
+        serde_json::json!({ "indices": [1, 2, 3], "values": [0.5, 0.3, 0.1] }),
+    );
+
+    let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
+    let sv = Collection::resolve_sparse_vector(&expr, &params).expect("resolve failed");
+    assert_eq!(sv.indices, vec![1, 2, 3]);
+    assert_eq!(sv.values, vec![0.5, 0.3, 0.1]);
+}
+
+#[test]
+fn test_resolve_sparse_vector_shorthand() {
+    let mut params = HashMap::new();
+    params.insert(
+        "sv".to_string(),
+        serde_json::json!({ "10": 0.8, "20": 0.3 }),
+    );
+
+    let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
+    let sv = Collection::resolve_sparse_vector(&expr, &params).expect("resolve failed");
+    assert_eq!(sv.nnz(), 2);
+    // Values should be present (order from BTreeMap is sorted by string key)
+    assert!(sv.indices.contains(&10));
+    assert!(sv.indices.contains(&20));
+}
+
+#[test]
+fn test_resolve_sparse_vector_missing_param() {
+    let params = HashMap::new();
+    let expr = crate::velesql::SparseVectorExpr::Parameter("missing".to_string());
+    let result = Collection::resolve_sparse_vector(&expr, &params);
+    assert!(result.is_err());
+}

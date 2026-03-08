@@ -1,0 +1,23 @@
+{
+  "benchmark": "pq_recall_multidist",
+  "created": "2026-03-08",
+  "distributions": {
+    "clustered": {
+      "pq_rescore": 1.0,
+      "full_precision": 1.0,
+      "no_rescore": 1.0,
+      "opq_rescore": 1.0,
+      "rabitq": 1.0,
+      "oversampling8": 1.0
+    },
+    "binary": {
+      "rabitq": 0.904,
+      "full_precision": 0.904
+    },
+    "exact": {
+      "uniform": 1.0,
+      "clustered": 1.0,
+      "binary": 1.0
+    }
+  }
+}

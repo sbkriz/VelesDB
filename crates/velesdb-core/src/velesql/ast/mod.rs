@@ -3,11 +3,12 @@
 //! This module defines the data structures representing parsed VelesQL queries.
 
 mod aggregation;
-mod condition;
+pub(crate) mod condition;
 mod dml;
 mod fusion;
 mod join;
 mod select;
+mod train;
 mod values;
 mod with_clause;
 
@@ -20,8 +21,8 @@ pub use aggregation::{
 };
 pub use condition::{
     BetweenCondition, CompareOp, Comparison, Condition, GraphMatchPredicate, InCondition,
-    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, VectorFusedSearch,
-    VectorSearch,
+    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, SparseVectorExpr,
+    SparseVectorSearch, VectorFusedSearch, VectorSearch,
 };
 pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
@@ -30,6 +31,7 @@ pub use select::{
     Column, DistinctMode, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement,
     SimilarityOrderBy,
 };
+pub use train::TrainStatement;
 pub use values::{
     CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, VectorExpr,
 };
@@ -49,6 +51,9 @@ pub struct Query {
     /// Optional DML statement (INSERT/UPDATE).
     #[serde(default)]
     pub dml: Option<DmlStatement>,
+    /// Optional TRAIN statement (TRAIN QUANTIZER).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub train: Option<TrainStatement>,
 }
 
 impl Query {
@@ -61,13 +66,19 @@ impl Query {
     /// Returns true if this is a SELECT query.
     #[must_use]
     pub fn is_select_query(&self) -> bool {
-        self.match_clause.is_none() && self.dml.is_none()
+        self.match_clause.is_none() && self.dml.is_none() && self.train.is_none()
     }
 
     /// Returns true if this is a DML query.
     #[must_use]
     pub fn is_dml_query(&self) -> bool {
         self.dml.is_some()
+    }
+
+    /// Returns true if this is a TRAIN statement.
+    #[must_use]
+    pub fn is_train(&self) -> bool {
+        self.train.is_some()
     }
 
     /// Creates a new SELECT query.
@@ -78,6 +89,7 @@ impl Query {
             compound: None,
             match_clause: None,
             dml: None,
+            train: None,
         }
     }
 
@@ -88,7 +100,7 @@ impl Query {
             distinct: DistinctMode::None,
             columns: SelectColumns::All,
             from: String::new(),
-            from_alias: None,
+            from_alias: Vec::new(),
             joins: Vec::new(),
             where_clause: match_clause.where_clause.clone(),
             order_by: None,
@@ -104,6 +116,7 @@ impl Query {
             compound: None,
             match_clause: Some(match_clause),
             dml: None,
+            train: None,
         }
     }
 
@@ -114,7 +127,7 @@ impl Query {
             distinct: DistinctMode::None,
             columns: SelectColumns::All,
             from: String::new(),
-            from_alias: None,
+            from_alias: Vec::new(),
             joins: Vec::new(),
             where_clause: None,
             order_by: None,
@@ -130,6 +143,34 @@ impl Query {
             compound: None,
             match_clause: None,
             dml: Some(dml),
+            train: None,
+        }
+    }
+
+    /// Creates a new TRAIN query.
+    #[must_use]
+    pub fn new_train(train: TrainStatement) -> Self {
+        let select = SelectStatement {
+            distinct: DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: Vec::new(),
+            joins: Vec::new(),
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        };
+        Self {
+            select,
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: Some(train),
         }
     }
 }

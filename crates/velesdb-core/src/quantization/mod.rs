@@ -14,11 +14,18 @@ use serde::{Deserialize, Serialize};
 
 mod binary;
 mod pq;
+mod rabitq;
 mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
-pub use pq::{distance_pq, distance_pq_l2, PQCodebook, PQVector, ProductQuantizer};
+pub(crate) use pq::distance_pq_l2;
+#[cfg(feature = "persistence")]
+pub use pq::train_opq;
+pub use pq::{PQCodebook, PQVector, ProductQuantizer};
+
+// Re-export RaBitQ quantization
+pub use rabitq::{RaBitQCorrection, RaBitQIndex, RaBitQVector};
 
 // Re-export scalar quantization
 pub use scalar::{
@@ -42,4 +49,6 @@ pub enum StorageMode {
     Binary,
     /// Product Quantization (PQ) for aggressive lossy compression (8x-16x typical).
     ProductQuantization,
+    /// `RaBitQ` binary quantization for 32x compression with scalar correction.
+    RaBitQ,
 }

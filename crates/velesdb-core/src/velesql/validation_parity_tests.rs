@@ -17,7 +17,7 @@ mod tests {
                 distinct: crate::velesql::DistinctMode::None,
                 columns: SelectColumns::All,
                 from: "test".to_string(),
-                from_alias: None,
+                from_alias: vec![],
                 joins: vec![],
                 where_clause,
                 order_by: None,
@@ -31,6 +31,7 @@ mod tests {
             compound: None,
             match_clause: None,
             dml: None,
+            train: None,
         }
     }
 

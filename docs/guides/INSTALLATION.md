@@ -148,7 +148,7 @@ collection.upsert([
 ])
 
 # Search
-results = collection.search(query_vector, top_k=10)
+results = collection.search(vector=query_vector, top_k=10)
 ```
 
 ---

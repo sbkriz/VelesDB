@@ -53,6 +53,7 @@ impl Collection {
 
         // We need to retrieve more candidates for post-filtering
         let candidates_k = k.saturating_mul(4).max(k + 10);
+        let metric = self.config.read().metric;
         let index_results =
             self.index
                 .search_batch_parallel(queries, candidates_k, SearchQuality::Balanced);
@@ -62,7 +63,11 @@ impl Collection {
 
         let mut all_results = Vec::with_capacity(queries.len());
 
-        for (query_results, filter_opt) in index_results.into_iter().zip(filters) {
+        for ((query_results, filter_opt), query) in
+            index_results.into_iter().zip(filters).zip(queries)
+        {
+            // Merge with delta buffer before filtering
+            let query_results = self.merge_delta(query_results, query, candidates_k, metric);
             let mut filtered_results: Vec<SearchResult> = query_results
                 .into_iter()
                 .filter_map(|(id, score)| {
@@ -85,6 +90,7 @@ impl Collection {
                             id,
                             vector,
                             payload,
+                            sparse_vectors: None,
                         },
                         score,
                     })
@@ -171,6 +177,7 @@ impl Collection {
         }
 
         // Perf: Use parallel HNSW search (P0 optimization)
+        let metric = self.config.read().metric;
         let index_results = self
             .index
             .search_batch_parallel(queries, k, SearchQuality::Balanced);
@@ -181,7 +188,10 @@ impl Collection {
 
         let results: Vec<Vec<SearchResult>> = index_results
             .into_iter()
-            .map(|query_results: Vec<(u64, f32)>| {
+            .zip(queries)
+            .map(|(query_results, query): (Vec<(u64, f32)>, &&[f32])| {
+                // Merge with delta buffer per query
+                let query_results = self.merge_delta(query_results, query, k, metric);
                 query_results
                     .into_iter()
                     .filter_map(|(id, score)| {
@@ -192,6 +202,7 @@ impl Collection {
                                 id,
                                 vector,
                                 payload,
+                                sparse_vectors: None,
                             },
                             score,
                         })
@@ -228,6 +239,7 @@ impl Collection {
     /// - Any vector has incorrect dimension
     /// - More than 10 vectors are provided (configurable limit)
     #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::too_many_lines)]
     pub fn multi_query_search(
         &self,
         vectors: &[&[f32]],
@@ -274,10 +286,21 @@ impl Collection {
             _ => top_k * 2,
         };
 
+        let metric = self.config.read().metric;
+
         // Execute parallel batch search
         let batch_results =
             self.index
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+
+        // Merge with delta buffer per query before fusion (C-2: was bypassed).
+        let batch_results: Vec<Vec<(u64, f32)>> = batch_results
+            .into_iter()
+            .zip(vectors)
+            .map(|(query_results, query)| {
+                self.merge_delta(query_results, query, overfetch_k, metric)
+            })
+            .collect();
 
         // Apply filter if present (pre-fusion filtering)
         let filtered_results: Vec<Vec<(u64, f32)>> = if let Some(f) = filter {
@@ -321,6 +344,7 @@ impl Collection {
                     id,
                     vector,
                     payload,
+                    sparse_vectors: None,
                 };
 
                 Some(SearchResult::new(point, score))
@@ -390,9 +414,20 @@ impl Collection {
             _ => top_k * 2,
         };
 
+        let metric = self.config.read().metric;
+
         let batch_results =
             self.index
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+
+        // Merge with delta buffer per query before fusion (C-2: was bypassed).
+        let batch_results: Vec<Vec<(u64, f32)>> = batch_results
+            .into_iter()
+            .zip(vectors)
+            .map(|(query_results, query)| {
+                self.merge_delta(query_results, query, overfetch_k, metric)
+            })
+            .collect();
 
         let fused = fusion
             .fuse(batch_results)

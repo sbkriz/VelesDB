@@ -283,6 +283,7 @@ impl Collection {
                 id: mr.node_id,
                 vector,
                 payload,
+                sparse_vectors: None,
             };
 
             // Use depth as inverse score (closer = higher score)

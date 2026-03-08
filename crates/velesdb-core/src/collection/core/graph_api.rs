@@ -30,7 +30,12 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
-        self.edge_store.write().add_edge(edge)
+        self.edge_store.write().add_edge(edge)?;
+        // Bump write generation so any cached plan for this collection is
+        // invalidated on the next query (CACHE-01).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     /// Gets all edges from the collection's knowledge graph.
@@ -280,6 +285,13 @@ impl Collection {
         let mut store = self.edge_store.write();
         if store.contains_edge(edge_id) {
             store.remove_edge(edge_id);
+            // Bump only when a mutation actually occurred (CACHE-01).
+            // Releasing the write lock before the atomic bump is intentional:
+            // the bump is a best-effort cache invalidation hint, not part of
+            // the edge-store transaction.
+            drop(store);
+            self.write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             true
         } else {
             false
@@ -325,7 +337,12 @@ impl Collection {
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
         let mut storage = self.payload_storage.write();
-        storage.store(node_id, payload).map_err(Error::Io)
+        storage.store(node_id, payload).map_err(Error::Io)?;
+        // Bump write generation so any cached plan for this collection is
+        // invalidated on the next query (CACHE-01).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     /// Retrieves the JSON payload for a graph node.
@@ -440,10 +457,12 @@ impl Collection {
         // Reason: we reuse the existing HNSW index (dimension == emb_dim when created
         // via create_graph_collection_with_embeddings). For graph-without-embeddings
         // the HNSW has dimension 0 and the guard above already rejected the call.
+        let metric = self.config.read().metric;
         let ids = self.index.search(query, k);
+        let ids = self.merge_delta(ids, query, k, metric);
 
-        // BUG-4: acquire each lock once for all results instead of holding
-        // vector_storage while repeatedly locking payload_storage per item.
+        // Acquire each lock once: collect vector data, then collect payload data.
+        // This avoids holding vector_storage while locking payload_storage per item.
         let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
             let vector_storage = self.vector_storage.read();
             ids.into_iter()
@@ -465,6 +484,7 @@ impl Collection {
                             id,
                             vector,
                             payload,
+                            sparse_vectors: None,
                         },
                         score,
                     ))

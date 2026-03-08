@@ -105,7 +105,7 @@ impl Collection {
 
     /// Returns cached statistics if available and fresh, otherwise recomputes.
     ///
-    /// Results are cached for [`STATS_TTL`] (30 s) to avoid re-scanning payload
+    /// Results are cached for 30 seconds (`STATS_TTL`) to avoid re-scanning payload
     /// storage on every `execute_query()` call. Mutating methods (`upsert`,
     /// `delete`, etc.) invalidate the cache so the next call always recomputes.
     ///

@@ -11,8 +11,7 @@ VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 - 📦 **Zero dependencies** — Single VelesDB binary, no external services
 - 🔒 **Local-first** — All data stays on your machine
 - 🧠 **RAG-ready** — Built for Retrieval-Augmented Generation
-- 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies ⭐ NEW
-
+- 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies
 ## Installation
 
 ```bash
@@ -103,8 +102,7 @@ VelesDBVectorStore(
 
 ## Advanced Features
 
-### Multi-Query Fusion (MQG) ⭐ NEW
-
+### Multi-Query Fusion (MQG)
 Search with multiple query embeddings and fuse results using various strategies.
 Perfect for RAG pipelines using Multiple Query Generation (MQG).
 

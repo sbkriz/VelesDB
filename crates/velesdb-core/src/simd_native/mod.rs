@@ -99,7 +99,13 @@ pub(crate) use x86_avx2_similarity::{
 };
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use neon::{dot_product_neon, squared_l2_neon};
+pub(crate) use neon::{cosine_neon, dot_product_neon, squared_l2_neon};
+
+// =============================================================================
+// ADC (Asymmetric Distance Computation) for PQ search
+// =============================================================================
+
+pub mod adc;
 
 // =============================================================================
 // Dispatch module (public API)

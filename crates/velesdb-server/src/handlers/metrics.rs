@@ -11,10 +11,14 @@
 #![allow(dead_code)] // Functions exposed via feature flag, used when prometheus feature enabled
 
 use axum::{
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use std::fmt::Write;
+use std::sync::Arc;
+
+use crate::AppState;
 
 fn formatting_error_response() -> Response {
     (
@@ -24,9 +28,10 @@ fn formatting_error_response() -> Response {
     )
         .into_response()
 }
+
 /// Prometheus text format metrics response.
 ///
-/// Returns metrics in Prometheus exposition format.
+/// Returns metrics in Prometheus exposition format, including plan cache stats.
 #[utoipa::path(
     get,
     path = "/metrics",
@@ -36,7 +41,7 @@ fn formatting_error_response() -> Response {
     ),
     tag = "metrics"
 )]
-pub async fn prometheus_metrics() -> impl IntoResponse {
+pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let mut output = String::new();
 
     // Write header comments
@@ -62,6 +67,80 @@ pub async fn prometheus_metrics() -> impl IntoResponse {
     if writeln!(output, "# HELP velesdb_up VelesDB server is up and running").is_err()
         || writeln!(output, "# TYPE velesdb_up gauge").is_err()
         || writeln!(output, "velesdb_up 1").is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
+
+    // Plan cache metrics (CACHE-04).
+    let cache_metrics = state.db.plan_cache().metrics();
+    let cache_stats = state.db.plan_cache().stats();
+
+    if writeln!(
+        output,
+        "# HELP velesdb_plan_cache_hits_total Plan cache hits"
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_hits_total {}",
+            cache_metrics.hits()
+        )
+        .is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
+
+    if writeln!(
+        output,
+        "# HELP velesdb_plan_cache_misses_total Plan cache misses"
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_misses_total counter").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_misses_total {}",
+            cache_metrics.misses()
+        )
+        .is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
+
+    if writeln!(
+        output,
+        "# HELP velesdb_plan_cache_size Current number of cached plans"
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_size gauge").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_size {}",
+            cache_stats.l1_size + cache_stats.l2_size
+        )
+        .is_err()
+        || writeln!(output).is_err()
+    {
+        return formatting_error_response();
+    }
+
+    if writeln!(
+        output,
+        "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate"
+    )
+    .is_err()
+        || writeln!(output, "# TYPE velesdb_plan_cache_hit_rate gauge").is_err()
+        || writeln!(
+            output,
+            "velesdb_plan_cache_hit_rate {:.4}",
+            cache_metrics.hit_rate()
+        )
+        .is_err()
+        // M-7: trailing blank line for Prometheus text format conformance.
+        || writeln!(output).is_err()
     {
         return formatting_error_response();
     }
@@ -81,6 +160,8 @@ pub async fn health_metrics() -> impl IntoResponse {
     if writeln!(output, "# HELP velesdb_up VelesDB server is up").is_err()
         || writeln!(output, "# TYPE velesdb_up gauge").is_err()
         || writeln!(output, "velesdb_up 1").is_err()
+        // Prometheus text format requires a trailing blank line after each metric family.
+        || writeln!(output).is_err()
     {
         return formatting_error_response();
     }
@@ -96,10 +177,21 @@ pub async fn health_metrics() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OnboardingMetrics;
+
+    fn test_app_state() -> Arc<AppState> {
+        let dir = tempfile::tempdir().unwrap();
+        let db = velesdb_core::Database::open(dir.path()).unwrap();
+        Arc::new(AppState {
+            db,
+            onboarding_metrics: OnboardingMetrics::default(),
+        })
+    }
 
     #[tokio::test]
     async fn test_prometheus_metrics_response_shape() {
-        let response = prometheus_metrics().await.into_response();
+        let state = test_app_state();
+        let response = prometheus_metrics(State(state)).await.into_response();
         assert_eq!(response.status(), StatusCode::OK);
 
         let content_type = response
@@ -124,6 +216,33 @@ mod tests {
         assert_eq!(
             content_type,
             Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_cache_metrics_in_prometheus_output() {
+        let state = test_app_state();
+        let response = prometheus_metrics(State(state)).await.into_response();
+        let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(
+            text.contains("velesdb_plan_cache_hits_total"),
+            "should contain plan cache hits"
+        );
+        assert!(
+            text.contains("velesdb_plan_cache_misses_total"),
+            "should contain plan cache misses"
+        );
+        assert!(
+            text.contains("velesdb_plan_cache_size"),
+            "should contain plan cache size"
+        );
+        assert!(
+            text.contains("velesdb_plan_cache_hit_rate"),
+            "should contain plan cache hit rate"
         );
     }
 }

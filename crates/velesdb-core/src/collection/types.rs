@@ -2,9 +2,16 @@
 
 use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
 use crate::collection::stats::CollectionStats;
+#[cfg(feature = "persistence")]
+use crate::collection::streaming::delta::DeltaBuffer;
+#[cfg(feature = "persistence")]
+use crate::collection::streaming::{BackpressureError, StreamIngester};
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
+use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
+#[cfg(feature = "persistence")]
+use crate::point::Point;
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
@@ -12,7 +19,7 @@ use crate::storage::{LogPayloadStorage, MmapStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -142,6 +149,25 @@ pub struct CollectionConfig {
     /// Only meaningful when `graph_schema` is `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_dimension: Option<usize>,
+
+    /// PQ rescore oversampling factor. `Some(4)` by default.
+    ///
+    /// The search pipeline fetches `max(k * factor, k + 32)` candidates from HNSW
+    /// and rescores them with full-precision ADC.
+    ///
+    /// - `None`: disables rescore entirely (expert-only; risks silent recall collapse).
+    /// - `Some(0)`: treated as disabled (equivalent to `None`) — the oversampling factor
+    ///   of 0 produces a candidates count of 0, which falls back to raw HNSW results.
+    /// - `Some(n)` where `n > 0`: enables rescore with `n`-fold oversampling.
+    #[serde(default = "default_pq_rescore_oversampling")]
+    pub pq_rescore_oversampling: Option<u32>,
+}
+
+/// Returns `Some(4)` as the default PQ rescore oversampling factor.
+/// Returns `Option` because the field type is `Option<u32>` (None = disabled).
+#[allow(clippy::unnecessary_wraps)]
+fn default_pq_rescore_oversampling() -> Option<u32> {
+    Some(4)
 }
 
 // === LOCK ORDERING ===
@@ -157,6 +183,8 @@ pub struct CollectionConfig {
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
 //   8. edge_store
+//   9. sparse_indexes
+//  10. delta_buffer
 
 /// A collection of vectors with associated metadata.
 #[derive(Clone)]
@@ -204,6 +232,10 @@ pub struct Collection {
     /// Edge store for knowledge graph relationships (EPIC-015).
     pub(super) edge_store: Arc<RwLock<EdgeStore>>,
 
+    /// Named sparse inverted indexes for sparse vector search (EPIC-062).
+    /// Key is the sparse vector name (e.g., `""` for default, `"title"`, `"body"`).
+    pub(super) sparse_indexes: Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>>,
+
     /// Secondary indexes for metadata payload fields.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
 
@@ -218,11 +250,195 @@ pub struct Collection {
 
     /// Cached CBO statistics with TTL (avoids O(n) scan per query).
     pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
+
+    /// Monotonic write generation counter (CACHE-01).
+    ///
+    /// Incremented once per mutation batch (upsert, `upsert_bulk`, `upsert_metadata`, delete).
+    /// Used by `CompiledPlanCache` to invalidate cached query plans when collection data changes.
+    /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
+    pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
+
+    /// Streaming ingestion handle (STREAM-01).
+    ///
+    /// `None` when streaming is not configured. Wrapped in `RwLock` so that
+    /// the ingester can be lazily initialized or swapped at runtime.
+    ///
+    /// Future: wire StreamIngester creation into collection open/config (STREAM-01)
+    ///
+    /// `enable_streaming()` initialises this field at runtime. A future pass should
+    /// persist `StreamingConfig` in `CollectionConfig` and restore it on `open`.
+    #[cfg(feature = "persistence")]
+    pub(super) stream_ingester: Arc<RwLock<Option<StreamIngester>>>,
+
+    /// Delta buffer for vectors pending HNSW index insertion (STREAM-02).
+    ///
+    /// Lock order position: **10** (after `sparse_indexes` at 9).
+    #[cfg(feature = "persistence")]
+    pub(crate) delta_buffer: Arc<DeltaBuffer>,
 }
 
 impl Collection {
+    /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
+    #[allow(dead_code)]
+    pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
+        &self.sparse_indexes
+    }
+
+    /// Returns the current write generation counter.
+    ///
+    /// The counter starts at 0 and increments once per mutation batch.
+    #[must_use]
+    pub(crate) fn write_generation(&self) -> u64 {
+        self.write_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
         crate::collection::text_utils::extract_text(payload)
+    }
+
+    /// Sends a point into the streaming ingestion channel.
+    ///
+    /// Returns `BackpressureError::NotConfigured` if streaming is not active
+    /// on this collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackpressureError`] on buffer-full or not-configured.
+    #[cfg(feature = "persistence")]
+    pub fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
+        let guard = self.stream_ingester.read();
+        match guard.as_ref() {
+            Some(ingester) => ingester.try_send(point),
+            None => Err(BackpressureError::NotConfigured),
+        }
+    }
+
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Creates a [`StreamIngester`] with the given `config` and stores it in
+    /// the `stream_ingester` field. Points can then be submitted via
+    /// [`stream_insert`](Self::stream_insert).
+    ///
+    /// Calling this when streaming is already active replaces the existing
+    /// ingester (the old drain task is aborted via `Drop`).
+    ///
+    /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
+    #[cfg(feature = "persistence")]
+    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
+        use crate::collection::streaming::StreamIngester;
+        let ingester = StreamIngester::new(self.clone(), config);
+        *self.stream_ingester.write() = Some(ingester);
+    }
+
+    /// Pushes entries into the delta buffer if it is currently active.
+    ///
+    /// This is a convenience method for callers (e.g., the REST upsert handlers)
+    /// that do not have direct access to the delta buffer internals.
+    ///
+    /// No-op when the delta buffer is inactive.
+    #[cfg(feature = "persistence")]
+    pub fn push_to_delta_if_active(&self, entries: &[(u64, Vec<f32>)]) {
+        if self.delta_buffer.is_active() {
+            self.delta_buffer
+                .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
+        }
+    }
+}
+
+#[cfg(test)]
+mod rescore_config_tests {
+    use super::*;
+    use crate::distance::DistanceMetric;
+    use crate::quantization::StorageMode;
+
+    fn make_config(oversampling: Option<u32>) -> CollectionConfig {
+        CollectionConfig {
+            name: "test".to_string(),
+            dimension: 128,
+            metric: DistanceMetric::Euclidean,
+            point_count: 0,
+            storage_mode: StorageMode::ProductQuantization,
+            metadata_only: false,
+            graph_schema: None,
+            embedding_dimension: None,
+            pq_rescore_oversampling: oversampling,
+        }
+    }
+
+    #[test]
+    fn rescore_default_oversampling_is_4() {
+        let config = make_config(default_pq_rescore_oversampling());
+        assert_eq!(config.pq_rescore_oversampling, Some(4));
+    }
+
+    #[test]
+    fn rescore_candidates_k_formula_default() {
+        // Default factor = 4, k = 10
+        // candidates_k = max(10 * 4, 10 + 32) = max(40, 42) = 42
+        let factor = 4_usize;
+        let k = 10_usize;
+        let candidates_k = k.saturating_mul(factor).max(k + 32);
+        assert_eq!(candidates_k, 42);
+    }
+
+    #[test]
+    fn rescore_candidates_k_formula_custom_factor_6() {
+        // factor = 6, k = 10
+        // candidates_k = max(10 * 6, 10 + 32) = max(60, 42) = 60
+        let factor = 6_usize;
+        let k = 10_usize;
+        let candidates_k = k.saturating_mul(factor).max(k + 32);
+        assert_eq!(candidates_k, 60);
+    }
+
+    #[test]
+    fn rescore_none_disables_oversampling() {
+        let config = make_config(None);
+        let oversampling = config.pq_rescore_oversampling.unwrap_or(0);
+        assert_eq!(oversampling, 0, "None should map to 0 (disabled)");
+    }
+
+    #[test]
+    fn rescore_active_by_default_for_pq() {
+        let config = make_config(default_pq_rescore_oversampling());
+        assert!(
+            config.pq_rescore_oversampling.is_some(),
+            "Rescore must be active by default for PQ"
+        );
+        assert!(
+            config.pq_rescore_oversampling.unwrap() > 0,
+            "Default oversampling must be > 0"
+        );
+    }
+
+    #[test]
+    fn rescore_serde_default_backward_compat() {
+        // Simulate deserializing a config without pq_rescore_oversampling field.
+        // The serde default should kick in and set Some(4).
+        let json = r#"{
+            "name": "old_collection",
+            "dimension": 128,
+            "metric": "Euclidean",
+            "point_count": 100,
+            "storage_mode": "productquantization"
+        }"#;
+        let config: CollectionConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.pq_rescore_oversampling,
+            Some(4),
+            "Missing field must deserialize to Some(4) for backward compat"
+        );
+    }
+
+    #[test]
+    fn rescore_minimum_floor_preserved() {
+        // Even with small k, the floor k + 32 must dominate
+        let factor = 4_usize;
+        let k = 5_usize;
+        let candidates_k = k.saturating_mul(factor).max(k + 32);
+        // max(20, 37) = 37
+        assert_eq!(candidates_k, 37);
     }
 }

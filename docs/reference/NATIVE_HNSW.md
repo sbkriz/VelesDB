@@ -88,8 +88,8 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
 | `search(query, k)` | Standard search |
-| `search_with_quality(query, k, quality)` | Search with quality profile |
-| `search_batch_parallel(queries, k, quality)` | Batch parallel search |
+| `search_with_ef(query, k, ef_search)` | Search with custom ef_search |
+| `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
 | `brute_force_search_parallel(query, k)` | Exact search (100% recall) |
 | `remove(id)` | Remove vector |
 

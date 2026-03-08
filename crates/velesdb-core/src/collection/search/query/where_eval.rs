@@ -21,13 +21,13 @@ impl GraphMatchEvalCache {
         collection: &Collection,
         predicate: &GraphMatchPredicate,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        from_alias: Option<&str>,
+        from_aliases: &[String],
     ) -> Result<&HashSet<u64>> {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == predicate) {
             return Ok(&self.entries[idx].1);
         }
 
-        let ids = collection.evaluate_graph_match_anchor_ids(predicate, params, from_alias)?;
+        let ids = collection.evaluate_graph_match_anchor_ids(predicate, params, from_aliases)?;
         self.entries.push((predicate.clone(), ids));
         let idx = self.entries.len() - 1;
         Ok(&self.entries[idx].1)
@@ -83,7 +83,7 @@ impl Collection {
         results: Vec<SearchResult>,
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        from_alias: Option<&str>,
+        from_aliases: &[String],
     ) -> Result<Vec<SearchResult>> {
         let mut cache = GraphMatchEvalCache::default();
         let requires_vector = Self::condition_requires_vector_eval(condition);
@@ -101,7 +101,7 @@ impl Collection {
                 result.point.payload.as_ref(),
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 &mut cache,
             )? {
                 filtered.push(result);
@@ -123,12 +123,12 @@ impl Collection {
         payload: Option<&serde_json::Value>,
         vector: Option<&[f32]>,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        from_alias: Option<&str>,
+        from_aliases: &[String],
         graph_cache: &mut GraphMatchEvalCache,
     ) -> Result<bool> {
         match condition {
             Condition::GraphMatch(predicate) => {
-                let ids = graph_cache.get_or_compute(self, predicate, params, from_alias)?;
+                let ids = graph_cache.get_or_compute(self, predicate, params, from_aliases)?;
                 Ok(ids.contains(&id))
             }
             Condition::And(left, right) => Ok(self.evaluate_where_condition_for_record(
@@ -137,7 +137,7 @@ impl Collection {
                 payload,
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 graph_cache,
             )? && self.evaluate_where_condition_for_record(
                 right,
@@ -145,7 +145,7 @@ impl Collection {
                 payload,
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 graph_cache,
             )?),
             Condition::Or(left, right) => Ok(self.evaluate_where_condition_for_record(
@@ -154,7 +154,7 @@ impl Collection {
                 payload,
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 graph_cache,
             )? || self.evaluate_where_condition_for_record(
                 right,
@@ -162,7 +162,7 @@ impl Collection {
                 payload,
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 graph_cache,
             )?),
             Condition::Not(inner) => Ok(!self.evaluate_where_condition_for_record(
@@ -171,7 +171,7 @@ impl Collection {
                 payload,
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 graph_cache,
             )?),
             Condition::Group(inner) => self.evaluate_where_condition_for_record(
@@ -180,7 +180,7 @@ impl Collection {
                 payload,
                 vector,
                 params,
-                from_alias,
+                from_aliases,
                 graph_cache,
             ),
             Condition::Similarity(sim) => {

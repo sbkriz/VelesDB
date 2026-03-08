@@ -115,6 +115,8 @@ pub mod simd_dispatch;
 mod simd_dispatch_tests;
 #[cfg(test)]
 mod simd_epic073_tests;
+/// Sparse vector types, inverted index, and search -- always compiled (no persistence dependency).
+pub mod sparse_index;
 // simd_explicit removed - consolidated into simd_native (EPIC-075)
 pub mod simd_native;
 #[cfg(test)]
@@ -146,6 +148,8 @@ pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 #[cfg(feature = "persistence")]
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
+#[cfg(feature = "persistence")]
+pub use collection::streaming::BackpressureError;
 #[cfg(feature = "persistence")]
 pub use collection::{
     // Collection: internal executor kept pub for backward compat and internal modules.
@@ -182,8 +186,8 @@ pub use column_store::{
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,
 };
 pub use config::{
-    ConfigError, HnswConfig, LimitsConfig, QuantizationConfig, SearchConfig, SearchMode,
-    VelesConfig,
+    ConfigError, HnswConfig, LimitsConfig, QuantizationConfig, QuantizationType, SearchConfig,
+    SearchMode, VelesConfig,
 };
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};

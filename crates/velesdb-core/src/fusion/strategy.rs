@@ -76,6 +76,18 @@ pub enum FusionStrategy {
         /// Weight for hit ratio component.
         hit_weight: f32,
     },
+
+    /// Relative Score Fusion for dense + sparse hybrid search.
+    ///
+    /// Each branch is min-max normalized independently, then combined via
+    /// weighted sum: `final = dense_weight * norm_dense + sparse_weight * norm_sparse`.
+    /// Docs appearing in only one branch get 0 for the missing branch.
+    RelativeScore {
+        /// Weight for the dense (vector) branch.
+        dense_weight: f32,
+        /// Weight for the sparse branch.
+        sparse_weight: f32,
+    },
 }
 
 impl FusionStrategy {
@@ -83,6 +95,34 @@ impl FusionStrategy {
     #[must_use]
     pub fn rrf_default() -> Self {
         Self::RRF { k: 60 }
+    }
+
+    /// Creates a `RelativeScore` strategy with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Weights do not sum to 1.0 (within 0.001 tolerance)
+    /// - Any weight is negative
+    pub fn relative_score(dense_weight: f32, sparse_weight: f32) -> Result<Self, FusionError> {
+        if dense_weight < 0.0 {
+            return Err(FusionError::NegativeWeight {
+                weight: dense_weight,
+            });
+        }
+        if sparse_weight < 0.0 {
+            return Err(FusionError::NegativeWeight {
+                weight: sparse_weight,
+            });
+        }
+        let sum = dense_weight + sparse_weight;
+        if (sum - 1.0).abs() > 0.001 {
+            return Err(FusionError::InvalidWeightSum { sum });
+        }
+        Ok(Self::RelativeScore {
+            dense_weight,
+            sparse_weight,
+        })
     }
 
     /// Creates a Weighted strategy with validation.
@@ -163,6 +203,10 @@ impl FusionStrategy {
                 *hit_weight,
                 total_queries,
             )),
+            Self::RelativeScore {
+                dense_weight,
+                sparse_weight,
+            } => Self::fuse_relative_score(&results, *dense_weight, *sparse_weight),
         }
     }
 
@@ -304,6 +348,74 @@ impl FusionStrategy {
         fused.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         fused
+    }
+
+    /// Relative Score Fusion: per-branch min-max normalization + weighted sum.
+    ///
+    /// Expects exactly two branches in `results`: index 0 = dense, index 1 = sparse.
+    /// If more branches are provided, only the first two are used; the extras
+    /// are silently discarded. A warning is emitted so callers can detect the
+    /// accidental multi-branch case during development.
+    fn fuse_relative_score(
+        results: &[Vec<(u64, f32)>],
+        dense_weight: f32,
+        sparse_weight: f32,
+    ) -> Result<Vec<(u64, f32)>, FusionError> {
+        if results.len() > 2 {
+            tracing::warn!(
+                branch_count = results.len(),
+                "RelativeScore fusion received {} branches but only supports 2 (dense + sparse). \
+                 Branches beyond index 1 are ignored.",
+                results.len(),
+            );
+        }
+
+        let dense = results.first().map_or(&[][..], |v| v.as_slice());
+        let sparse = results.get(1).map_or(&[][..], |v| v.as_slice());
+
+        // Min-max normalize a branch. If range < EPSILON, assign 0.5 to all.
+        let normalize = |branch: &[(u64, f32)]| -> HashMap<u64, f32> {
+            if branch.is_empty() {
+                return HashMap::new();
+            }
+            let min = branch.iter().map(|&(_, s)| s).fold(f32::INFINITY, f32::min);
+            let max = branch
+                .iter()
+                .map(|&(_, s)| s)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let range = max - min;
+            branch
+                .iter()
+                .map(|&(id, s)| {
+                    let norm = if range < f32::EPSILON {
+                        0.5
+                    } else {
+                        (s - min) / range
+                    };
+                    (id, norm)
+                })
+                .collect()
+        };
+
+        let norm_dense = normalize(dense);
+        let norm_sparse = normalize(sparse);
+
+        // Collect all doc IDs
+        let mut all_ids: HashMap<u64, f32> = HashMap::new();
+        for (&id, &nd) in &norm_dense {
+            let ns = norm_sparse.get(&id).copied().unwrap_or(0.0);
+            all_ids.insert(id, dense_weight * nd + sparse_weight * ns);
+        }
+        for (&id, &ns) in &norm_sparse {
+            all_ids.entry(id).or_insert_with(|| {
+                let nd = norm_dense.get(&id).copied().unwrap_or(0.0);
+                dense_weight * nd + sparse_weight * ns
+            });
+        }
+
+        let mut fused: Vec<(u64, f32)> = all_ids.into_iter().collect();
+        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Ok(fused)
     }
 }
 

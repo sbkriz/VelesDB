@@ -30,6 +30,18 @@ const STATS_INTERVAL: usize = 100;
 /// - `stats`: Periodic statistics (every [`STATS_INTERVAL`] nodes)
 /// - `done`: Traversal completed
 /// - `error`: If an error occurs
+#[utoipa::path(
+    get,
+    path = "/collections/{name}/graph/traverse/stream",
+    tag = "graph",
+    params(
+        ("name" = String, Path, description = "Collection name"),
+        StreamTraverseParams
+    ),
+    responses(
+        (status = 200, description = "SSE stream of traversal events (node, stats, done, error)")
+    )
+)]
 #[allow(clippy::unused_async)]
 pub async fn stream_traverse(
     State(state): State<Arc<AppState>>,

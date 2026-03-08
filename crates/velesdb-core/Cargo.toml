@@ -18,7 +18,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-bincode = { workspace = true }
+postcard = { workspace = true }
 roaring = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
@@ -33,6 +33,9 @@ toml = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.uuid]
 version = "1.7"
 features = ["v4", "serde"]
+
+[dependencies.smallvec]
+workspace = true
 
 [dependencies.parking_lot]
 version = "0.12"
@@ -84,6 +87,9 @@ features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO"]
 [target.'cfg(target_os = "linux")'.dependencies.libc]
 version = "0.2"
 
+[dependencies.rand]
+workspace = true
+
 [dependencies.pest]
 version = "2.7"
 
@@ -101,7 +107,7 @@ version = "2.7"
 ##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
-persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
+persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray"]
 update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
 loom = ["dep:loom"]
 
@@ -112,7 +118,7 @@ tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
 clap = { version = "4.5", features = ["derive"] }
-rand = "0.8"
+rand_distr = "0.4"
 
 # Loom for concurrency testing (EPIC-023) - optional dependency, not dev-dependency
 [dependencies.loom]
@@ -265,6 +271,11 @@ harness = false
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================
 
+# getrandom requires the "js" feature to compile on wasm32-unknown-unknown
+[target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
+version = "0.2"
+features = ["js"]
+
 # ============================================================================
 # Optional deps for persistence feature (not WASM-compatible)
 # ============================================================================
@@ -297,8 +308,13 @@ optional = true
 version = "1.5"
 optional = true
 
+[dependencies.ndarray]
+version = "0.16"
+default-features = false
+optional = true
+
 [dependencies.reqwest]
-version = "0.11"
+version = "0.12"
 features = ["json"]
 optional = true
 
@@ -307,4 +323,16 @@ workspace = true
 
 [[bench]]
 name = "pq_hnsw_benchmark"
+harness = false
+
+[[bench]]
+name = "pq_recall_benchmark"
+harness = false
+
+[[bench]]
+name = "sparse_benchmark"
+harness = false
+
+[[bench]]
+name = "pq_recall_multidist"
 harness = false

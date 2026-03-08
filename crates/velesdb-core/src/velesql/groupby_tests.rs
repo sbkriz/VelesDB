@@ -76,31 +76,37 @@ fn test_executor_groupby_count() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         },
         Point {
             id: 4,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "science"})),
+            sparse_vectors: None,
         },
         Point {
             id: 5,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "science"})),
+            sparse_vectors: None,
         },
         Point {
             id: 6,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "history"})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -148,16 +154,19 @@ fn test_executor_groupby_multiple_aggregations() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech", "price": 100})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech", "price": 200})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "science", "price": 150})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -211,16 +220,19 @@ fn test_executor_groupby_with_avg() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A", "rating": 4})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "A", "rating": 6})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "B", "rating": 3})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -252,21 +264,25 @@ fn test_executor_groupby_multiple_columns() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech", "status": "active"})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech", "status": "active"})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech", "status": "inactive"})),
+            sparse_vectors: None,
         },
         Point {
             id: 4,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "science", "status": "active"})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -293,6 +309,7 @@ fn test_groupby_limit_protection() {
             id: i,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": format!("cat_{}", i)})),
+            sparse_vectors: None,
         })
         .collect();
     collection.upsert(points).unwrap();
@@ -367,6 +384,7 @@ fn test_executor_groupby_nested_field() {
                 "type": "click",
                 "metadata": {"source": "web", "campaign": "summer"}
             })),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
@@ -375,6 +393,7 @@ fn test_executor_groupby_nested_field() {
                 "type": "view",
                 "metadata": {"source": "mobile", "campaign": "summer"}
             })),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
@@ -383,6 +402,7 @@ fn test_executor_groupby_nested_field() {
                 "type": "click",
                 "metadata": {"source": "web", "campaign": "winter"}
             })),
+            sparse_vectors: None,
         },
         Point {
             id: 4,
@@ -391,6 +411,7 @@ fn test_executor_groupby_nested_field() {
                 "type": "view",
                 "metadata": {"source": "web", "campaign": "summer"}
             })),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -438,6 +459,7 @@ fn test_executor_groupby_deep_nested_field() {
             payload: Some(serde_json::json!({
                 "profile": {"address": {"city": "Paris", "country": "FR"}}
             })),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
@@ -445,6 +467,7 @@ fn test_executor_groupby_deep_nested_field() {
             payload: Some(serde_json::json!({
                 "profile": {"address": {"city": "Lyon", "country": "FR"}}
             })),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
@@ -452,6 +475,7 @@ fn test_executor_groupby_deep_nested_field() {
             payload: Some(serde_json::json!({
                 "profile": {"address": {"city": "Paris", "country": "FR"}}
             })),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -485,16 +509,19 @@ fn test_executor_groupby_nested_null_handling() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"metadata": {"source": "web"}})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"metadata": {}})), // No source
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({})), // No metadata at all
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();

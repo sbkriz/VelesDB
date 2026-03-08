@@ -26,6 +26,7 @@ mod metadata_collection;
 pub mod query_cost;
 pub mod search;
 pub mod stats;
+pub mod streaming;
 pub(crate) mod text_utils;
 mod types;
 mod vector_collection;

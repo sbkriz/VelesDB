@@ -158,13 +158,13 @@ cargo run --bin uniffi-bindgen generate \
 |--------|-------------|
 | `search(vector, limit)` | Finds k nearest neighbors |
 | `searchWithFilter(vector, limit, filterJson)` | Search with metadata filter |
-| `multiQuerySearch(vectors, limit, fusion, fusionParams)` | Multi-query fusion (MQG) ⭐ NEW v1.1.0 |
+| `multiQuerySearch(vectors, limit, fusion, fusionParams)` | Multi-query fusion (MQG) |
 | `textSearch(query, limit)` | BM25 full-text search |
 | `textSearchWithFilter(query, limit, filterJson)` | Text search with filter |
 | `hybridSearch(vector, query, limit, vectorWeight)` | Combined vector + text search |
 | `hybridSearchWithFilter(...)` | Hybrid search with metadata filter |
 | `batchSearch(searches)` | Batch search with individual filters per query |
-| `query(queryStr, paramsJson)` | Execute VelesQL query (v0.8.5+) |
+| `query(queryStr, paramsJson)` | Execute VelesQL query |
 | `upsert(point)` | Inserts or updates a single point |
 | `upsertBatch(points)` | Batch insert/update (faster for bulk operations) |
 | `delete(id)` | Deletes a point by ID |

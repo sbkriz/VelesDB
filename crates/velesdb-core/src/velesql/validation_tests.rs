@@ -221,7 +221,7 @@ fn create_query_with_multiple_similarity() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::And(Box::new(sim1), Box::new(sim2))),
             order_by: None,
@@ -235,6 +235,7 @@ fn create_query_with_multiple_similarity() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -258,7 +259,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::Or(Box::new(sim1), Box::new(sim2))), // OR instead of AND
             order_by: None,
@@ -272,6 +273,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -288,7 +290,7 @@ fn create_query_with_single_similarity() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(sim),
             order_by: None,
@@ -302,6 +304,7 @@ fn create_query_with_single_similarity() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -323,7 +326,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::Or(Box::new(sim), Box::new(meta))),
             order_by: None,
@@ -337,6 +340,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -358,7 +362,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::And(Box::new(sim), Box::new(meta))),
             order_by: None,
@@ -372,6 +376,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -388,7 +393,7 @@ fn create_query_with_not_similarity() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::Not(Box::new(sim))),
             order_by: None,
@@ -402,6 +407,7 @@ fn create_query_with_not_similarity() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -411,7 +417,7 @@ fn create_simple_query() -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: None,
             order_by: None,
@@ -425,6 +431,7 @@ fn create_simple_query() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -450,7 +457,7 @@ fn test_validate_vector_search_near_with_or_detected() {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::Or(Box::new(near1), Box::new(near2))), // OR = invalid
             order_by: None,
@@ -464,6 +471,7 @@ fn test_validate_vector_search_near_with_or_detected() {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     // Should detect multiple vector search with OR
@@ -492,7 +500,7 @@ fn test_validate_vector_search_or_now_passes() {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::Or(Box::new(near), Box::new(meta))),
             order_by: None,
@@ -506,6 +514,7 @@ fn test_validate_vector_search_or_now_passes() {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     // EPIC-044 US-002: NEAR OR metadata is now supported
@@ -539,7 +548,7 @@ fn test_validate_compound_query_where_clause() {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: None,
             order_by: None,
@@ -556,7 +565,7 @@ fn test_validate_compound_query_where_clause() {
                 distinct: crate::velesql::DistinctMode::None,
                 columns: SelectColumns::All,
                 from: "docs".to_string(),
-                from_alias: None,
+                from_alias: vec![],
                 joins: vec![],
                 where_clause: Some(Condition::Or(Box::new(sim1), Box::new(sim2))), // OR = invalid
                 order_by: None,
@@ -570,6 +579,7 @@ fn test_validate_compound_query_where_clause() {
         }),
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     // Should detect multiple similarity in OR in compound query
@@ -591,7 +601,7 @@ fn make_query(where_clause: Option<Condition>) -> Query {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "test".to_string(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause,
             order_by: None,
@@ -605,6 +615,7 @@ fn make_query(where_clause: Option<Condition>) -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -917,7 +928,7 @@ fn test_complexity_rejects_like_budget() {
             distinct: super::ast::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".into(),
-            from_alias: None,
+            from_alias: vec![],
             joins: vec![],
             where_clause: Some(Condition::And(Box::new(c1), Box::new(c2))),
             order_by: None,
@@ -931,6 +942,7 @@ fn test_complexity_rejects_like_budget() {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     let cfg = ValidationConfig {

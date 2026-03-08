@@ -4,6 +4,7 @@ mod conditions;
 mod dml;
 mod match_parser;
 mod select;
+mod train;
 mod values;
 
 #[allow(dead_code)]
@@ -14,6 +15,8 @@ mod match_clause_tests;
 mod match_query_tests;
 #[cfg(test)]
 mod robustness_tests;
+#[cfg(test)]
+mod sparse_search_tests;
 #[cfg(test)]
 mod subquery_tests;
 #[cfg(test)]

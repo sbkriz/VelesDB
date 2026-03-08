@@ -14,26 +14,46 @@ impl Collection {
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
         let metric = config.metric;
+        // u32 → usize: safe on all 32-bit+ targets (u32::MAX fits in usize).
+        #[allow(clippy::cast_possible_truncation)]
+        let oversampling = config.pq_rescore_oversampling.unwrap_or(0) as usize;
         drop(config);
 
         if !is_pq {
-            return self.index.search(query, k);
+            let results = self.index.search(query, k);
+            return self.merge_delta(results, query, k, metric);
         }
 
-        let candidates_k = k.saturating_mul(8).max(k + 32);
+        // When oversampling is disabled (None or Some(0)), skip rescore entirely
+        // and return raw index results truncated to k.
+        if oversampling == 0 {
+            let results = self.index.search(query, k);
+            return self.merge_delta(results, query, k, metric);
+        }
+
+        let candidates_k = k.saturating_mul(oversampling).max(k + 32);
         let index_results = self.index.search(query, candidates_k);
 
         let pq_cache = self.pq_cache.read();
         let quantizer = self.pq_quantizer.read();
         let Some(quantizer) = quantizer.as_ref() else {
-            return index_results.into_iter().take(k).collect();
+            let results: Vec<(u64, f32)> = index_results.into_iter().take(k).collect();
+            return self.merge_delta(results, query, k, metric);
         };
 
         let mut rescored: Vec<(u64, f32)> = index_results
             .into_iter()
             .map(|(id, fallback_score)| {
                 let score = pq_cache.get(&id).map_or(fallback_score, |pq_vec| {
-                    rescore_with_metric(query, pq_vec, quantizer, metric)
+                    rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
+                        tracing::warn!(
+                            id,
+                            %err,
+                            "PQ reconstruct failed during rescore; \
+                             falling back to HNSW score"
+                        );
+                        fallback_score
+                    })
                 });
                 (id, score)
             })
@@ -47,7 +67,41 @@ impl Collection {
             }
         });
         rescored.truncate(k);
-        rescored
+        self.merge_delta(rescored, query, k, metric)
+    }
+
+    /// Merges HNSW results with the delta buffer (if active).
+    ///
+    /// When the delta buffer is inactive (no rebuild in progress), this is
+    /// a no-op that returns results unchanged.
+    #[cfg(feature = "persistence")]
+    #[inline]
+    pub(crate) fn merge_delta(
+        &self,
+        results: Vec<(u64, f32)>,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Vec<(u64, f32)> {
+        crate::collection::streaming::merge_with_delta(
+            results,
+            &self.delta_buffer,
+            query,
+            k,
+            metric,
+        )
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    #[inline]
+    pub(crate) fn merge_delta(
+        &self,
+        results: Vec<(u64, f32)>,
+        _query: &[f32],
+        _k: usize,
+        _metric: DistanceMetric,
+    ) -> Vec<(u64, f32)> {
+        results
     }
 }
 
@@ -56,13 +110,12 @@ fn rescore_with_metric(
     pq_vec: &PQVector,
     quantizer: &ProductQuantizer,
     metric: DistanceMetric,
-) -> f32 {
-    match metric {
-        DistanceMetric::Euclidean => distance_pq_l2(query, pq_vec, &quantizer.codebook),
-        _ => {
-            let reconstructed = quantizer.reconstruct(pq_vec);
-            metric.calculate(query, &reconstructed)
-        }
+) -> Result<f32> {
+    if metric == DistanceMetric::Euclidean {
+        Ok(distance_pq_l2(query, pq_vec, &quantizer.codebook))
+    } else {
+        let reconstructed = quantizer.reconstruct(pq_vec)?;
+        Ok(metric.calculate(query, &reconstructed))
     }
 }
 
@@ -109,6 +162,7 @@ impl Collection {
                     id,
                     vector,
                     payload,
+                    sparse_vectors: None,
                 };
 
                 Some(SearchResult::new(point, score))
@@ -150,7 +204,9 @@ impl Collection {
             _ => crate::SearchQuality::Perfect,
         };
 
+        let metric = self.config.read().metric;
         let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
@@ -165,6 +221,7 @@ impl Collection {
                     id,
                     vector,
                     payload,
+                    sparse_vectors: None,
                 };
 
                 Some(SearchResult::new(point, score))
@@ -267,11 +324,11 @@ impl Collection {
                     id,
                     vector,
                     payload,
+                    sparse_vectors: None,
                 };
 
                 Some(SearchResult::new(point, score))
             })
-            .take(k)
             .collect();
 
         // Sort results by similarity (most similar first)
@@ -294,6 +351,7 @@ impl Collection {
                     .unwrap_or(std::cmp::Ordering::Equal)
             }
         });
+        results.truncate(k);
 
         Ok(results)
     }

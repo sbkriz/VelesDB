@@ -1,25 +1,81 @@
 //! Point data structure representing a vector with metadata.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+
+use crate::sparse_index::{SparseVector, DEFAULT_SPARSE_INDEX_NAME};
 
 /// A point in the vector database.
 ///
 /// A point consists of:
 /// - A unique identifier
-/// - A vector (embedding)
+/// - A dense vector (embedding)
 /// - Optional payload (metadata)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// - Optional named sparse vectors (e.g., SPLADE, BM25 term weights)
+#[derive(Debug, Clone, Serialize)]
 pub struct Point {
     /// Unique identifier for the point.
     pub id: u64,
 
-    /// The vector embedding.
+    /// The dense vector embedding.
     pub vector: Vec<f32>,
 
     /// Optional JSON payload containing metadata.
     #[serde(default)]
     pub payload: Option<JsonValue>,
+
+    /// Optional named sparse vectors for hybrid dense+sparse search.
+    ///
+    /// Keys are sparse vector names (e.g., `""` for default, `"title"`, `"body"`).
+    /// Enables multi-model support (BGE-M3, SPLADE title+body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparse_vectors: Option<BTreeMap<String, SparseVector>>,
+}
+
+/// Custom deserializer that accepts both:
+/// - `"sparse_vectors": {"name": {...}}` (new named map format)
+/// - `"sparse_vector": {...}` (old single format, wraps in map under `""` key)
+impl<'de> Deserialize<'de> for Point {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct PointHelper {
+            id: u64,
+            vector: Vec<f32>,
+            #[serde(default)]
+            payload: Option<JsonValue>,
+            #[serde(default)]
+            sparse_vectors: Option<BTreeMap<String, SparseVector>>,
+            /// Old single-vector field for backward compat.
+            #[serde(default)]
+            sparse_vector: Option<SparseVector>,
+        }
+
+        let helper = PointHelper::deserialize(deserializer)?;
+
+        // Prefer new `sparse_vectors` field; fall back to old `sparse_vector`.
+        let sparse_vectors = if helper.sparse_vectors.is_some() {
+            helper.sparse_vectors
+        } else {
+            helper.sparse_vector.map(|sv| {
+                let mut map = BTreeMap::new();
+                // Use the canonical constant to avoid magic empty-string literals.
+                map.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), sv);
+                map
+            })
+        };
+
+        Ok(Point {
+            id: helper.id,
+            vector: helper.vector,
+            payload: helper.payload,
+            sparse_vectors,
+        })
+    }
 }
 
 impl Point {
@@ -36,6 +92,7 @@ impl Point {
             id,
             vector,
             payload,
+            sparse_vectors: None,
         }
     }
 
@@ -59,7 +116,57 @@ impl Point {
             id,
             vector: Vec::new(), // Empty vector
             payload: Some(payload),
+            sparse_vectors: None,
         }
+    }
+
+    /// Creates a point with both dense and named sparse vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier
+    /// * `vector` - Dense vector embedding
+    /// * `payload` - Optional metadata
+    /// * `sparse_vectors` - Optional named sparse vectors
+    #[must_use]
+    pub fn with_sparse(
+        id: u64,
+        vector: Vec<f32>,
+        payload: Option<JsonValue>,
+        sparse_vectors: Option<BTreeMap<String, SparseVector>>,
+    ) -> Self {
+        Self {
+            id,
+            vector,
+            payload,
+            sparse_vectors,
+        }
+    }
+
+    /// Creates a sparse-only point (no dense vector).
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier
+    /// * `sparse_vector` - The sparse vector (stored under the default `""` name)
+    /// * `payload` - Optional metadata
+    #[must_use]
+    pub fn sparse_only(id: u64, sparse_vector: SparseVector, payload: Option<JsonValue>) -> Self {
+        let mut map = BTreeMap::new();
+        // Use the canonical constant to avoid magic empty-string literals.
+        map.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), sparse_vector);
+        Self {
+            id,
+            vector: Vec::new(),
+            payload,
+            sparse_vectors: Some(map),
+        }
+    }
+
+    /// Returns `true` if this point has any sparse vectors.
+    #[must_use]
+    pub fn has_sparse_vectors(&self) -> bool {
+        self.sparse_vectors.as_ref().is_some_and(|m| !m.is_empty())
     }
 
     /// Returns the dimension of the vector.

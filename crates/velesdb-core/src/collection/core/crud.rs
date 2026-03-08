@@ -9,6 +9,8 @@ use crate::point::Point;
 use crate::quantization::StorageMode;
 use crate::storage::{PayloadStorage, VectorStorage};
 
+use std::collections::BTreeMap;
+
 impl Collection {
     /// Inserts or updates points in the collection.
     ///
@@ -46,6 +48,11 @@ impl Collection {
                 });
             }
         }
+
+        // Buffer sparse data for batch insert after storage locks are released.
+        // LOCK ORDER: sparse_indexes(9) acquired AFTER vector_storage(2) + payload_storage(3).
+        let mut sparse_batch: Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> =
+            Vec::new();
 
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
@@ -101,6 +108,13 @@ impl Collection {
             } else {
                 self.text_index.remove_document(point.id);
             }
+
+            // Buffer sparse vectors for batch insert after releasing storage locks.
+            if let Some(sv_map) = point.sparse_vectors {
+                if !sv_map.is_empty() {
+                    sparse_batch.push((point.id, sv_map));
+                }
+            }
         }
 
         // LOCK ORDER: flush while vector_storage(2) + payload_storage(3) still held,
@@ -118,8 +132,40 @@ impl Collection {
 
         self.index.save(&self.path).map_err(Error::Io)?;
 
+        // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
+        if !sparse_batch.is_empty() {
+            // WAL-before-apply: persist the intent to disk BEFORE mutating the
+            // in-memory index. A crash between WAL write and index insert is safe
+            // because the WAL is replayed on recovery; a crash after index insert
+            // but before WAL write would lose the update.
+            #[cfg(feature = "persistence")]
+            {
+                for (point_id, sv_map) in &sparse_batch {
+                    for (name, sv) in sv_map {
+                        let wal_path =
+                            crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                        crate::index::sparse::persistence::wal_append_upsert(
+                            &wal_path, *point_id, sv,
+                        )?;
+                    }
+                }
+            }
+
+            let mut indexes = self.sparse_indexes.write();
+            for (point_id, sv_map) in &sparse_batch {
+                for (name, sv) in sv_map {
+                    let idx = indexes.entry(name.clone()).or_default();
+                    idx.insert(*point_id, sv);
+                }
+            }
+        }
+
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
+
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
@@ -174,6 +220,10 @@ impl Collection {
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
+
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
@@ -264,6 +314,18 @@ impl Collection {
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
 
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        //
+        // Intentional placement: the bump occurs AFTER all mutations (vector
+        // storage write, payload storage write, HNSW insertion, config update)
+        // have completed successfully. Bumping earlier would allow a concurrent
+        // reader to see the new generation before the data is consistent,
+        // causing it to build a fresh plan key that matches no cached entry —
+        // harmless, but wasteful. Bumping here ensures cache invalidation is
+        // visible only once all writes are durable.
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(inserted)
     }
 
@@ -285,6 +347,7 @@ impl Collection {
                         id,
                         vector: Vec::new(),
                         payload: Some(payload),
+                        sparse_vectors: None,
                     })
                 })
                 .collect()
@@ -299,6 +362,7 @@ impl Collection {
                         id,
                         vector,
                         payload,
+                        sparse_vectors: None,
                     })
                 })
                 .collect()
@@ -364,10 +428,39 @@ impl Collection {
             let mut config = self.config.write();
             config.point_count = point_count;
             drop(config);
+
+            // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
+            // WAL-before-apply: write delete intent to WAL before mutating the index.
+            #[cfg(feature = "persistence")]
+            {
+                let indexes = self.sparse_indexes.read();
+                if !indexes.is_empty() {
+                    for (name, _) in indexes.iter() {
+                        let wal_path =
+                            crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                        for &id in ids {
+                            crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
+                        }
+                    }
+                }
+            }
+
+            {
+                let indexes = self.sparse_indexes.read();
+                for idx in indexes.values() {
+                    for &id in ids {
+                        idx.delete(id);
+                    }
+                }
+            }
         }
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
+
+        // Bump write generation once per batch (CACHE-01 invalidation counter).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }

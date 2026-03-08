@@ -403,3 +403,324 @@ fn test_create_collection_rejects_existing_on_disk_dir_not_loaded() {
     let result = db.create_collection("orphaned", 8, DistanceMetric::Cosine);
     assert!(matches!(result, Err(Error::CollectionExists(_))));
 }
+
+// ---------------------------------------------------------------------------
+// execute_train tests
+// ---------------------------------------------------------------------------
+
+/// Helper: insert vectors into a collection for training.
+fn seed_training_vectors(db: &Database, name: &str, dim: usize, count: usize) {
+    let coll = db.get_collection(name).unwrap();
+    let points: Vec<Point> = (0..count)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let v: Vec<f32> = (0..dim)
+                .map(|d| ((i * 31 + d * 17 + 11) % 1000) as f32 / 1000.0)
+                .collect();
+            Point::new(i as u64, v, Some(serde_json::json!({})))
+        })
+        .collect();
+    coll.upsert(points).unwrap();
+}
+
+#[test]
+fn test_execute_train_pq_success() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    // dimension=16, m=4 => 16 % 4 == 0
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 300);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["status"], serde_json::json!("trained"));
+    assert_eq!(payload["type"], serde_json::json!("pq"));
+
+    // Verify storage mode updated
+    let coll = db.get_collection("docs").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
+}
+
+#[test]
+fn test_execute_train_collection_not_found() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    let query = Parser::parse("TRAIN QUANTIZER ON nonexistent WITH (m=4, k=16)").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, Error::CollectionNotFound(_)));
+}
+
+#[test]
+fn test_execute_train_invalid_m_zero() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 100);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=0, k=16)").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+}
+
+#[test]
+fn test_execute_train_opq_success() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("vecs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "vecs", 16, 300);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON vecs WITH (m=4, k=16, type=opq)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["type"], serde_json::json!("opq"));
+    assert_eq!(payload["status"], serde_json::json!("trained"));
+
+    let coll = db.get_collection("vecs").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
+}
+
+#[test]
+fn test_execute_train_rabitq_success() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("rbq", 32, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "rbq", 32, 100);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON rbq WITH (m=4, type=rabitq)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["type"], serde_json::json!("rabitq"));
+
+    let coll = db.get_collection("rbq").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::RaBitQ);
+}
+
+#[test]
+fn test_execute_train_updates_storage_mode() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 300);
+
+    // Verify initial state
+    let coll = db.get_collection("docs").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::Full);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    // After training
+    let coll = db.get_collection("docs").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
+}
+
+#[test]
+fn test_execute_train_dim_not_divisible_by_m() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    // dim=15, m=4 => 15 % 4 != 0
+    db.create_collection("bad", 15, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "bad", 15, 100);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON bad WITH (m=4, k=16)").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap_err();
+    // This should be caught either by our validation or by ProductQuantizer::train
+    assert!(
+        matches!(
+            err,
+            Error::InvalidQuantizerConfig(_) | Error::TrainingFailed(_)
+        ),
+        "Expected InvalidQuantizerConfig or TrainingFailed, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_execute_train_rejects_retrain_without_force() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 300);
+
+    // First training succeeds
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    // Second training without force=true should fail
+    let query2 = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    let err = db
+        .execute_query(&query2, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+    assert!(err.to_string().contains("already trained"));
+}
+
+#[test]
+fn test_execute_train_force_retrain_succeeds() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 300);
+
+    // First training
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    // Retrain with force=true
+    let query2 = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16, force=true)").unwrap();
+    let results = db
+        .execute_query(&query2, &std::collections::HashMap::new())
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["status"], serde_json::json!("trained"));
+}
+
+#[test]
+fn test_execute_train_with_sample_limit() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 500);
+
+    // Train with sample=100 (fewer than the 500 vectors available)
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16, sample=100)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["training_vectors"], serde_json::json!(100));
+}
+
+#[test]
+fn test_execute_train_sample_larger_than_dataset() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 200);
+
+    // sample=9999 but only 200 vectors — should use all 200
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (m=4, k=16, sample=9999)").unwrap();
+    let results = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload["training_vectors"], serde_json::json!(200));
+}
+
+#[test]
+fn test_execute_train_missing_m_is_required() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 16, DistanceMetric::Euclidean)
+        .unwrap();
+    seed_training_vectors(&db, "docs", 16, 100);
+
+    // No m parameter at all
+    let query = Parser::parse("TRAIN QUANTIZER ON docs WITH (k=16)").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+    assert!(err.to_string().contains("must be > 0"));
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation)]
+fn test_database_open_loads_sparse_index() {
+    use crate::index::sparse::persistence::{compact, wal_append_upsert};
+    use crate::index::sparse::types::SparseVector;
+    use crate::index::sparse::SparseInvertedIndex;
+
+    let dir = tempdir().unwrap();
+
+    // Step 1: Create a collection via Database API
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("sparse_test", 4, DistanceMetric::Cosine)
+            .unwrap();
+    }
+
+    // Step 2: Manually write sparse index files into collection directory
+    let coll_dir = dir.path().join("sparse_test");
+    {
+        let idx = SparseInvertedIndex::new();
+        for i in 0..20u64 {
+            let v = SparseVector::new(vec![(1, 1.0), (2 + i as u32 % 5, 0.5)]);
+            idx.insert(i, &v);
+        }
+        compact(&coll_dir, &idx).unwrap();
+    }
+
+    // Step 3: Reopen database and verify sparse index is loaded
+    {
+        let db = Database::open(dir.path()).unwrap();
+        let coll = db.get_collection("sparse_test").unwrap();
+        let guard = coll.sparse_indexes().read();
+        assert!(
+            guard.contains_key(""),
+            "Default sparse index should be loaded from disk on Database::open()"
+        );
+        let sparse = guard.get("").unwrap();
+        assert_eq!(sparse.doc_count(), 20);
+    }
+
+    // Step 4: Test with WAL-only scenario (no compacted files)
+    let dir2 = tempdir().unwrap();
+    {
+        let db = Database::open(dir2.path()).unwrap();
+        db.create_collection("wal_only", 4, DistanceMetric::Cosine)
+            .unwrap();
+    }
+    let coll_dir2 = dir2.path().join("wal_only");
+    {
+        let wal_path = coll_dir2.join("sparse.wal");
+        for i in 0..5u64 {
+            let v = SparseVector::new(vec![(1, 1.0)]);
+            wal_append_upsert(&wal_path, i, &v).unwrap();
+        }
+    }
+    {
+        let db = Database::open(dir2.path()).unwrap();
+        let coll = db.get_collection("wal_only").unwrap();
+        let guard = coll.sparse_indexes().read();
+        assert!(
+            guard.contains_key(""),
+            "WAL-only sparse index should be loaded on Database::open()"
+        );
+        assert_eq!(guard.get("").unwrap().doc_count(), 5);
+    }
+}

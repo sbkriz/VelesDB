@@ -741,5 +741,147 @@ class TestVelesDBVectorStoreQueryAnalysis:
         assert docs[0].metadata["node_id"] == 1
 
 
+class TestV15Features:
+    """Tests for v1.5 features: sparse vectors, PQ training, streaming inserts."""
+
+    def test_add_texts_with_sparse_vectors(self, temp_db_path, embeddings):
+        """Test adding texts with sparse vectors for hybrid search."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_sparse_add",
+        )
+
+        ids = vectorstore.add_texts(
+            ["Hello world"],
+            sparse_vectors=[{0: 1.5, 3: 0.8}],
+        )
+
+        assert len(ids) == 1
+        assert isinstance(ids[0], str)
+
+    def test_add_texts_without_sparse_preserves_behavior(self, temp_db_path, embeddings):
+        """Test that add_texts without sparse_vectors works identically."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_sparse_compat",
+        )
+
+        ids = vectorstore.add_texts(["Hello world"])
+
+        assert len(ids) == 1
+        assert isinstance(ids[0], str)
+
+    def test_similarity_search_with_sparse_vector_kwarg(self, temp_db_path, embeddings):
+        """Test similarity_search accepts sparse_vector kwarg."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_sparse_search",
+        )
+
+        vectorstore.add_texts(["Hello world", "Sparse test"])
+
+        # Should run without error -- hybrid dense+sparse via RRF
+        results = vectorstore.similarity_search(
+            "test", k=2, sparse_vector={0: 1.0},
+        )
+
+        assert isinstance(results, list)
+
+    def test_train_pq_calls_db_train_pq(self, embeddings):
+        """Test that train_pq delegates to db.train_pq with correct args."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="test_pq",
+        )
+
+        calls = []
+
+        class _MockDb:
+            def train_pq(self, collection_name, m, k, opq):
+                calls.append({"collection_name": collection_name, "m": m, "k": k, "opq": opq})
+                return "trained"
+
+        vectorstore._db = _MockDb()
+        result = vectorstore.train_pq(m=16, k=128, opq=True)
+
+        assert result == "trained"
+        assert len(calls) == 1
+        assert calls[0] == {"collection_name": "test_pq", "m": 16, "k": 128, "opq": True}
+
+    def test_stream_insert_calls_collection_stream_insert(self, embeddings):
+        """Test that stream_insert builds points and calls collection.stream_insert."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path="./unused",
+            collection_name="test_stream",
+        )
+
+        inserted_points = []
+
+        class _MockCollection:
+            def stream_insert(self, points):
+                inserted_points.extend(points)
+
+        vectorstore._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+        count = vectorstore.stream_insert(["hello", "world"])
+
+        assert count == 2
+        assert len(inserted_points) == 2
+        assert "vector" in inserted_points[0]
+        assert inserted_points[0]["payload"]["text"] == "hello"
+        assert inserted_points[1]["payload"]["text"] == "world"
+
+    def test_validate_sparse_vector_valid(self):
+        """Test validate_sparse_vector accepts valid sparse vectors."""
+        from langchain_velesdb.security import validate_sparse_vector
+
+        result = validate_sparse_vector({0: 1.5, 3: 0.8})
+        assert result == {0: 1.5, 3: 0.8}
+
+    def test_validate_sparse_vector_invalid_type(self):
+        """Test validate_sparse_vector rejects non-dict input."""
+        from langchain_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError, match="must be a dict"):
+            validate_sparse_vector("not_a_dict")
+
+    def test_validate_sparse_vector_invalid_keys(self):
+        """Test validate_sparse_vector rejects non-int keys."""
+        from langchain_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError, match="keys must be int"):
+            validate_sparse_vector({"a": 1.0})
+
+    def test_validate_sparse_vector_invalid_values(self):
+        """Test validate_sparse_vector rejects non-numeric values and NaN/Inf weights."""
+        from langchain_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: "high"})
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: float("nan")})
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: float("inf")})
+
+    def test_validate_sparse_vector_rejects_bool_keys(self):
+        """Test validate_sparse_vector rejects bool keys (bool is subclass of int)."""
+        from langchain_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({True: 1.0})
+
+    def test_version_is_1_5_0(self):
+        """Test that package version is 1.5.0."""
+        from langchain_velesdb import __version__
+
+        assert __version__ == "1.5.0"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

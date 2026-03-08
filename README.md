@@ -8,12 +8,12 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57-102µs HNSW Search* • 18.7ns SIMD • 3,100+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 59µs HNSW Search • 18.8ns SIMD • 3,670+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
-  <strong>🚀 v1.4.1 Released</strong> — Ecosystem crates synced on crates.io + hardened release workflow<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.1">Download Now</a> • <a href="#-quick-start">Quick Start</a>
+  <strong>🚀 v1.5.0 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.5.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
 </p>
 
 <p align="center">
@@ -24,11 +24,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.7ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-3,100+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.8ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&label=tests&style=for-the-badge" alt="Tests"/></a>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+  <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-226µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
@@ -41,6 +43,90 @@
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
+
+---
+
+## 🆕 What's New in v1.5
+
+### Product Quantization (PQ) -- 4x Memory Compression
+
+Train a codebook on your vectors and compress them from 32-bit floats to compact codes. Configurable subspaces (m) and centroids (k), with OPQ pre-rotation for clustered data and RaBitQ binary quantization (32x compression). ADC search uses SIMD-accelerated lookup tables that fit in L1 cache. Rescore oversampling (default 4x) prevents silent recall collapse.
+
+```sql
+-- Train a PQ quantizer on your collection
+TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)
+
+-- Search uses PQ automatically after training (ADC + rescore)
+SELECT * FROM my_collection WHERE vector NEAR $query LIMIT 10
+```
+
+```python
+# Python SDK
+db.train_pq("my_collection", m=8, k=256)
+collection = db.get_collection("my_collection")
+results = collection.search(vector=query_vec, top_k=10)
+```
+
+### Sparse Vector Search -- SPLADE/BM42-Compatible
+
+Native inverted index with SPLADE/BM42-compatible term_id:weight format. MaxScore DAAT algorithm with early termination for sub-millisecond ANN search. Named sparse vectors per point with WAL persistence and automatic compaction. Supports inner-product scoring out of the box.
+
+```sql
+-- Sparse vector search
+SELECT * FROM docs WHERE vector SPARSE_NEAR $sv LIMIT 10
+```
+
+```python
+# Python SDK -- unified search with optional sparse_vector
+results = collection.search(sparse_vector={42: 0.8, 137: 0.6, 891: 0.3}, top_k=10)
+```
+
+### Hybrid Dense+Sparse Search -- Best of Both Worlds
+
+Combine dense semantic similarity with sparse lexical matching in a single query. RRF (Reciprocal Rank Fusion) and RSF (Reciprocal Score Fusion) strategies merge results from both branches. Parallel execution via rayon for minimal latency overhead.
+
+```sql
+-- Hybrid search with RRF fusion
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+USING FUSION(strategy='rrf', k=60)
+LIMIT 10
+```
+
+```json
+// REST API -- unified search endpoint auto-detects hybrid mode
+POST /collections/docs/search
+{
+  "vector": [0.1, 0.2, 0.3],
+  "sparse_vector": {"42": 0.8, "137": 0.6},
+  "top_k": 10
+}
+```
+
+### Streaming Inserts -- Immediately Searchable
+
+Bounded channel with backpressure (HTTP 429 when full). Inserted vectors are immediately searchable via a delta buffer that merges with HNSW results at query time. Micro-batch draining into HNSW with configurable batch size (default 128). Delta-wins dedup strategy ensures freshest data is always returned.
+
+```python
+# Python SDK -- stream inserts without blocking
+collection = db.get_collection("my_collection")
+collection.stream_insert([
+    {"id": "p1", "vector": vec1, "payload": {"text": "hello"}},
+    {"id": "p2", "vector": vec2, "payload": {"text": "world"}},
+])
+# Immediately searchable -- no rebuild wait
+results = collection.search(vector=query_vec, top_k=10)
+```
+
+### Query Plan Cache -- Compiled Plan Reuse
+
+Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automatic invalidation via per-collection `write_generation` counter and schema version tracking. Observable via `EXPLAIN` output (`cache_hit`, `plan_reuse_count`) and `/metrics` Prometheus endpoint.
+
+```sql
+-- Check if your query hits the plan cache
+EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+-- Output includes: cache_hit: true, plan_reuse_count: 42
+```
 
 ---
 
@@ -77,7 +163,7 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 18.7ns SIMD</h3>
+<h3>⚡ 18.8ns SIMD</h3>
 <p>Native HNSW + AVX2 SIMD.<br/><strong>41 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
@@ -100,7 +186,7 @@
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 3,100+</h3>
+<h3>🧪 3,670+</h3>
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
@@ -112,7 +198,7 @@
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 18.7 ns</h3>
+<h3>⚡ 18.8 ns</h3>
 <p><strong>Dot Product</strong><br/>768D vectors</p>
 </td>
 <td align="center" width="20%">
@@ -126,22 +212,23 @@
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 18.7 ns | 41.1 Gelem/s |
-| **SIMD Cosine (768D)** | 27 ns | 28.4 Gelem/s |
-| **SIMD Hamming (768D)** | 19 ns | 52.6M ops/sec |
-| **HNSW Search (10K vectors)** | 96-106 µs (median 102 µs) | k=10, 768D, measured 2026-02-17 |
-| **ColumnStore Filter (100K)** | 44-84 µs | eq string: 44 µs, int range: 84 µs |
-| **VelesQL Cache Hit** | 86 ns | criterion run, 2026-02-17 |
+| **SIMD Dot Product (768D)** | 18.8 ns | 41.0 Gelem/s |
+| **SIMD Cosine (768D)** | 35.6 ns | 21.6 Gelem/s |
+| **SIMD Hamming (768D)** | 37.4 ns | 20.5M ops/sec |
+| **HNSW Search (10K vectors)** | 59 µs | k=10, 768D, measured 2026-03-07 |
+| **ColumnStore Filter (10K)** | 4.5 µs (column_store) / 148 µs (JSON) | eq string, measured 2026-03-07 |
+| **VelesQL Cache Hit** | 444 ns | criterion run, 2026-03-07 |
+| **Sparse Search (10K)** | 226 µs (top10) / 696 µs (top100) | MaxScore DAAT, measured 2026-03-07 |
 
-> \*Measured latency depends on CPU/flags/dataset. Current run measured **96-106 µs**; **57 µs** remains the best-case reference in optimized balanced mode.
+> \*Measured on i9-14900KF, Windows 11, Rust 1.92.0. Latency depends on CPU/flags/dataset.
 
 ### Codebase Health
 
 | Metric | Value |
 |--------|-------|
-| **Total Rust LoC** | ~133,000 |
+| **Total Rust LoC** | ~48,000 (workspace crates) |
 | **Crates** | 8 production crates |
-| **Benchmarks** | 35 criterion suites |
+| **Benchmarks** | 38 criterion suites |
 | **E2E Test Suites** | 6 (Rust, Python, WASM, CLI, LangChain, LlamaIndex) |
 | **Security Advisories** | 0 ✅ |
 
@@ -150,7 +237,7 @@
 ```
 ✅ cargo check --workspace
 ✅ cargo clippy -- -D warnings  
-✅ cargo test --workspace (3,000 passing)
+✅ cargo test --workspace (3,670+ passing)
 ✅ cargo deny check (0 advisories)
 ✅ cargo fmt --check
 ✅ Code coverage > 75% (82.30%)
@@ -192,10 +279,10 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | Domain      | Component                          | Description                              | Install                     |
 |-------------|------------------------------------|------------------------------------------|----------------------------|
 | **🦀 Core** | [velesdb-core](crates/velesdb-core) | Core engine (HNSW, SIMD, VelesQL)        | `cargo add velesdb-core`   |
-| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (22+ endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
+| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (25 endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
 | **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
 | **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
-| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb`   |
+| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb-sdk`   |
 | **🌍 WASM** | [velesdb-wasm](crates/velesdb-wasm) | Browser-side vector search               | `npm i @wiscale/velesdb-wasm` |
 | **📱 Mobile** | [velesdb-mobile](crates/velesdb-mobile) | iOS (Swift) & Android (Kotlin)           | [Build instructions](#-mobile-build) |
 | **🖥️ Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) | Tauri v2 AI-powered apps               | `cargo add tauri-plugin-velesdb` |
@@ -306,7 +393,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-1.1.0-amd64.deb
+sudo dpkg -i velesdb-<VERSION>-amd64.deb  # Download latest from https://github.com/cyberlife-coder/VelesDB/releases/latest
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -340,7 +427,7 @@ import velesdb
 db = velesdb.Database("./my_vectors")
 collection = db.create_collection("docs", dimension=768, metric="cosine")
 collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
-results = collection.search([...], top_k=10)
+results = collection.search(vector=[...], top_k=10)
 ```
 
 ```bash
@@ -402,7 +489,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.4.5"}
+# {"status":"healthy","version":"1.5.0"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -480,6 +567,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/points` | `POST` | Upsert points |
 | `/collections/{name}/points/{id}` | `GET` | Get a point by ID |
 | `/collections/{name}/points/{id}` | `DELETE` | Delete a point |
+| `/collections/{name}/stream/insert` | `POST` | Stream insert a single point (bounded channel, backpressure 429) |
 
 ### Search (Vector)
 
@@ -490,6 +578,8 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/search/multi` | `POST` | Multi-query search |
 | `/collections/{name}/search/text` | `POST` | BM25 full-text search |
 | `/collections/{name}/search/hybrid` | `POST` | Hybrid vector + text search |
+
+> **Sparse & hybrid search:** Use `/collections/{name}/search` with a `sparse_vector` field for sparse-only search, or both `vector` and `sparse_vector` for hybrid dense+sparse search (auto-detected, fused via RRF/RSF).
 
 ### Graph
 
@@ -508,7 +598,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/indexes` | `POST` | Create index on property |
 | `/collections/{name}/indexes/{label}/{property}` | `DELETE` | Delete index |
 
-### VelesQL v2.0 (Unified Query)
+### VelesQL v2.2.0 (Unified Query)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -516,13 +606,16 @@ curl -X POST http://localhost:8080/query \
 | `/aggregate` | `POST` | Execute aggregation-only VelesQL queries (`GROUP BY`/`HAVING`) |
 | `/query/explain` | `POST` | Return query execution plan (EXPLAIN) |
 
-**VelesQL v2.0 Features:**
+**VelesQL v2.2.0 Features:**
 - `GROUP BY` / `HAVING` with AND/OR operators
 - `ORDER BY` multi-column + `similarity()` function
 - `JOIN ... ON` across collections (inner join runtime support)
 - `JOIN ... USING (...)` runtime supports single-column only (`USING (a, b)` rejected)
 - `UNION` / `INTERSECT` / `EXCEPT` set operations
 - `USING FUSION(strategy='rrf')` hybrid search
+- `SPARSE_NEAR` clause for sparse vector similarity search
+- `TRAIN QUANTIZER ON <collection> WITH (m=8, k=256)` for explicit PQ training
+- `FUSE BY` / `USING FUSION` with `dense_weight`/`sparse_weight` for RSF fusion
 - `WITH (max_groups=100)` query-time config
 
 ```sql
@@ -592,6 +685,27 @@ curl -X POST http://localhost:8080/collections/my_vectors/points \
 </details>
 
 <details>
+<summary><b>Streaming Insert</b></summary>
+
+```bash
+curl -X POST http://localhost:8080/collections/my_vectors/stream/insert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "vector": [0.1, 0.2, 0.3, 0.4],
+    "payload": {"title": "Doc 1"}
+  }'
+```
+
+**Response (202 Accepted):**
+```json
+{"message": "Point accepted into streaming buffer"}
+```
+
+> Returns `429 Too Many Requests` when the streaming buffer is full. Retry after 1 second.
+</details>
+
+<details>
 <summary><b>Vector Search</b></summary>
 
 ```bash
@@ -609,6 +723,29 @@ curl -X POST http://localhost:8080/collections/my_vectors/search \
   "results": [
     {"id": 1, "score": 0.95, "payload": {"title": "Document 1"}},
     {"id": 42, "score": 0.87, "payload": {"title": "Document 42"}}
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Sparse Search</b></summary>
+
+```bash
+curl -X POST http://localhost:8080/collections/my_vectors/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sparse_vector": {"42": 0.8, "137": 0.6, "891": 0.3},
+    "top_k": 10
+  }'
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": 7, "score": 1.42, "payload": {"title": "Sparse Match 1"}},
+    {"id": 19, "score": 0.91, "payload": {"title": "Sparse Match 2"}}
   ]
 }
 ```
@@ -684,7 +821,7 @@ MATCH (product:Product)-[:SUPPLIED_BY]->(supplier:Supplier)
 WHERE 
   similarity(product.image_embedding, $uploaded_photo) > 0.7  -- Vector: visual similarity
   AND supplier.trust_score > 4.5                               -- Graph: relationship data
-  AND (SELECT price FROM inventory WHERE sku = product.sku) < 500  -- Column: real-time price
+  AND product.price < 500                                         -- Column: real-time price
 ORDER BY similarity() DESC
 LIMIT 12
 ```
@@ -703,14 +840,13 @@ LIMIT 12
 **Problem:** "Flag transactions that look suspicious based on pattern + network + history"
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- Detect fraud: semantic pattern + transaction network + account history
 MATCH (tx:Transaction)-[:FROM]->(account:Account)-[:LINKED_TO*1..3]->(related:Account)
 WHERE 
   similarity(tx.behavior_embedding, $known_fraud_pattern) > 0.6  -- Vector: behavioral similarity
   AND related.risk_level = 'high'                                 -- Graph: network analysis
-  AND (SELECT SUM(amount) FROM transactions 
-       WHERE account_id = account.id 
-       AND timestamp > NOW() - INTERVAL '24 hours') > 10000       -- Column: velocity check
+  AND account.total_amount_24h > 10000                             -- Column: velocity check
 RETURN tx.id, account.id, similarity() as fraud_score
 ```
 
@@ -734,8 +870,7 @@ MATCH (patient:Patient)-[:HAS_CONDITION]->(condition:Condition)
 WHERE 
   similarity(condition.symptoms_embedding, $current_symptoms) > 0.75  -- Vector: symptom matching
   AND condition.icd10_code IN ('J18.9', 'J12.89')                     -- Column: specific diagnoses
-  AND (SELECT success_rate FROM treatment_outcomes 
-       WHERE treatment_id = treatment.id) > 0.8                       -- Column: outcome data
+  AND treatment.success_rate > 0.8                                    -- Column: outcome data
 RETURN treatment.name, AVG(success_rate) as effectiveness
 ```
 
@@ -753,14 +888,14 @@ RETURN treatment.name, AVG(success_rate) as effectiveness
 **Problem:** "My AI agent needs conversation history + knowledge base + user preferences"
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- Agent memory: semantic recall + conversation graph + user context
 MATCH (user:User)-[:HAD_CONVERSATION]->(conv:Conversation)
       -[:CONTAINS]->(message:Message)
 WHERE 
   similarity(message.embedding, $current_query) > 0.7     -- Vector: relevant past messages
   AND conv.timestamp > NOW() - INTERVAL '7 days'          -- Column: recent conversations
-  AND (SELECT preference_value FROM user_preferences 
-       WHERE user_id = user.id AND key = 'topic') = message.topic  -- Column: user prefs
+  AND message.topic = user.preferred_topic                          -- Column: user prefs
 ORDER BY conv.timestamp DESC, similarity() DESC
 LIMIT 10
 ```
@@ -783,8 +918,7 @@ MATCH (doc:Document)-[:AUTHORED_BY]->(author:Author)
 WHERE 
   similarity(doc.embedding, $research_question) > 0.8   -- Vector: semantic search
   AND doc.category = 'peer-reviewed'                     -- Column: structured filter
-  AND (SELECT citation_count FROM author_metrics         -- Column: subquery
-       WHERE author_id = author.id) > 50
+  AND author.citation_count > 50                          -- Column: structured filter
 ORDER BY similarity() DESC
 LIMIT 5
 ```
@@ -793,7 +927,7 @@ LIMIT 5
 1. **Graph traversal**: `MATCH` finds document→author relationships
 2. **Vector search**: `similarity()` ranks by semantic relevance to your question
 3. **Columnar filter**: `category = 'peer-reviewed'` filters structured metadata
-4. **Columnar subquery**: Joins with `author_metrics` table for citation counts
+4. **Columnar filter**: `citation_count > 50` filters by author reputation
 
 **Expected Output:**
 ```json
@@ -873,6 +1007,10 @@ LIMIT 10
 ---
 
 ### Scenario 0c: Distance Metrics for Every Use Case
+
+<details>
+<summary><b>Distance Metrics for Every Use Case (click to expand)</b></summary>
+
 **Goal:** Choose the right metric for your data type and domain
 
 VelesDB supports **5 distance metrics** - each optimized for specific use cases:
@@ -981,6 +1119,8 @@ LIMIT 20
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
 
+</details>
+
 ---
 
 ### Scenario 1: Medical Research Assistant
@@ -1065,10 +1205,11 @@ LIMIT 8
 **Goal:** Find similar malware patterns observed in the last 7 days
 
 ```sql
-SELECT malware_hash, threat_level, first_seen 
-FROM threat_intel 
-WHERE 
-  vector NEAR $current_threat_embedding 
+-- PSEUDOCODE: conceptual query, not executable VelesQL
+SELECT malware_hash, threat_level, first_seen
+FROM threat_intel
+WHERE
+  vector NEAR $current_threat_embedding
   AND first_seen > NOW() - INTERVAL '7 days'
   AND threat_level > 0.8
 ORDER BY similarity() DESC, first_seen DESC
@@ -1090,24 +1231,24 @@ LIMIT 10
 
 ### 🔥 Core Vector Operations (768D - BERT/OpenAI dimensions)
 
-| Operation | Latency | Throughput | vs. Naive |
-|-----------|---------|------------|----------|
-| **Dot Product (768D)** | **46 ns** | **21.7M ops/sec** | 🚀 **8x faster** |
-| **Euclidean (768D)** | **56 ns** | **17.9M ops/sec** | 🚀 **6x faster** |
-| **Cosine (768D)** | **105 ns** | **9.5M ops/sec** | 🚀 **4x faster** |
-| **Hamming (Binary)**| **8 ns** | **125M ops/sec** | 🚀 **10x faster** |
-| **Jaccard (768D)** | **175 ns** | **5.7M ops/sec** | 🚀 **3x faster** |
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **Dot Product (768D)** | **18.8 ns** | **41.0 Gelem/s** |
+| **Euclidean (768D)** | **20.9 ns** | **36.7 Gelem/s** |
+| **Cosine (768D)** | **35.6 ns** | **21.6 Gelem/s** |
+| **Hamming (768D)**| **37.4 ns** | **20.5M ops/sec** |
+| **Jaccard (768D)** | **22.8 ns** | **33.7M ops/sec** |
 
 ### 📊 System Performance (10K Vectors, 768D)
 
 | Benchmark | Result | Details |
 |-----------|--------|----------|
-| **HNSW Search** | **102 µs** | Balanced mode (ef=128), measured 2026-02-17 |
+| **HNSW Search** | **59 µs** | k=10, 768D, measured 2026-03-07 |
 | **Hybrid Search** | **139 µs** | Vector + filter |
 | **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
-| **VelesQL Parsing**| **86 ns** | Cache hit (~11.7M qps), measured 2026-02-17 |
+| **VelesQL Cache Hit**| **444 ns** | ~2.3M qps, measured 2026-03-07 |
 | **Recall@10** | **100%** | Accurate mode |
-| **Code Coverage** | **82.30%** | 3,000+ tests |
+| **Code Coverage** | **82.30%** | 3,670+ tests |
 
 ### Search Quality (Recall)
 
@@ -1135,8 +1276,10 @@ Reduce memory usage by **4-32x** with minimal recall loss:
 
 | Method | Compression | Recall Loss | Use Case |
 |--------|-------------|-------------|----------|
+| **PQ** (Product Quantization) | **16-32x** | Variable (improves with higher D) | Memory-constrained, large-scale search |
 | **SQ8** (8-bit) | **4x** | < 2% | General purpose, Edge |
 | **Binary** (1-bit) | **32x** | ~10-15% | Fingerprints, IoT |
+| **RaBitQ** (Binary PQ) | **32x** | ~15% | Ultra-compressed, high dimensionality |
 
 ```rust
 use velesdb_core::quantization::{QuantizedVector, dot_product_quantized_simd};
@@ -1152,64 +1295,6 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 
 ---
 
-## 🚀 Transformative Benefits: How VelesDB Changes Development
-
-### ⚡ Eliminates Database Sprawl
-VelesDB replaces 3+ specialized databases (vector DB + graph DB + document store) with a **single unified engine**.
-
-```mermaid
-graph LR
-A[App] --> V[VelesDB]
-```
-
-**Impact:**
-- ✅ **70% less infrastructure code**
-- ✅ **No synchronization headaches**
-- ✅ **Single query language for all operations**
-
-### 💡 Enables New Application Categories
-With air-gapped deployment and 15MB binary size:
-```mermaid
-pie title Deployment Locations
-    "On-Prem Servers" : 35
-    "Edge Devices" : 25
-    "Mobile Apps" : 20
-    "Browser WASM" : 20
-```
-
-**Impact:**
-- ✅ **Build HIPAA-compliant healthcare apps**
-- ✅ **Create military-grade analytics** for air-gapped environments
-- ✅ **Enable privacy-first consumer apps** with zero data sharing
-
-### 🚀 Redefines Performance Expectations
-
-| Pipeline Step | Cloud Vector DB | VelesDB |
-|---------------|-----------------|---------|
-| Network round-trip | 50-100ms | **0ms** (local) |
-| Vector search | 10-50ms | **~0.10ms** |
-| Graph traversal | 20-100ms | **0.1ms** |
-| **Total latency** | **100-250ms** | **< 1ms** |
-
-> 💡 **100x faster** enables use cases impossible with cloud: real-time autocomplete, instant RAG, sub-frame game AI
-
-**Impact:**
-- ✅ **Build real-time AI agents** that respond faster than human perception
-- ✅ **Enable complex RAG chains** with 10+ sequential retrievals
-- ✅ **Create instant search experiences** with no loading spinners
-
-### 💼 Unified API Simplifies Development
-One consistent API across all platforms:
-```rust
-// Same API everywhere
-let results = db.search(query_vector, filters, graph_traversal);
-```
-
-**Impact:**
-- ✅ **Learn once, deploy everywhere**
-- ✅ **Shared codebase** between web, mobile, and desktop
-- ✅ **Eliminate platform-specific database code**
-
 ---
 
 ## ✨ Core Features That Transform Development
@@ -1221,45 +1306,11 @@ let results = db.search(query_vector, filters, graph_traversal);
 | **📦 15MB Binary** | Zero dependencies, single executable | **Deploy anywhere** - from servers to edge devices |
 | **🔒 Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **🌍 Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |
-| **🧠 SQ8 Quantization** | 4x memory reduction | **Run complex AI** on resource-constrained devices |
-| **📝 VelesQL** | SQL-like unified query language | **Simplify complex queries** - no DSL learning curve |
+| **🧠 PQ + SQ8 Quantization** | 4-32x memory reduction (PQ, SQ8, Binary, RaBitQ) | **Run complex AI** on resource-constrained devices |
+| **🔍 Hybrid Dense+Sparse** | SPLADE/BM42 sparse index + RRF/RSF fusion | **Best lexical + semantic** retrieval in one query |
+| **📝 VelesQL** | SQL-like unified query language with SPARSE_NEAR, TRAIN QUANTIZER | **Simplify complex queries** - no DSL learning curve |
 
 ---
-
-## 🏆 Real-World Impact Stories
-
-### 🏥 Healthcare Diagnostics Assistant
-**Before VelesDB:**
-- 300ms latency per query
-- Patient data in cloud
-- Separate systems for medical knowledge and patient data
-
-**With VelesDB:**
-- **0.6ms diagnosis suggestions**
-- **On-device patient data**
-- **Unified medical knowledge graph**
-
-```mermaid
-pie title Performance Improvement
-    "Diagnosis Speed" : 85
-    "Accuracy" : 10
-    "Privacy" : 5
-```
-
-### 🏭 Manufacturing Quality Control
-**Before VelesDB:**
-- Cloud dependency caused production delays
-- Separate systems for defect images and part metadata
-
-**With VelesDB:**
-```sql
-MATCH (part)-[HAS_DEFECT]->(defect)
-WHERE defect.vector NEAR $image_vec
-AND part.material = 'titanium'
-```
-- **50% fewer defective shipments**
-- **Offline factory floor operation**
-- **Unified defect database**
 
 ---
 
@@ -1326,9 +1377,11 @@ gantt
     Multi-Score Fusion          :done, 2026-01, 2026-01
     SDK Ecosystem Complete      :done, 2026-01, 2026-01
     E2E Test Suite              :done, 2026-01, 2026-01
-    section v1.5 📋
-    Distributed Mode            :2026-02, 2026-04
-    Sparse Vectors              :2026-03, 2026-05
+    section v1.5 ✅
+    Product Quantization        :done, 2026-02, 2026-03
+    Sparse Vectors              :done, 2026-02, 2026-03
+    Streaming Inserts           :done, 2026-03, 2026-03
+    Query Plan Cache            :done, 2026-03, 2026-03
 ```
 
 ### Progress Overview
@@ -1337,7 +1390,7 @@ gantt
 |---------|--------|------------|----------|
 | **v1.3.0** | ✅ Released | 6/6 | ![100%](https://progress-bar.xyz/100?title=Complete) |
 | **v1.4.0** | ✅ Released | 10/10 | ![100%](https://progress-bar.xyz/100?title=Complete) |
-| **v1.5.0** | 📋 Planned | 0/5 | ![0%](https://progress-bar.xyz/0?title=Planned) |
+| **v1.5.0** | ✅ Released | 5/5 | ![100%](https://progress-bar.xyz/100?title=Complete) |
 
 ---
 
@@ -1395,7 +1448,7 @@ gantt
 </details>
 
 **Highlights:**
-- 🆕 **VelesQL v2.0** - MATCH queries, EXPLAIN plans, DISTINCT
+- 🆕 **VelesQL v2.2.0** - MATCH queries, EXPLAIN plans, DISTINCT
 - 🔀 **Multi-Score Fusion** - RRF, Average, Maximum, Weighted strategies
 - ⚡ **Parallel Graph** - 2-4x speedup on BFS/DFS
 - 🌐 **100% Ecosystem** - VelesQL in all SDKs
@@ -1403,15 +1456,27 @@ gantt
 
 ---
 
-### v1.5.0 📋 Planned (Q2 2026)
+### v1.5.0 ✅ Released (March 2026)
 
-| EPIC | Feature | Focus |
-|------|---------|-------|
-| EPIC-061 | **Distributed Mode** | Multi-node clustering |
-| EPIC-062 | **Sparse Vectors** | Efficient storage |
-| EPIC-063 | **Product Quantization** | PQ compression |
-| EPIC-064 | **Streaming Inserts** | Real-time pipelines |
-| EPIC-065 | **Advanced Caching** | Query plan cache |
+<details>
+<summary><b>5 Major Features - Click to expand</b></summary>
+
+| Feature | Description | Impact |
+|---------|-------------|--------|
+| **Product Quantization** | PQ (m/k configurable), OPQ, RaBitQ, GPU-accelerated training | 4-32x memory compression |
+| **Sparse Vectors** | SPLADE/BM42 inverted index, MaxScore DAAT, WAL persistence | Sub-ms lexical search |
+| **Hybrid Dense+Sparse** | RRF/RSF fusion, parallel branch execution, filtered sparse | Best of both worlds |
+| **Streaming Inserts** | Bounded channel, backpressure, delta buffer, immediate search | Real-time ingestion |
+| **Query Plan Cache** | Two-level LRU, write_generation invalidation, EXPLAIN metrics | Faster repeated queries |
+
+</details>
+
+**Highlights:**
+- **Product Quantization** - 16-32x compression with ADC SIMD acceleration, SQ8 mode for lossless 4x
+- **Sparse Vectors** - SPLADE/BM42-compatible inverted index with MaxScore algorithm
+- **Hybrid Search** - Dense+Sparse fusion via RRF/RSF in a single VelesQL query
+- **Streaming Inserts** - Immediately searchable with backpressure and delta buffer
+- **Query Plan Cache** - Two-level compiled plan cache with automatic invalidation
 
 ---
 
@@ -1428,9 +1493,9 @@ pie title VelesDB Feature Distribution
 
 | Horizon | Features |
 |---------|----------|
-| **2026 H2** | Sparse vectors, Product Quantization (PQ) |
-| **2027** | Distributed mode (Premium), Cluster HA |
-| **Beyond** | Agent Hooks & Triggers, Multi-tenancy |
+| **2026 H1** | ✅ Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
+| **2026 H2** | Distributed mode, Multi-tenancy |
+| **2027** | Cluster HA, Agent Hooks & Triggers |
 
 ---
 

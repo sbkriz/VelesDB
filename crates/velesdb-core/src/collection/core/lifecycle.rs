@@ -7,10 +7,11 @@ use crate::error::{Error, Result};
 use crate::guardrails::GuardRails;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
+use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
@@ -61,6 +62,7 @@ impl Collection {
             metadata_only: false,
             graph_schema: None,
             embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
         };
 
         // Initialize persistent storages
@@ -93,11 +95,17 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         };
 
         collection.save_config()?;
@@ -159,6 +167,7 @@ impl Collection {
             metadata_only: true,
             graph_schema: None,
             embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
         };
 
         // For metadata-only, we only need payload storage
@@ -190,11 +199,17 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         };
 
         collection.save_config()?;
@@ -213,6 +228,24 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the config file cannot be read or parsed.
+    ///
+    /// # INVARIANT(CACHE-01): write_generation starts at 0 on open
+    ///
+    /// Every call to `Collection::open` initialises `write_generation` to 0.
+    /// This is **safe** for cache correctness because:
+    ///
+    /// 1. The plan cache is **not persisted** across process restarts — it is
+    ///    always empty when the database opens. There are therefore no stale
+    ///    cached plans that could be incorrectly served.
+    ///
+    /// 2. `Database::load_collections` bumps `schema_version` after loading
+    ///    at least one collection (C-3). Any plan key built before the load
+    ///    would carry the pre-load `schema_version` and would miss the cache
+    ///    even if the `write_generation` happened to match.
+    ///
+    /// 3. Within a single process lifetime the `write_generation` is only ever
+    ///    incremented (never reset), so a cache key built with generation N
+    ///    will never be reused once the generation advances past N.
     pub fn open(path: PathBuf) -> Result<Self> {
         let config_path = path.join("config.json");
         let config_data = std::fs::read_to_string(&config_path)?;
@@ -255,8 +288,10 @@ impl Collection {
         // Load PropertyIndex and RangeIndex if they exist (EPIC-009 US-005)
         let property_index = Self::load_property_index(&path);
         let range_index = Self::load_range_index(&path);
-        // Load EdgeStore if present (graph collections — D-02)
+        // Load EdgeStore if present (graph collections -- D-02)
         let edge_store = Self::load_edge_store(&path);
+        // Load named sparse indexes if present (EPIC-062 / SPARSE-04)
+        let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
         Ok(Self {
             path,
@@ -273,11 +308,17 @@ impl Collection {
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(edge_store)),
+            sparse_indexes: Arc::new(RwLock::new(sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         })
     }
 
@@ -307,6 +348,7 @@ impl Collection {
             metadata_only: false,
             graph_schema: Some(schema),
             embedding_dimension: embedding_dim,
+            pq_rescore_oversampling: Some(4),
         };
 
         let vector_storage = Arc::new(RwLock::new(
@@ -333,15 +375,98 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         };
 
         collection.save_config()?;
         Ok(collection)
+    }
+
+    /// Loads all named sparse indexes from disk.
+    ///
+    /// Scans for `sparse.meta` (default name `""`) and `sparse-{name}.meta` files.
+    /// Returns a `BTreeMap` keyed by sparse vector name.
+    ///
+    /// # Concurrency safety of `read_dir`
+    ///
+    /// The `read_dir` scan below is safe from race conditions for two reasons:
+    ///
+    /// 1. **Single-threaded open**: `Collection::open` (and therefore this
+    ///    function) is always called from `Database::open`, which runs
+    ///    single-threaded during startup. No concurrent writers exist at this
+    ///    point.
+    ///
+    /// 2. **Atomic rename in compaction**: `compact_with_prefix` writes new
+    ///    data to `{prefix}.*.tmp` staging files and only promotes them to
+    ///    their final names via an atomic `rename(2)`. A `read_dir` scan
+    ///    therefore never observes a partially-written `sparse-*.meta` file;
+    ///    it either sees the complete previous version or the complete new
+    ///    version — never a torn write.
+    fn load_named_sparse_indexes(
+        path: &std::path::Path,
+    ) -> BTreeMap<String, crate::index::sparse::SparseInvertedIndex> {
+        let mut indexes = BTreeMap::new();
+
+        // Load default (unprefixed) sparse index: sparse.meta / sparse.wal
+        match crate::index::sparse::persistence::load_from_disk(path) {
+            Ok(Some(idx)) => {
+                indexes.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), idx);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load default sparse index from {:?}: {}. Skipping.",
+                    path,
+                    e
+                );
+            }
+        }
+
+        // Scan for named sparse indexes: sparse-{name}.meta files.
+        // The `.meta` suffix is the sentinel for a fully compacted (committed)
+        // index file; stale `.tmp` artefacts from interrupted compactions are
+        // ignored because they do not match the `strip_suffix(".meta")` filter.
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name_str = file_name.to_string_lossy();
+                if let Some(sparse_name) = name_str
+                    .strip_prefix("sparse-")
+                    .and_then(|s| s.strip_suffix(".meta"))
+                {
+                    let sparse_name = sparse_name.to_string();
+                    match crate::index::sparse::persistence::load_named_from_disk(
+                        path,
+                        &sparse_name,
+                    ) {
+                        Ok(Some(idx)) => {
+                            indexes.insert(sparse_name, idx);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to load sparse index '{}' from {:?}: {}. Skipping.",
+                                sparse_name,
+                                path,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        indexes
     }
 
     fn load_edge_store(path: &std::path::Path) -> EdgeStore {
@@ -429,7 +554,42 @@ impl Collection {
                 .map_err(Error::Io)?;
         }
 
+        // Compact all named sparse indexes to disk (EPIC-062 / SPARSE-04)
+        {
+            let indexes = self.sparse_indexes.read();
+            for (name, idx) in indexes.iter() {
+                crate::index::sparse::persistence::compact_named(&self.path, name, idx)?;
+            }
+        }
+
         Ok(())
+    }
+
+    /// Returns a reference to the collection's data path.
+    #[must_use]
+    pub(crate) fn data_path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Returns a write guard on the collection config for mutation.
+    pub(crate) fn config_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, crate::collection::types::CollectionConfig> {
+        self.config.write()
+    }
+
+    /// Returns a write guard on the PQ quantizer slot.
+    pub(crate) fn pq_quantizer_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+        self.pq_quantizer.write()
+    }
+
+    /// Returns a read guard on the PQ quantizer slot.
+    pub(crate) fn pq_quantizer_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+        self.pq_quantizer.read()
     }
 
     /// Saves the collection configuration to disk.

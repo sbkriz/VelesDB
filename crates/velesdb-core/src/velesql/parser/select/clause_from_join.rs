@@ -6,9 +6,9 @@ use crate::velesql::error::{ParseError, ParseErrorKind};
 use crate::velesql::Parser;
 
 impl Parser {
-    pub(crate) fn parse_from_clause(pair: pest::iterators::Pair<Rule>) -> (String, Option<String>) {
+    pub(crate) fn parse_from_clause(pair: pest::iterators::Pair<Rule>) -> (String, Vec<String>) {
         let mut table = String::new();
-        let mut alias = None;
+        let mut aliases = Vec::new();
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::identifier => {
@@ -19,14 +19,14 @@ impl Parser {
                 Rule::from_alias => {
                     for alias_inner in inner_pair.into_inner() {
                         if alias_inner.as_rule() == Rule::identifier {
-                            alias = Some(extract_identifier(&alias_inner));
+                            aliases.push(extract_identifier(&alias_inner));
                         }
                     }
                 }
                 _ => {}
             }
         }
-        (table, alias)
+        (table, aliases)
     }
 
     pub(crate) fn parse_join_clause(

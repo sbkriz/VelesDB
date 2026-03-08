@@ -99,6 +99,8 @@ mod set_operations_tests;
 #[cfg(test)]
 mod similarity_tests;
 #[cfg(test)]
+mod train_tests;
+#[cfg(test)]
 mod velesql_v2_integration_tests;
 #[cfg(test)]
 mod with_options_tests;
@@ -155,8 +157,12 @@ pub use ast::{
     SetOperator,
     SimilarityCondition,
     SimilarityOrderBy,
+    SparseVectorExpr,
+    SparseVectorSearch,
     Subquery,
     TemporalExpr,
+    // TRAIN statement
+    TrainStatement,
     UpdateAssignment,
     UpdateStatement,
     Value,

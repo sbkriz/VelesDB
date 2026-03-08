@@ -15,7 +15,7 @@ from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from pydantic import ConfigDict
+from pydantic import ConfigDict, PrivateAttr
 
 import velesdb
 
@@ -30,6 +30,7 @@ from llamaindex_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_weight,
+    validate_sparse_vector,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
     SecurityError,
@@ -95,9 +96,9 @@ class VelesDBVectorStore(BasePydanticVectorStore):
     metric: str = "cosine"
     storage_mode: str = "full"
 
-    _db: Optional[velesdb.Database] = None
-    _collection: Optional[velesdb.Collection] = None
-    _dimension: Optional[int] = None
+    _db: Optional[velesdb.Database] = PrivateAttr(default=None)
+    _collection: Optional[velesdb.Collection] = PrivateAttr(default=None)
+    _dimension: Optional[int] = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -300,7 +301,6 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                     metric=self.metric,
                     storage_mode=self.storage_mode,
                 )
-                self._collection = db.get_collection(self.collection_name)
             else:
                 # Validate existing collection dimension matches
                 info = self._collection.info()
@@ -342,18 +342,34 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         # Security: Validate batch size
         validate_batch_size(len(nodes))
 
+        # Extract sparse vectors from kwargs (v1.5)
+        sparse_vectors = add_kwargs.get("sparse_vectors")
+        if sparse_vectors is not None:
+            for sv in sparse_vectors:
+                validate_sparse_vector(sv)
+
         # Get dimension from first node's embedding
         first_embedding = nodes[0].get_embedding()
         if first_embedding is None:
             raise ValueError("Nodes must have embeddings")
         dimension = len(first_embedding)
 
+        # When sparse_vectors are provided, all nodes must have embeddings so
+        # that sparse_vectors[idx] stays aligned with the built points list.
+        if sparse_vectors is not None:
+            for i, node in enumerate(nodes):
+                if node.get_embedding() is None:
+                    raise ValueError(
+                        f"Node at index {i} has no embedding. All nodes must have embeddings "
+                        f"when sparse_vectors are provided to preserve index alignment."
+                    )
+
         collection = self._get_collection(dimension)
 
         points = []
         ids = []
 
-        for node in nodes:
+        for idx, node in enumerate(nodes):
             embedding = node.get_embedding()
             if embedding is None:
                 continue
@@ -376,11 +392,17 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             # Convert node_id to int for VelesDB
             int_id = _stable_hash_id(node_id)
 
-            points.append({
+            point = {
                 "id": int_id,
                 "vector": embedding,
                 "payload": payload,
-            })
+            }
+
+            # Attach sparse vector if provided (v1.5)
+            if sparse_vectors is not None and idx < len(sparse_vectors):
+                point["sparse_vector"] = sparse_vectors[idx]
+
+            points.append(point)
 
         if points:
             collection.upsert(points)
@@ -424,11 +446,22 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         collection = self._get_collection(dimension)
 
         k = query.similarity_top_k or 10
-        
+
         # Security: Validate k
         validate_k(k)
 
+        # Extract sparse vector from kwargs (v1.5 hybrid dense+sparse)
+        sparse_vector = kwargs.get("sparse_vector")
+        if sparse_vector is not None:
+            validate_sparse_vector(sparse_vector)
+
         core_filter = self._metadata_filters_to_core_filter(query.filters)
+
+        if sparse_vector is not None and core_filter is not None:
+            raise ValueError(
+                "sparse_vector cannot be combined with metadata filters. "
+                "Apply filters separately or omit the sparse_vector."
+            )
         if core_filter is not None:
             search_with_filter = getattr(collection, "search_with_filter", None)
             if search_with_filter is None:
@@ -436,6 +469,13 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                     "Collection does not support 'search_with_filter' required for MetadataFilters."
                 )
             results = search_with_filter(query.query_embedding, top_k=k, filter=core_filter)
+        elif sparse_vector is not None:
+            # Hybrid dense+sparse search -- SDK handles RRF fusion automatically
+            results = collection.search(
+                vector=query.query_embedding,
+                sparse_vector=sparse_vector,
+                top_k=k,
+            )
         else:
             results = collection.search(query.query_embedding, top_k=k)
 
@@ -789,3 +829,96 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             ids.append(node_id)
 
         return VectorStoreQueryResult(nodes=nodes, similarities=similarities, ids=ids)
+
+    def train_pq(self, m: int = 8, k: int = 256, opq: bool = False) -> str:
+        """Train Product Quantization on the collection.
+
+        PQ training is a Database-level operation (not Collection-level)
+        because TRAIN QUANTIZER requires Database-level VelesQL execution.
+
+        Args:
+            m: Number of subspaces. Defaults to 8.
+            k: Number of centroids per subspace. Defaults to 256.
+            opq: Enable Optimized PQ pre-rotation. Defaults to False.
+
+        Returns:
+            Training result message.
+        """
+        return self._get_db().train_pq(self.collection_name, m=m, k=k, opq=opq)
+
+    def stream_insert(
+        self,
+        nodes: List[BaseNode],
+        **kwargs: Any,
+    ) -> int:
+        """Insert nodes via streaming channel with backpressure.
+
+        Args:
+            nodes: List of nodes with embeddings to insert.
+            **kwargs: Additional arguments. Supports 'sparse_vectors' list.
+
+        Returns:
+            Number of points inserted.
+
+        Raises:
+            SecurityError: If parameters fail validation.
+        """
+        if not nodes:
+            return 0
+
+        # Security: Validate batch size
+        validate_batch_size(len(nodes))
+
+        # Extract sparse vectors from kwargs (v1.5)
+        sparse_vectors = kwargs.get("sparse_vectors")
+        if sparse_vectors is not None:
+            for sv in sparse_vectors:
+                validate_sparse_vector(sv)
+
+        # Get dimension from first node's embedding
+        first_embedding = nodes[0].get_embedding()
+        if first_embedding is None:
+            raise ValueError("Nodes must have embeddings")
+        dimension = len(first_embedding)
+
+        collection = self._get_collection(dimension)
+
+        points = []
+        for idx, node in enumerate(nodes):
+            embedding = node.get_embedding()
+            if embedding is None:
+                raise ValueError(
+                    f"Node at index {idx} (id={node.node_id!r}) has no embedding. "
+                    f"All nodes passed to stream_insert must have embeddings."
+                )
+
+            node_id = node.node_id
+
+            # Build payload
+            payload = {
+                "text": node.get_content(),
+                "node_id": node_id,
+            }
+
+            # Add metadata
+            if hasattr(node, "metadata") and node.metadata:
+                for key, value in node.metadata.items():
+                    if isinstance(value, (str, int, float, bool)):
+                        payload[key] = value
+
+            point = {
+                "id": _stable_hash_id(node_id),
+                "vector": embedding,
+                "payload": payload,
+            }
+
+            # Attach sparse vector if provided
+            if sparse_vectors is not None and idx < len(sparse_vectors):
+                point["sparse_vector"] = sparse_vectors[idx]
+
+            points.append(point)
+
+        if points:
+            collection.stream_insert(points)
+
+        return len(points)

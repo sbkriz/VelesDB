@@ -21,10 +21,16 @@ mod lockfree;
 #[cfg(test)]
 mod lockfree_tests;
 mod lru;
+#[cfg(feature = "persistence")]
+pub mod plan_cache;
+#[cfg(all(test, feature = "persistence"))]
+mod plan_cache_tests;
 
 pub use bloom::BloomFilter;
 pub use lockfree::{LockFreeCacheStats, LockFreeLruCache};
 pub use lru::{CacheStats, LruCache};
+#[cfg(feature = "persistence")]
+pub use plan_cache::{CompiledPlan, CompiledPlanCache, PlanCacheMetrics, PlanKey};
 
 #[cfg(test)]
 mod deadlock_tests;

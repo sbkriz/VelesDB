@@ -413,16 +413,19 @@ mod tests {
                     id: 1,
                     vector: vec![1.0, 0.0, 0.0],
                     payload: Some(serde_json::json!({"name": "v1"})),
+                    sparse_vectors: None,
                 },
                 crate::point::Point {
                     id: 2,
                     vector: vec![0.0, 1.0, 0.0],
                     payload: Some(serde_json::json!({"name": "v2"})),
+                    sparse_vectors: None,
                 },
                 crate::point::Point {
                     id: 3,
                     vector: vec![0.5, 0.5, 0.0],
                     payload: Some(serde_json::json!({"name": "v3"})),
+                    sparse_vectors: None,
                 },
             ])
             .unwrap();
@@ -473,16 +476,19 @@ mod tests {
                     id: 1,
                     vector: vec![1.0, 0.0, 0.0],
                     payload: Some(serde_json::json!({"name": "v1"})),
+                    sparse_vectors: None,
                 },
                 crate::point::Point {
                     id: 2,
                     vector: vec![0.0, 1.0, 0.0],
                     payload: Some(serde_json::json!({"name": "v2"})),
+                    sparse_vectors: None,
                 },
                 crate::point::Point {
                     id: 3,
                     vector: vec![0.5, 0.5, 0.0],
                     payload: Some(serde_json::json!({"name": "v3"})),
+                    sparse_vectors: None,
                 },
             ])
             .unwrap();

@@ -142,9 +142,18 @@ impl ParsedStatement {
     /// Get the table alias if present (for self-joins).
     ///
     /// Returns:
-    ///     str or None: Table alias, or None if not aliased
+    ///     str or None: First table alias, or None if not aliased
     #[getter]
     fn table_alias(&self) -> Option<String> {
+        self.inner.select.from_alias.first().cloned()
+    }
+
+    /// Get all aliases visible in scope (FROM alias + JOIN aliases).
+    ///
+    /// Returns:
+    ///     list[str]: All aliases, empty if none
+    #[getter]
+    fn table_aliases(&self) -> Vec<String> {
         self.inner.select.from_alias.clone()
     }
 

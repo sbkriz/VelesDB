@@ -293,6 +293,16 @@ impl MigrationConfig {
                 "dimension must be greater than 0".to_string(),
             ));
         }
+        if self.options.batch_size == 0 {
+            return Err(crate::error::Error::Config(
+                "batch_size must be greater than 0".to_string(),
+            ));
+        }
+        if self.options.workers == 0 {
+            return Err(crate::error::Error::Config(
+                "workers must be greater than 0".to_string(),
+            ));
+        }
         if self.destination.collection.is_empty() {
             return Err(crate::error::Error::Config(
                 "collection name cannot be empty".to_string(),
@@ -332,6 +342,58 @@ mod tests {
                 storage_mode: StorageMode::Full,
             },
             options: MigrationOptions::default(),
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_validate_batch_size() {
+        let config = MigrationConfig {
+            source: SourceConfig::Qdrant(QdrantConfig {
+                url: "http://localhost:6333".to_string(),
+                collection: "test".to_string(),
+                api_key: None,
+                payload_fields: vec![],
+            }),
+            destination: DestinationConfig {
+                path: PathBuf::from("./test_db"),
+                collection: "test".to_string(),
+                dimension: 8,
+                metric: DistanceMetric::Cosine,
+                storage_mode: StorageMode::Full,
+            },
+            options: MigrationOptions {
+                batch_size: 0,
+                ..MigrationOptions::default()
+            },
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_validate_workers() {
+        let config = MigrationConfig {
+            source: SourceConfig::Qdrant(QdrantConfig {
+                url: "http://localhost:6333".to_string(),
+                collection: "test".to_string(),
+                api_key: None,
+                payload_fields: vec![],
+            }),
+            destination: DestinationConfig {
+                path: PathBuf::from("./test_db"),
+                collection: "test".to_string(),
+                dimension: 8,
+                metric: DistanceMetric::Cosine,
+                storage_mode: StorageMode::Full,
+            },
+            options: MigrationOptions {
+                workers: 0,
+                ..MigrationOptions::default()
+            },
         };
 
         let result = config.validate();

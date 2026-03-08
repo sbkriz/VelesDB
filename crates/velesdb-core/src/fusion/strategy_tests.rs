@@ -418,3 +418,148 @@ fn test_rrf_scores_are_positive() {
         assert!(*score > 0.0, "RRF score should be positive");
     }
 }
+
+// =============================================================================
+// AC5: FusionStrategy::RelativeScore tests
+// =============================================================================
+
+#[test]
+fn test_rsf_normalization() {
+    // Test min-max normalization on known inputs
+    let strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
+
+    // Dense: scores 1.0, 2.0, 3.0 -> normalized 0.0, 0.5, 1.0
+    // Sparse: scores 10.0, 20.0 -> normalized 0.0, 1.0
+    let results = vec![
+        vec![(1, 1.0_f32), (2, 2.0), (3, 3.0)], // dense
+        vec![(2, 10.0_f32), (4, 20.0)],         // sparse
+    ];
+
+    let fused = strategy.fuse(results).unwrap();
+
+    // doc 3: dense_norm=1.0, sparse=missing(0) -> 0.5*1.0 + 0.5*0.0 = 0.5
+    // doc 4: dense=missing(0), sparse_norm=1.0 -> 0.5*0.0 + 0.5*1.0 = 0.5
+    // doc 2: dense_norm=0.5, sparse_norm=0.0 -> 0.5*0.5 + 0.5*0.0 = 0.25
+    // doc 1: dense_norm=0.0, sparse=missing(0) -> 0.0
+    let find = |id: u64| fused.iter().find(|(i, _)| *i == id).unwrap().1;
+    assert!((find(3) - 0.5).abs() < 1e-5);
+    assert!((find(4) - 0.5).abs() < 1e-5);
+    assert!((find(2) - 0.25).abs() < 1e-5);
+    assert!((find(1) - 0.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_rsf_normalization_equal_scores() {
+    // Edge case: all scores equal -> all get 0.5
+    let strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
+    let results = vec![
+        vec![(1, 5.0_f32), (2, 5.0), (3, 5.0)],
+        vec![(1, 3.0_f32), (4, 3.0)],
+    ];
+
+    let fused = strategy.fuse(results).unwrap();
+    let find = |id: u64| fused.iter().find(|(i, _)| *i == id).unwrap().1;
+
+    // Dense all 0.5, sparse all 0.5
+    // doc 1: 0.5*0.5 + 0.5*0.5 = 0.5
+    // doc 2: 0.5*0.5 + 0.5*0.0 = 0.25
+    // doc 4: 0.5*0.0 + 0.5*0.5 = 0.25
+    assert!((find(1) - 0.5).abs() < 1e-5);
+    assert!((find(2) - 0.25).abs() < 1e-5);
+    assert!((find(4) - 0.25).abs() < 1e-5);
+}
+
+#[test]
+fn test_rsf_fuse_two_branches() {
+    // Weighted combination: dense=0.7, sparse=0.3
+    let strategy = FusionStrategy::relative_score(0.7, 0.3).unwrap();
+    let results = vec![
+        vec![(1, 10.0_f32), (2, 8.0), (3, 6.0)], // dense
+        vec![(3, 5.0_f32), (4, 3.0), (1, 1.0)],  // sparse
+    ];
+
+    let fused = strategy.fuse(results).unwrap();
+
+    // Dense norm: 1->1.0, 2->0.5, 3->0.0
+    // Sparse norm: 3->1.0, 4->0.5, 1->0.0
+    // doc 1: 0.7*1.0 + 0.3*0.0 = 0.7
+    // doc 3: 0.7*0.0 + 0.3*1.0 = 0.3
+    // doc 2: 0.7*0.5 + 0.3*0.0 = 0.35
+    // doc 4: 0.7*0.0 + 0.3*0.5 = 0.15
+    assert_eq!(fused[0].0, 1); // 0.7
+    assert_eq!(fused[1].0, 2); // 0.35
+    assert_eq!(fused[2].0, 3); // 0.3
+    assert_eq!(fused[3].0, 4); // 0.15
+}
+
+#[test]
+fn test_rsf_single_branch_empty() {
+    // Dense empty -> only sparse results pass through
+    let strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
+    let results = vec![
+        vec![],                                 // empty dense
+        vec![(1, 5.0_f32), (2, 3.0), (3, 1.0)], // sparse
+    ];
+
+    let fused = strategy.fuse(results).unwrap();
+    assert_eq!(fused.len(), 3);
+    // All sparse-only: dense is 0.0
+    // Sparse norm: 1->1.0, 2->0.5, 3->0.0
+    // doc 1: 0.5*0.0 + 0.5*1.0 = 0.5
+    // doc 2: 0.5*0.0 + 0.5*0.5 = 0.25
+    // doc 3: 0.5*0.0 + 0.5*0.0 = 0.0
+    assert_eq!(fused[0].0, 1);
+    assert!((fused[0].1 - 0.5).abs() < 1e-5);
+}
+
+#[test]
+fn test_rsf_validation_negative_weight() {
+    let result = FusionStrategy::relative_score(-0.1, 1.1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_rsf_validation_sum_not_one() {
+    let result = FusionStrategy::relative_score(0.3, 0.3);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_rsf_ignores_extra_branches_beyond_two() {
+    // M-7: fuse_relative_score silently drops branches beyond index 1.
+    // The result must be identical to passing only the first two branches.
+    let strategy = FusionStrategy::relative_score(0.6, 0.4).unwrap();
+
+    let two_branches = vec![
+        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
+        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
+    ];
+    let three_branches = vec![
+        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
+        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
+        vec![(4_u64, 99.0_f32)],           // extra (must be ignored)
+    ];
+
+    let fused_two = strategy.fuse(two_branches).unwrap();
+    let fused_three = strategy.fuse(three_branches).unwrap();
+
+    // Extra branch doc 4 must NOT appear in the results.
+    assert!(
+        !fused_three.iter().any(|(id, _)| *id == 4),
+        "doc 4 from the extra branch must be absent from RSF output"
+    );
+
+    // Scores for the shared documents must be identical.
+    for (id, score) in &fused_two {
+        let matching = fused_three.iter().find(|(i, _)| i == id);
+        assert!(
+            matching.is_some(),
+            "doc {id} must appear in three-branch result"
+        );
+        let (_, score_three) = matching.unwrap();
+        assert!(
+            (score - score_three).abs() < 1e-5,
+            "score for doc {id} must not change when an extra branch is present"
+        );
+    }
+}

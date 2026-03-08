@@ -2,6 +2,8 @@
 //!
 //! This module contains all the data transfer objects used by the API handlers.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -63,6 +65,96 @@ pub struct CollectionResponse {
 }
 
 // ============================================================================
+// Sparse Vector Types
+// ============================================================================
+
+/// Input format for sparse vectors, supporting two JSON representations:
+///
+/// - **Parallel arrays**: `{"indices": [42, 1337], "values": [0.5, 1.2]}`
+/// - **Dict format** (Qdrant-compatible): `{"42": 0.5, "1337": 1.2}`
+///
+/// Both formats are accepted transparently via `#[serde(untagged)]`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum SparseVectorInput {
+    /// Canonical parallel-array format with explicit indices and values.
+    Parallel {
+        /// Term/dimension indices (u32).
+        indices: Vec<u32>,
+        /// Corresponding weights.
+        values: Vec<f32>,
+    },
+    /// Dictionary format mapping string term IDs to weights.
+    Dict(BTreeMap<String, f32>),
+}
+
+impl SparseVectorInput {
+    /// Converts this input into a core `SparseVector`, validating at the API boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a descriptive error string on:
+    /// - Mismatched `indices`/`values` lengths (parallel format)
+    /// - Non-finite values (NaN, Inf)
+    /// - Dict keys that cannot be parsed as `u32`
+    pub fn into_sparse_vector(self) -> Result<velesdb_core::index::sparse::SparseVector, String> {
+        match self {
+            Self::Parallel { indices, values } => {
+                if indices.len() != values.len() {
+                    return Err(format!(
+                        "Sparse vector indices/values length mismatch: {} indices vs {} values",
+                        indices.len(),
+                        values.len()
+                    ));
+                }
+                for (i, &v) in values.iter().enumerate() {
+                    if !v.is_finite() {
+                        return Err(format!(
+                            "Sparse vector value at index {} is not finite: {v}",
+                            i
+                        ));
+                    }
+                }
+                let pairs: Vec<(u32, f32)> = indices.into_iter().zip(values).collect();
+                Ok(velesdb_core::index::sparse::SparseVector::new(pairs))
+            }
+            Self::Dict(map) => {
+                let mut pairs = Vec::with_capacity(map.len());
+                for (key, value) in map {
+                    if !value.is_finite() {
+                        return Err(format!(
+                            "Sparse vector value for key '{key}' is not finite: {value}"
+                        ));
+                    }
+                    let idx: u32 = key.parse().map_err(|_| {
+                        format!("Sparse vector key '{key}' is not a valid u32 term ID")
+                    })?;
+                    pairs.push((idx, value));
+                }
+                Ok(velesdb_core::index::sparse::SparseVector::new(pairs))
+            }
+        }
+    }
+}
+
+/// Fusion configuration for hybrid dense+sparse search.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FusionRequest {
+    /// Fusion strategy: "rrf" or "rsf".
+    #[schema(example = "rrf")]
+    pub strategy: String,
+    /// RRF k parameter (only for strategy = "rrf", default 60).
+    #[serde(default)]
+    pub k: Option<u32>,
+    /// Dense weight (only for strategy = "rsf", default 0.5).
+    #[serde(default)]
+    pub dense_w: Option<f32>,
+    /// Sparse weight (only for strategy = "rsf", default 0.5).
+    #[serde(default)]
+    pub sparse_w: Option<f32>,
+}
+
+// ============================================================================
 // Point Types
 // ============================================================================
 
@@ -82,6 +174,26 @@ pub struct PointRequest {
     pub vector: Vec<f32>,
     /// Optional payload.
     pub payload: Option<serde_json::Value>,
+    /// Single sparse vector (convenience, stored under default name `""`).
+    #[serde(default)]
+    pub sparse_vector: Option<SparseVectorInput>,
+    /// Named sparse vectors map (e.g., `{"title": {...}, "body": {...}}`).
+    #[serde(default)]
+    pub sparse_vectors: Option<BTreeMap<String, SparseVectorInput>>,
+}
+
+/// Request body for the streaming insert endpoint.
+///
+/// Accepts a single point to be pushed into the bounded ingestion channel.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct StreamInsertRequest {
+    /// Point ID.
+    pub id: u64,
+    /// Dense vector data.
+    pub vector: Vec<f32>,
+    /// Optional JSON payload (metadata).
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -89,9 +201,15 @@ pub struct PointRequest {
 // ============================================================================
 
 /// Request for vector search.
+///
+/// Supports three modes based on which fields are provided:
+/// - **Dense only**: `vector` only (existing behavior)
+/// - **Sparse only**: `sparse_vector` only
+/// - **Hybrid**: both `vector` and `sparse_vector` (fused via RRF/RSF)
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SearchRequest {
-    /// Query vector.
+    /// Query vector for dense search (optional if sparse-only).
+    #[serde(default)]
     pub vector: Vec<f32>,
     /// Number of results to return.
     #[serde(default = "default_top_k")]
@@ -113,6 +231,18 @@ pub struct SearchRequest {
     /// Optional metadata filter to apply to results (JSON object with condition).
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Single sparse query vector (for sparse or hybrid search).
+    #[serde(default)]
+    pub sparse_vector: Option<SparseVectorInput>,
+    /// Named sparse query vectors map.
+    #[serde(default)]
+    pub sparse_vectors: Option<BTreeMap<String, SparseVectorInput>>,
+    /// Which named sparse index to search (default: `""`).
+    #[serde(default)]
+    pub sparse_index: Option<String>,
+    /// Fusion configuration for hybrid search (default: RRF k=60).
+    #[serde(default)]
+    pub fusion: Option<FusionRequest>,
 }
 
 /// Request for batch vector search.
@@ -387,6 +517,14 @@ pub struct ExplainResponse {
     pub estimated_cost: ExplainCost,
     /// Query features detected.
     pub features: ExplainFeatures,
+    /// Whether this plan was served from the compiled plan cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable)]
+    pub cache_hit: Option<bool>,
+    /// How many times this cached plan has been reused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable)]
+    pub plan_reuse_count: Option<u64>,
 }
 
 /// A step in the query execution plan.

@@ -25,6 +25,7 @@ fn test_executor_count_star() {
             id: i,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"id": i})),
+            sparse_vectors: None,
         })
         .collect();
     collection.upsert(points).unwrap();
@@ -49,12 +50,14 @@ fn test_executor_count_with_filter() {
             id: i,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"category": "tech"})),
+            sparse_vectors: None,
         })
         .collect();
     points.extend((50..100u64).map(|i| Point {
         id: i,
         vector: vec![0.1; 4],
         payload: Some(serde_json::json!({"category": "science"})),
+        sparse_vectors: None,
     }));
     collection.upsert(points).unwrap();
 
@@ -77,16 +80,19 @@ fn test_executor_sum() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"price": 10})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"price": 20})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"price": 30})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -110,16 +116,19 @@ fn test_executor_avg() {
             id: 1,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"rating": 3})),
+            sparse_vectors: None,
         },
         Point {
             id: 2,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"rating": 4})),
+            sparse_vectors: None,
         },
         Point {
             id: 3,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"rating": 5})),
+            sparse_vectors: None,
         },
     ];
     collection.upsert(points).unwrap();
@@ -145,6 +154,7 @@ fn test_executor_min_max() {
             id: i as u64,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"value": val})),
+            sparse_vectors: None,
         })
         .collect();
     collection.upsert(points).unwrap();
@@ -172,6 +182,7 @@ fn test_executor_multiple_aggregations() {
             id: i,
             vector: vec![0.1; 4],
             payload: Some(serde_json::json!({"score": i})),
+            sparse_vectors: None,
         })
         .collect();
     collection.upsert(points).unwrap();

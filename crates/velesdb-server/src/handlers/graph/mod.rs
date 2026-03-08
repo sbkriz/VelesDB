@@ -4,9 +4,9 @@
 //! Graph data persists on disk via `GraphCollection` / `GraphEngine`.
 //! [EPIC-016/US-031]
 
-mod handlers;
-mod stream;
-mod types;
+pub mod handlers;
+pub mod stream;
+pub mod types;
 
 // Re-export public API
 pub use handlers::{add_edge, get_edges, get_node_degree, traverse_graph};
