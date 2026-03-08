@@ -44,9 +44,11 @@ The serialization library for on-disk persistence was migrated from `bincode` to
 
    ```python
    # Python SDK
-   from velesdb import VelesDB
-   db = VelesDB("./data")
-   points = db.collection("my_collection").get_all()
+   import velesdb
+   db = velesdb.Database("./data")
+   coll = db.get_collection("my_collection")
+   # get_all() does not exist; use coll.get(ids) with specific IDs
+   # or iterate using available query methods
    # Save to JSON/Parquet/etc.
    ```
 
@@ -61,7 +63,7 @@ The serialization library for on-disk persistence was migrated from `bincode` to
 4. **Re-insert data** from your export:
 
    ```python
-   db.collection("my_collection").upsert(points)
+   db.get_collection("my_collection").upsert(points)
    ```
 
 ### Notes
