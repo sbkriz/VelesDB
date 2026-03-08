@@ -107,7 +107,7 @@ Each crate has its own README with specific documentation:
 
 ## 🔗 External Resources
 
-- [GitHub Repository](https://github.com/velesdb/velesdb)
+- [GitHub Repository](https://github.com/cyberlife-coder/VelesDB)
 - [crates.io](https://crates.io/crates/velesdb-core)
 - [Discord Community](https://discord.gg/velesdb)
 

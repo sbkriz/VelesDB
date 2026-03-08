@@ -160,6 +160,22 @@ db.create_collection_with_options(
     DistanceMetric::Hamming,
     StorageMode::Binary
 )?;
+
+// Product Quantization: variable compression
+db.create_collection_with_options(
+    "pq_collection",
+    768,
+    DistanceMetric::Cosine,
+    StorageMode::ProductQuantization
+)?;
+
+// RaBitQ: randomized binary quantization
+db.create_collection_with_options(
+    "rabitq_collection",
+    768,
+    DistanceMetric::Cosine,
+    StorageMode::RaBitQ
+)?;
 ```
 
 ## Performance

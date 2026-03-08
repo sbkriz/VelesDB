@@ -18,7 +18,7 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 >
 > ```bash
 > # Quick test after migration
-> velesdb query "SELECT * FROM my_collection ORDER BY vector <-> [0.1, 0.2, ...] LIMIT 10"
+> velesdb query ./velesdb_data "SELECT * FROM my_collection WHERE VECTOR NEAR [0.1, 0.2, ...] LIMIT 10"
 > ```
 
 ---
@@ -443,7 +443,7 @@ options:
 ## 🔧 CLI Reference
 
 ```
-velesdb-migrate 0.8.9
+velesdb-migrate 1.5.0
 Migrate vectors from other databases to VelesDB
 
 USAGE:
@@ -708,7 +708,7 @@ See the `examples/` directory for complete configuration templates:
 │                          │                                   │
 │                          ▼                                   │
 │  4. DONE! ✅                                                  │
-│     velesdb query "SELECT COUNT(*) FROM collection"          │
+│     velesdb query ./velesdb_data "SELECT COUNT(*) FROM collection" │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -748,7 +748,7 @@ See the `examples/` directory for complete configuration templates:
 │                          │                                   │
 │                          ▼                                   │
 │  7. VERIFY                                                   │
-│     velesdb query "SELECT COUNT(*) FROM collection"          │
+│     velesdb query ./velesdb_data "SELECT COUNT(*) FROM collection" │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -797,10 +797,10 @@ velesdb-migrate detect --source qdrant --url http://localhost:6333 --collection 
 velesdb-migrate run --config migration.yaml
 
 # 3. Query with VelesQL (SQL-native!)
-velesdb query "SELECT id, title FROM my_data ORDER BY vector <-> [0.1, 0.2, ...] LIMIT 10"
+velesdb query ./velesdb_data "SELECT * FROM my_data WHERE VECTOR NEAR [0.1, 0.2, ...] LIMIT 10"
 
 # 4. Start the REST API server
-velesdb serve --port 8080
+velesdb-server --port 8080
 ```
 
 ### Why developers choose VelesDB:
@@ -811,7 +811,7 @@ velesdb serve --port 8080
 - ✅ **Self-hosted**, your data stays private
 - ✅ **4-32x compression** with SQ8/Binary quantization
 
-📚 **Learn more:** [github.com/velesdb/velesdb](https://github.com/velesdb/velesdb)
+📚 **Learn more:** [github.com/cyberlife-coder/VelesDB](https://github.com/cyberlife-coder/VelesDB)
 
 ---
 

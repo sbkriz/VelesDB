@@ -126,8 +126,7 @@ curl -X POST http://localhost:8080/collections/documents/search/batch \
     ]
   }'
 
-# Multi-query fusion search (MQG for RAG) ⭐ NEW v1.1.0
-curl -X POST http://localhost:8080/collections/documents/search/multi \
+# Multi-query fusion search (MQG for RAG)curl -X POST http://localhost:8080/collections/documents/search/multi \
   -H "Content-Type: application/json" \
   -d '{
     "vectors": [[0.1, 0.2, ...], [0.3, 0.4, ...], [0.5, 0.6, ...]],

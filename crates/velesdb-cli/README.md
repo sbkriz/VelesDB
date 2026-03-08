@@ -85,15 +85,13 @@ velesdb import data.jsonl --database ./my_vectors --collection documents --dimen
 velesdb import embeddings.csv --database ./my_vectors --collection docs --dimension 384
 ```
 
-### Create Metadata-Only Collection ⭐ NEW v1.1.0
-
+### Create Metadata-Only Collection
 ```bash
 # Create a collection for metadata storage (no vectors)
 velesdb create-metadata-collection ./my_vectors my_metadata
 ```
 
-### Get Point by ID ⭐ NEW v1.1.0
-
+### Get Point by ID
 ```bash
 # Get a point by ID (JSON output)
 velesdb get ./my_vectors documents 42
@@ -102,8 +100,7 @@ velesdb get ./my_vectors documents 42
 velesdb get ./my_vectors documents 42 --format table
 ```
 
-### Multi-Query Fusion Search ⭐ NEW v1.1.0
-
+### Multi-Query Fusion Search
 ```bash
 # Multi-query search with RRF fusion (default)
 velesdb multi-search ./my_vectors documents \
@@ -176,8 +173,7 @@ SELECT * FROM docs WHERE author IS NOT NULL LIMIT 10;
 SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
 ```
 
-#### Multi-Query Fusion (MQG) ⭐ NEW v1.1.0
-
+#### Multi-Query Fusion (MQG)
 ```sql
 -- RRF fusion with multiple query vectors (ideal for RAG pipelines)
 SELECT * FROM documents 
