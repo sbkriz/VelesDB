@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: in-progress
-stopped_at: Phase 14 Plan 01 complete
-last_updated: "2026-03-08T12:07:33.000Z"
-last_activity: "2026-03-08 — Phase 14 Plan 01 complete (README versions, metrics, badges, structural cleanup)"
+status: completed
+stopped_at: Completed 14-02-PLAN.md
+last_updated: "2026-03-08T12:13:54.168Z"
+last_activity: 2026-03-08 — Phase 14 Plan 02 complete (API reference gaps, snippet validation)
 progress:
   total_phases: 14
-  completed_phases: 13
-  total_plans: 38
-  completed_plans: 38
+  completed_phases: 14
+  total_plans: 39
+  completed_plans: 39
   percent: 100
 ---
 
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 
 ## Current Position
 
-Phase: 14 of 14 (README Documentation Audit) -- IN PROGRESS
-Plan: 1 of 2 in current phase (1 complete)
-Status: Phase 14 Plan 01 complete -- README versions, metrics, badges, structural cleanup
-Last activity: 2026-03-08 — Phase 14 Plan 01 complete (README versions, metrics, badges, structural cleanup)
+Phase: 14 of 14 (README Documentation Audit) -- COMPLETE
+Plan: 2 of 2 in current phase (2 complete)
+Status: Phase 14 complete -- all README documentation audit plans executed
+Last activity: 2026-03-08 — Phase 14 Plan 02 complete (API reference gaps, snippet validation)
 
-Progress: [██████████] 100% (38/38 plans complete)
+Progress: [██████████] 100% (39/39 plans complete)
 
 ## Performance Metrics
 
@@ -82,6 +82,7 @@ Progress: [██████████] 100% (38/38 plans complete)
 | Phase 12 P01 | 5 min | 2 tasks | 6 files |
 | Phase 13 P01 | 7 min | 2 tasks | 3 files |
 | Phase 14 P01 | 3 min | 2 tasks | 1 files |
+| Phase 14 P02 | 2 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -201,6 +202,8 @@ Recent decisions affecting current work:
 - [14-01]: LoC count updated from ~133,000 to ~48,000 (actual crates/ workspace wc -l count)
 - [14-01]: Tests badge replaced with dynamic GitHub Actions CI badge (shields.io workflow status)
 - [14-01]: .deb install example uses <VERSION> placeholder with link to GitHub Releases
+- [Phase 14]: StreamInsertRequest takes single point (not array) -- corrected from plan's suggested payload shape
+- [Phase 14]: Subqueries replaced with direct payload field comparisons (product.price, account.total_amount_24h, etc.) since subqueries evaluate to Null at runtime
 
 ### Roadmap Evolution
 
@@ -219,7 +222,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T12:07:33Z
-Stopped at: Completed 14-01-PLAN.md
-Resume file: .planning/phases/14-readme-documentation-audit/14-01-SUMMARY.md
+Last session: 2026-03-08T12:13:54.165Z
+Stopped at: Completed 14-02-PLAN.md
+Resume file: None
 Next action: Phase 14 Plan 02 (API reference gaps, snippet validation)

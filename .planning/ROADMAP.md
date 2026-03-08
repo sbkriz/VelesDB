@@ -249,7 +249,7 @@ Plans:
 **Goal:** The README.md is fully accurate against the v1.5 codebase -- zero stale version references, real metrics from codebase commands, v1.5 API endpoints documented, redundant sections removed, and all code snippets validated against real handlers and VelesQL grammar
 **Requirements**: README-01, README-02, README-03, README-04, README-05, README-06
 **Depends on:** Phase 13
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 14-01-PLAN.md — Stale versions + metrics recalculation + badges + structural cleanup (README-01, README-02, README-03, README-05)
