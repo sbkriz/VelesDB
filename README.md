@@ -565,6 +565,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/points` | `POST` | Upsert points |
 | `/collections/{name}/points/{id}` | `GET` | Get a point by ID |
 | `/collections/{name}/points/{id}` | `DELETE` | Delete a point |
+| `/collections/{name}/stream/insert` | `POST` | Stream insert a single point (bounded channel, backpressure 429) |
 
 ### Search (Vector)
 
@@ -575,6 +576,8 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/search/multi` | `POST` | Multi-query search |
 | `/collections/{name}/search/text` | `POST` | BM25 full-text search |
 | `/collections/{name}/search/hybrid` | `POST` | Hybrid vector + text search |
+
+> **Sparse & hybrid search:** Use `/collections/{name}/search` with a `sparse_vector` field for sparse-only search, or both `vector` and `sparse_vector` for hybrid dense+sparse search (auto-detected, fused via RRF/RSF).
 
 ### Graph
 
@@ -608,6 +611,9 @@ curl -X POST http://localhost:8080/query \
 - `JOIN ... USING (...)` runtime supports single-column only (`USING (a, b)` rejected)
 - `UNION` / `INTERSECT` / `EXCEPT` set operations
 - `USING FUSION(strategy='rrf')` hybrid search
+- `SPARSE_NEAR` clause for sparse vector similarity search
+- `TRAIN QUANTIZER ON <collection> WITH (m=8, k=256)` for explicit PQ training
+- `FUSE BY` / `USING FUSION` with `dense_weight`/`sparse_weight` for RSF fusion
 - `WITH (max_groups=100)` query-time config
 
 ```sql
@@ -677,6 +683,27 @@ curl -X POST http://localhost:8080/collections/my_vectors/points \
 </details>
 
 <details>
+<summary><b>Streaming Insert</b></summary>
+
+```bash
+curl -X POST http://localhost:8080/collections/my_vectors/stream/insert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "vector": [0.1, 0.2, 0.3, 0.4],
+    "payload": {"title": "Doc 1"}
+  }'
+```
+
+**Response (202 Accepted):**
+```json
+{"message": "Point accepted into streaming buffer"}
+```
+
+> Returns `429 Too Many Requests` when the streaming buffer is full. Retry after 1 second.
+</details>
+
+<details>
 <summary><b>Vector Search</b></summary>
 
 ```bash
@@ -694,6 +721,29 @@ curl -X POST http://localhost:8080/collections/my_vectors/search \
   "results": [
     {"id": 1, "score": 0.95, "payload": {"title": "Document 1"}},
     {"id": 42, "score": 0.87, "payload": {"title": "Document 42"}}
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Sparse Search</b></summary>
+
+```bash
+curl -X POST http://localhost:8080/collections/my_vectors/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sparse_vector": {"42": 0.8, "137": 0.6, "891": 0.3},
+    "top_k": 10
+  }'
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": 7, "score": 1.42, "payload": {"title": "Sparse Match 1"}},
+    {"id": 19, "score": 0.91, "payload": {"title": "Sparse Match 2"}}
   ]
 }
 ```
