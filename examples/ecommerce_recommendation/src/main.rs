@@ -14,7 +14,6 @@
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tempfile::TempDir;
 use velesdb_core::{Database, DistanceMetric, Point};
@@ -379,36 +378,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
 
-    println!("  Strategy: Union of:");
-    println!("    1. Semantically similar (vector)");
-    println!("    2. Frequently bought together (graph)");
-    println!("    3. Filtered by: in_stock=true, rating>=4.0, price<${:.0}\n",
+    println!("  Strategy: Engine-level hybrid search (RRF fusion):");
+    println!("    1. Vector similarity (60% weight)");
+    println!("    2. BM25 tag matching (40% weight)");
+    println!("    3. Post-filtered by: in_stock=true, rating>=4.0, price<${:.0}\n",
              sample_product.price * 1.5);
 
-    // Get graph neighbors (related products)
-    let graph_neighbors: HashSet<u64> = sample_product.related_products.iter().copied().collect();
-
-    // Combine vector results with graph neighbors
-    let mut combined_scores: HashMap<u64, f32> = HashMap::new();
-
-    // Add vector similarity scores (weight: 0.6)
-    for result in &results {
-        *combined_scores.entry(result.point.id).or_insert(0.0) += result.score * 0.6;
-    }
-
-    // Add graph proximity bonus (weight: 0.4)
-    for &neighbor_id in &graph_neighbors {
-        *combined_scores.entry(neighbor_id).or_insert(0.0) += 0.4;
-    }
-
-    // Filter and sort
+    // Build a text query from product tags for BM25 signal
+    let tag_query = sample_product.tags.join(" ");
     let price_threshold = sample_product.price * 1.5;
-    let mut final_recommendations: Vec<_> = combined_scores
-        .iter()
-        .filter_map(|(&id, &score)| {
-            products.iter().find(|p| p.id == id).and_then(|p| {
-                if p.in_stock && p.rating >= 4.0 && p.price < price_threshold && p.id != sample_product.id {
-                    Some((p, score))
+
+    // Hybrid search: engine-level RRF fusion of vector similarity + BM25 tag matching
+    // weight=0.6 → 60% vector signal, 40% BM25 signal
+    let hybrid_candidates = collection
+        .hybrid_search(&query_embedding, &tag_query, 20, Some(0.6))
+        .expect("hybrid search failed");
+
+    // Post-filter by business rules (in_stock, rating, price)
+    let mut final_recommendations: Vec<_> = hybrid_candidates
+        .into_iter()
+        .filter_map(|result| {
+            products.iter().find(|p| p.id == result.point.id).and_then(|p| {
+                if p.in_stock
+                    && p.rating >= 4.0
+                    && p.price < price_threshold
+                    && p.id != sample_product.id
+                {
+                    Some((p, result.score))
                 } else {
                     None
                 }
@@ -421,11 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Found {} recommendations in {:?}\n", final_recommendations.len(), start.elapsed());
 
     for (i, (product, score)) in final_recommendations.iter().take(10).enumerate() {
-        let source = if graph_neighbors.contains(&product.id) {
-            "📊 Graph+Vector"
-        } else {
-            "🔍 Vector"
-        };
+        let source = "🔀 Hybrid (Vector + BM25)";
 
         println!(
             "  {}. {} [score: {:.3}] {}",
