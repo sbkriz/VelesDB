@@ -18,7 +18,7 @@ docker run -d \
   --name velesdb \
   -p 8080:8080 \
   -v velesdb_data:/data \
-  langju/velesdb:latest
+  ghcr.io/cyberlife-coder/velesdb:latest
 ```
 
 ### Using Cargo
@@ -48,7 +48,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "1.3.1"
+  "version": "1.5.0"
 }
 ```
 
