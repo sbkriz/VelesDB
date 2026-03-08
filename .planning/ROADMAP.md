@@ -92,7 +92,7 @@ Plans:
 **Plans:** 2/4 plans executed
 
 Plans:
-- [ ] 18-01-PLAN.md — Fix root README Python snippets and migration guide API mismatches
+- [x] 18-01-PLAN.md — Fix root README Python snippets and migration guide API mismatches
 - [ ] 18-02-PLAN.md — Fix SEARCH_MODES.md and mark FUSE BY as planned in VelesQL spec files
 - [ ] 18-03-PLAN.md — Fix WASM README routes, npm package names, Python/Core README, NATIVE_HNSW
 - [ ] 18-04-PLAN.md — Fix API reference/installation/getting-started, audit TBD files, project-wide final sweep
