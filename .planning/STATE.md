@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 18-03-PLAN.md
-last_updated: "2026-03-08T18:05:26.057Z"
-last_activity: "2026-03-08 - Completed quick task 1: Fix Python example pseudocode to match real SDK API signatures"
+stopped_at: Completed 18-04-PLAN.md
+last_updated: "2026-03-08T18:12:13.911Z"
+last_activity: "2026-03-08 - Completed 18-02: Fix SEARCH_MODES.md and VelesQL spec FUSE BY planned syntax"
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 6
   percent: 100
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 18 of 18 (Documentation Code Audit)
-Plan: 2 of 4 in current phase
-Status: Completed 18-02-PLAN.md
-Last activity: 2026-03-08 - Completed 18-02: Fix SEARCH_MODES.md and VelesQL spec FUSE BY planned syntax
+Plan: 4 of 4 in current phase
+Status: Completed 18-04-PLAN.md
+Last activity: 2026-03-08 - Completed 18-04: Final doc sweep - API reference, getting-started, TBD files audit
 
-Progress: [██████████] 100% (46/48 plans complete, 0 phases pending)
+Progress: [██████████] 100% (6/6 plans complete, 0 phases pending)
 
 ## Performance Metrics
 
@@ -88,6 +88,7 @@ Progress: [██████████] 100% (46/48 plans complete, 0 phases 
 | Phase 17 P02 | 3 min | 2 tasks | 4 files |
 | Phase 17 P01 | 4 min | 2 tasks | 1 files |
 | Phase 18 P03 | 2 | 2 tasks | 5 files |
+| Phase 18 P04 | 2 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -216,6 +217,7 @@ Recent decisions affecting current work:
 - [Phase 15-01]: stream_insert returns int count rather than list of IDs (streaming semantics)
 - [16-01]: Graceful fallback: explain_query errors map to (None, None) cache fields rather than failing the request
 - [Phase 18]: velesdb-core README exports (Filter, Condition, metrics) verified correct against lib.rs -- no changes needed
+- [Phase 18]: TypeScript VelesDB class in @wiscale/velesdb-sdk is correct SDK usage, not a bad pattern
 
 ### Roadmap Evolution
 
@@ -243,7 +245,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T18:07:20Z
-Stopped at: Completed 18-02-PLAN.md
+Last session: 2026-03-08T18:12:13.909Z
+Stopped at: Completed 18-04-PLAN.md
 Resume file: None
 Next action: Execute 18-03-PLAN.md
