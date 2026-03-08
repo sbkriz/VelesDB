@@ -386,7 +386,7 @@ impl Database {
 
         let mut query = format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}");
         if opq {
-            query.push_str(", opq=true");
+            query.push_str(", type=opq");
         }
         query.push(')');
 
