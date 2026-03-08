@@ -60,7 +60,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 #[openapi(
     info(
         title = "VelesDB API",
-        version = "0.1.1",
+        version = "1.5.0",
         description = "High-performance vector database for AI applications. \
             Supports semantic search, HNSW indexing, and multiple distance metrics.",
         license(name = "ELv2", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
@@ -220,7 +220,7 @@ mod tests {
         let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
         assert!(!json.is_empty(), "OpenAPI spec should not be empty");
         assert!(json.contains("VelesDB API"), "Should contain API title");
-        assert!(json.contains("0.1.1"), "Should contain version");
+        assert!(json.contains("1.5.0"), "Should contain version");
     }
 
     #[test]
