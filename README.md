@@ -958,6 +958,10 @@ LIMIT 10
 ---
 
 ### Scenario 0c: Distance Metrics for Every Use Case
+
+<details>
+<summary><b>Distance Metrics for Every Use Case (click to expand)</b></summary>
+
 **Goal:** Choose the right metric for your data type and domain
 
 VelesDB supports **5 distance metrics** - each optimized for specific use cases:
@@ -1065,6 +1069,8 @@ LIMIT 20
 | **Jaccard** | 89 ns | 11M ops/sec | ✅ AVX2 |
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
+
+</details>
 
 ---
 
@@ -1239,64 +1245,6 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 
 ---
 
-## 🚀 Transformative Benefits: How VelesDB Changes Development
-
-### ⚡ Eliminates Database Sprawl
-VelesDB replaces 3+ specialized databases (vector DB + graph DB + document store) with a **single unified engine**.
-
-```mermaid
-graph LR
-A[App] --> V[VelesDB]
-```
-
-**Impact:**
-- ✅ **70% less infrastructure code**
-- ✅ **No synchronization headaches**
-- ✅ **Single query language for all operations**
-
-### 💡 Enables New Application Categories
-With air-gapped deployment and 15MB binary size:
-```mermaid
-pie title Deployment Locations
-    "On-Prem Servers" : 35
-    "Edge Devices" : 25
-    "Mobile Apps" : 20
-    "Browser WASM" : 20
-```
-
-**Impact:**
-- ✅ **Build HIPAA-compliant healthcare apps**
-- ✅ **Create military-grade analytics** for air-gapped environments
-- ✅ **Enable privacy-first consumer apps** with zero data sharing
-
-### 🚀 Redefines Performance Expectations
-
-| Pipeline Step | Cloud Vector DB | VelesDB |
-|---------------|-----------------|---------|
-| Network round-trip | 50-100ms | **0ms** (local) |
-| Vector search | 10-50ms | **~0.10ms** |
-| Graph traversal | 20-100ms | **0.1ms** |
-| **Total latency** | **100-250ms** | **< 1ms** |
-
-> 💡 **100x faster** enables use cases impossible with cloud: real-time autocomplete, instant RAG, sub-frame game AI
-
-**Impact:**
-- ✅ **Build real-time AI agents** that respond faster than human perception
-- ✅ **Enable complex RAG chains** with 10+ sequential retrievals
-- ✅ **Create instant search experiences** with no loading spinners
-
-### 💼 Unified API Simplifies Development
-One consistent API across all platforms:
-```rust
-// Same API everywhere
-let results = db.search(query_vector, filters, graph_traversal);
-```
-
-**Impact:**
-- ✅ **Learn once, deploy everywhere**
-- ✅ **Shared codebase** between web, mobile, and desktop
-- ✅ **Eliminate platform-specific database code**
-
 ---
 
 ## ✨ Core Features That Transform Development
@@ -1313,41 +1261,6 @@ let results = db.search(query_vector, filters, graph_traversal);
 | **📝 VelesQL** | SQL-like unified query language with SPARSE_NEAR, TRAIN QUANTIZER | **Simplify complex queries** - no DSL learning curve |
 
 ---
-
-## 🏆 Real-World Impact Stories
-
-### 🏥 Healthcare Diagnostics Assistant
-**Before VelesDB:**
-- 300ms latency per query
-- Patient data in cloud
-- Separate systems for medical knowledge and patient data
-
-**With VelesDB:**
-- **0.6ms diagnosis suggestions**
-- **On-device patient data**
-- **Unified medical knowledge graph**
-
-```mermaid
-pie title Performance Improvement
-    "Diagnosis Speed" : 85
-    "Accuracy" : 10
-    "Privacy" : 5
-```
-
-### 🏭 Manufacturing Quality Control
-**Before VelesDB:**
-- Cloud dependency caused production delays
-- Separate systems for defect images and part metadata
-
-**With VelesDB:**
-```sql
-MATCH (part)-[HAS_DEFECT]->(defect)
-WHERE defect.vector NEAR $image_vec
-AND part.material = 'titanium'
-```
-- **50% fewer defective shipments**
-- **Offline factory floor operation**
-- **Unified defect database**
 
 ---
 
