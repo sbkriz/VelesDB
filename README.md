@@ -12,8 +12,8 @@
 </h3>
 
 <p align="center">
-  <strong>🚀 v1.5.0 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.5.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
+  <strong>🚀 v1.5.1 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.5.1">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
 </p>
 
 <p align="center">
@@ -489,7 +489,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.5.0"}
+# {"status":"healthy","version":"1.5.1"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -1390,7 +1390,7 @@ gantt
 |---------|--------|------------|----------|
 | **v1.3.0** | ✅ Released | 6/6 | ![100%](https://progress-bar.xyz/100?title=Complete) |
 | **v1.4.0** | ✅ Released | 10/10 | ![100%](https://progress-bar.xyz/100?title=Complete) |
-| **v1.5.0** | ✅ Released | 5/5 | ![100%](https://progress-bar.xyz/100?title=Complete) |
+| **v1.5.1** | ✅ Released | 5/5 | ![100%](https://progress-bar.xyz/100?title=Complete) |
 
 ---
 
@@ -1456,7 +1456,7 @@ gantt
 
 ---
 
-### v1.5.0 ✅ Released (March 2026)
+### v1.5.1 ✅ Released (March 2026)
 
 <details>
 <summary><b>5 Major Features - Click to expand</b></summary>

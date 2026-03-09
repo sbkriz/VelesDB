@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-07
 
-This guide covers all breaking changes when upgrading from VelesDB v1.4.x to v1.5.0, along with migration steps and troubleshooting tips.
+This guide covers all breaking changes when upgrading from VelesDB v1.4.x to v1.5.1, along with migration steps and troubleshooting tips.
 
 ---
 
@@ -275,7 +275,7 @@ When both dense and sparse vectors are provided in a search request, RRF with `k
 ## Migration Checklist
 
 - [ ] Export all collection data from v1.4 instance
-- [ ] Update `velesdb-core` (and SDK dependencies) to v1.5.0
+- [ ] Update `velesdb-core` (and SDK dependencies) to v1.5.1
 - [ ] Re-create collections and re-import data
 - [ ] Update exhaustive `QuantizationConfig` match arms to include `ProductQuantization`
 - [ ] Add `sparse_vector: None` to all `Point` struct literals
@@ -309,4 +309,4 @@ When both dense and sparse vectors are provided in a search request, RRF with `k
 
 ---
 
-*VelesDB v1.5.0 -- March 2026*
+*VelesDB v1.5.1 -- March 2026*
