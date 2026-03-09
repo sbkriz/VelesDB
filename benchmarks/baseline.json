@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "VelesDB Performance Baseline v1.5 — Phase 11 PQ recall benchmark hardening (6 variants, 0.92 thresholds)",
   "recorded_at": "2026-03-08",
   "environment": {
