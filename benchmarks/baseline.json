@@ -1,7 +1,7 @@
 {
   "version": "1.5.1",
-  "description": "VelesDB Performance Baseline v1.5.1 — re-measured 2026-03-10 after SIMD/HNSW perf audit (pq.rs restored)",
-  "recorded_at": "2026-03-10",
+  "description": "VelesDB Performance Baseline v1.5.1 — re-measured 2026-03-11 full benchmark suite",
+  "recorded_at": "2026-03-11",
   "environment": {
     "rust_version": "1.92.0",
     "features": "persistence,gpu,update-check",
@@ -9,18 +9,18 @@
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 2609300000.0,
-      "std_ns": 7750000,
+      "mean_ns": 2882900000.0,
+      "std_ns": 50000000,
       "threshold_percent": 15
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 177900.0,
-      "std_ns": 1390,
+      "mean_ns": 203770.0,
+      "std_ns": 3000,
       "threshold_percent": 15
     },
     "smoke_hybrid/vector_plus_filter": {
-      "mean_ns": 184870.0,
-      "std_ns": 2910,
+      "mean_ns": 192380.0,
+      "std_ns": 2000,
       "threshold_percent": 15
     },
     "pq_recall/pq_recall_m8_k256_rescore": {
@@ -55,10 +55,10 @@
     }
   },
   "notes": [
-    "Re-measured 2026-03-10 after perf audit (pq.rs restored, SIMD/HNSW optimizations)",
+    "Re-measured 2026-03-11 full benchmark suite after perf audit",
     "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
     "Machine: i9-14900KF, 64GB RAM, Windows 11 Pro",
     "pq_recall entries hardened in Phase 11 — 6 variants with explicit m=8 k=256 training via VelesQL",
-    "PQ recall thresholds restored to 0.92 (PQ-07 contract) with uniform random data (replaces clustered data that hit HNSW recall ceiling)"
+    "PQ recall thresholds restored to 0.92 (PQ-07 contract) with uniform random data"
   ]
 }

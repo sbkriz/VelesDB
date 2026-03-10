@@ -46,28 +46,28 @@ AVX2 implementations adapt based on vector size to minimize register pressure:
 | 8-63 elements | 4-acc | Small vectors (legacy) |
 | < 8 elements | Scalar | Tiny vectors (avoid SIMD overhead) |
 
-## Performance Benchmarks (February 2026)
+## Performance Benchmarks (March 2026)
 
 ### Distance Functions (768D vectors)
 
 | Function | Latency | Throughput | vs Previous |
 |----------|---------|------------|-------------|
-| `dot_product_native` | **37.7ns** | 26.5M ops/s | Baseline |
-| `euclidean_native` | **20.9ns** | 47.8M ops/s | Improved |
-| `cosine_similarity_native` | **40.9ns** | 24.4M ops/s | Optimized (2-acc) |
-| `cosine_normalized_native` | **37.7ns** | 26.5M ops/s | Same as dot |
-| `hamming_distance_native` | **18.7ns** | 53.5M ops/s | 2x faster |
-| `jaccard_similarity_native` | **22.8ns** | 43.9M ops/s | 20% faster |
+| `dot_product_native` | **16.2ns** | 47.4 Gelem/s | Baseline |
+| `euclidean_native` | **19.7ns** | 39.0 Gelem/s | Improved |
+| `cosine_similarity_native` | **29.6ns** | 25.9 Gelem/s | Optimized (4-acc) |
+| `cosine_normalized_native` | **16.2ns** | 47.4 Gelem/s | Same as dot |
+| `hamming_distance_native` | **35.3ns** | 21.8M ops/s | Stable |
+| `jaccard_similarity_native` | **26.9ns** | 28.6 Gelem/s | Improved |
 
 ### Scaling by Dimension (simd_native)
 
 | Dimension | Cosine | Dot Product | Model |
 |-----------|--------|-------------|-------|
-| 128 | 10.0ns | 6.3ns | MiniLM |
-| 384 | 20.9ns | 11.4ns | all-MiniLM-L6-v2 |
-| 768 | 40.9ns | 37.7ns | BERT, ada-002 |
-| 1536 | 66.4ns | 32.5ns | text-embedding-3-small |
-| 3072 | 138.7ns | 81.2ns | text-embedding-3-large |
+| 128 | 6.9ns | 4.0ns | MiniLM |
+| 384 | 17.5ns | 8.3ns | all-MiniLM-L6-v2 |
+| 768 | 29.6ns | 16.2ns | BERT, ada-002 |
+| 1536 | 55.9ns | 31.3ns | text-embedding-3-small |
+| 3072 | 109.8ns | 69.4ns | text-embedding-3-large |
 
 ## Optimization Techniques
 
