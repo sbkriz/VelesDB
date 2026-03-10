@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 10, 2026 (v1.5.1 — re-run on current codebase after SIMD/HNSW perf audit)*
+*Last updated: March 11, 2026 (v1.5.1 — full re-benchmark after perf audit)*
 
 ---
 
@@ -21,44 +21,44 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via `simd_dispatch`. Re-measured March 10, 2026 (v1.5.1) on Intel Core i9-14900KF with `--sample-size 30`.
+SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via `simd_dispatch`. Re-measured March 11, 2026 (v1.5.1) on Intel Core i9-14900KF.
 
 ### SIMD Kernel Latency
 
 | Operation | 128D | 384D | 768D | 1536D | 3072D |
 |-----------|------|------|------|-------|-------|
-| **Dot Product** | 4.2 ns | 10.3 ns | 17.2 ns | 44.9 ns | 69.1 ns |
-| **Euclidean** | 5.6 ns | 10.6 ns | 22.2 ns | 44.4 ns | 86.7 ns |
-| **Cosine** | 7.5 ns | 18.8 ns | 38.0 ns | 64.5 ns | 145.5 ns |
-| **Hamming** | 7.4 ns | 20.7 ns | 39.7 ns | 78.6 ns | 184.5 ns |
-| **Jaccard** | 7.2 ns | 17.9 ns | 29.2 ns | 61.9 ns | 112.2 ns |
+| **Dot Product** | 4.0 ns | 8.3 ns | 16.2 ns | 31.3 ns | 69.4 ns |
+| **Euclidean** | 5.0 ns | 9.7 ns | 19.7 ns | 36.5 ns | 80.6 ns |
+| **Cosine** | 6.9 ns | 17.5 ns | 29.6 ns | 55.9 ns | 109.8 ns |
+| **Hamming** | 6.3 ns | 17.7 ns | 35.3 ns | 73.6 ns | 142.5 ns |
+| **Jaccard** | 6.3 ns | 15.4 ns | 26.9 ns | 55.5 ns | 97.6 ns |
 
 *Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
 
-### Cosine Engine Dispatch Overhead (March 10, 2026)
+### Cosine Engine Dispatch Overhead (March 11, 2026)
 
 | Dimension | Native Kernel | Engine Dispatch | Overhead |
 |-----------|---------------|-----------------|----------|
-| 384D | 20.6 ns | 21.1 ns | 2.4% |
-| 768D | 40.0 ns | 42.1 ns | 5.3% |
-| 1536D | 64.6 ns | 61.4 ns | −4.9% (dispatch optimized) |
+| 384D | 17.4 ns | 18.5 ns | 6.3% |
+| 768D | 30.1 ns | 29.9 ns | −0.7% (dispatch optimized) |
+| 1536D | 55.7 ns | 55.6 ns | −0.2% (dispatch optimized) |
 
-Engine dispatch overhead is minimal at typical embedding dimensions (384D–768D).
+Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 ### Throughput
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 17.2 ns | 44.7 Gelem/s |
-| 1536D | 44.9 ns | 34.2 Gelem/s |
-| 3072D | 69.1 ns | 44.5 Gelem/s |
+| 768D | 16.2 ns | 47.4 Gelem/s |
+| 1536D | 31.3 ns | 49.1 Gelem/s |
+| 3072D | 69.4 ns | 44.3 Gelem/s |
 
 ### Batch Distance Computation
 
 | Benchmark | Latency | Per-Vector |
 |-----------|---------|------------|
-| Native 1000x768D | 42.6 µs | 42.6 ns |
-| Engine 1000x768D | 41.0 µs | 41.0 ns |
+| Native 1000x768D | 39.6 µs | 39.6 ns |
+| Engine 1000x768D | 40.4 µs | 40.4 ns |
 
 ---
 
@@ -111,10 +111,10 @@ Sparse vector search uses an inverted index with MaxScore optimization for early
 | Benchmark | Latency (estimate) | Notes |
 |-----------|--------------------|-------|
 | **Insert 10K sequential** | 68 ms | 6.8 µs/doc |
-| **Insert 10K parallel (4 threads)** | 141.6 ms | Concurrent, includes contention |
-| **Search top-10, 10K corpus** | 721 µs | MaxScore pruning active |
-| **Search top-100, 10K corpus** | 712 µs | Minimal cost for larger k |
-| **Concurrent 16-thread (8 insert + 8 search)** | 160.6 ms | Mixed read/write workload |
+| **Insert 10K parallel (4 threads)** | 143.6 ms | Concurrent, includes contention |
+| **Search top-10, 10K corpus** | 732 µs | MaxScore pruning active |
+| **Search top-100, 10K corpus** | 708 µs | Minimal cost for larger k |
+| **Concurrent 16-thread (8 insert + 8 search)** | 145.2 ms | Mixed read/write workload |
 
 Latency percentiles are not separately measured by Criterion (which reports confidence intervals). The estimates above represent the mean of the sampling distribution.
 
@@ -136,8 +136,8 @@ No dedicated hybrid benchmark suite exists yet. Performance can be estimated fro
 
 | Component | Latency (10K corpus) | Source |
 |-----------|---------------------|--------|
-| Dense HNSW search (k=10, 768D) | ~49 µs | hnsw_benchmark |
-| Sparse search (top-10, 10K) | ~721 µs | sparse_benchmark |
+| Dense HNSW search (k=10, 768D) | ~39 µs | hnsw_benchmark |
+| Sparse search (top-10, 10K) | ~732 µs | sparse_benchmark |
 | RRF fusion overhead | negligible (score merging) | -- |
 | **Estimated hybrid total** | **~771 µs** | Dense + Sparse + fusion |
 
@@ -154,11 +154,11 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **Search k=10** (10K/768D) | 48.8 µs | 20.5K QPS |
-| **Search k=50** | 81.9 µs | -- |
-| **Search k=100** | 171 µs | -- |
-| **Insert 1K x 768D** (sequential) | 320 ms | 3.1K vec/s |
-| **Parallel Insert 1K x 768D** | 148.8 ms | 6.7K vec/s |
+| **Search k=10** (10K/768D) | 38.6 µs | 25.9K QPS |
+| **Search k=50** | 58.6 µs | -- |
+| **Search k=100** | 131.1 µs | -- |
+| **Insert 1K x 768D** (sequential) | 249.9 ms | 4.0K vec/s |
+| **Parallel Insert 1K x 768D** | 119.1 ms | 8.4K vec/s |
 
 ### HNSW Recall Profiles (10K/128D)
 
@@ -175,21 +175,21 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for
 
 ## 6. ColumnStore Filtering
 
-**String equality filter** (`filter_eq_string`, measured 2026-03-10):
+**String equality filter** (`filter_eq_string`, measured 2026-03-11):
 
 | Scale | ColumnStore | JSON Scan | Speedup |
 |-------|-------------|-----------|---------|
-| 1K rows | 0.60 µs | 14.0 µs | 23x |
-| 10K rows | 3.73 µs | 133.6 µs | 36x |
-| 100K rows | 38.4 µs | 3.52 ms | 92x |
+| 1K rows | 0.585 µs | 13.3 µs | 23x |
+| 10K rows | 3.66 µs | 129.4 µs | 35x |
+| 100K rows | 36.3 µs | 3.51 ms | 97x |
 
-**Integer equality filter** (`filter_eq_int`, measured 2026-03-10):
+**Integer equality filter** (`filter_eq_int`, measured 2026-03-11):
 
 | Scale | ColumnStore | JSON Scan | Speedup |
 |-------|-------------|-----------|---------|
-| 1K rows | 0.37 µs | 16.1 µs | 43x |
-| 10K rows | 3.01 µs | 160.3 µs | 53x |
-| 100K rows | 29.2 µs | 3.89 ms | 133x |
+| 1K rows | 0.321 µs | 15.6 µs | 49x |
+| 10K rows | 2.90 µs | 157.2 µs | 54x |
+| 100K rows | 28.9 µs | 3.91 ms | 135x |
 
 ---
 
@@ -197,11 +197,11 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for
 
 | Mode | Latency | Throughput |
 |------|---------|------------|
-| Simple Parse | 1.36 µs | 735K QPS |
-| Vector Query | 1.92 µs | 521K QPS |
-| Complex Query | 8.1 µs | 123K QPS |
-| **Cache Hit** | **301 ns** | **3.3M QPS** |
-| EXPLAIN Plan | 65 ns | 15.4M QPS |
+| Simple Parse | 1.19 µs | 840K QPS |
+| Vector Query | 1.80 µs | 556K QPS |
+| Complex Query | 7.22 µs | 139K QPS |
+| **Cache Hit** | **1.05 µs** | **952K QPS** |
+| EXPLAIN Plan (simple) | 62.5 ns | 16.0M QPS |
 
 ---
 
@@ -209,11 +209,11 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for
 
 | Operation | Latency |
 |-----------|---------|
-| **get_neighbors (degree 10)** | 165 ns |
-| **get_neighbors (degree 50)** | 551 ns |
-| **add_edge** | 296 ns |
-| **BFS depth 3** | 3.37 µs |
-| **Parallel reads (8 threads)** | 304 µs |
+| **get_neighbors (degree 10)** | 95 ns |
+| **get_neighbors (degree 50)** | 485 ns |
+| **add_edge** | 265 ns |
+| **BFS depth 3** | 3.32 µs |
+| **Parallel reads (8 threads)** | 292 µs |
 
 ---
 
@@ -223,7 +223,7 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for
 
 | Library | Dot Product 1536D | Notes |
 |---------|-------------------|-------|
-| **VelesDB** | **44.9 ns** | AVX2 4-acc, native Rust |
+| **VelesDB** | **31.3 ns** | AVX2 4-acc, native Rust |
 | SimSIMD | ~25-30 ns | AVX-512, C library |
 | NumPy | ~200-400 ns | BLAS backend |
 | SciPy | ~300-500 ns | No SIMD optimization |
