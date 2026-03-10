@@ -648,25 +648,34 @@ impl ProductQuantizer {
 
 /// Asymmetric distance computation (ADC): query is f32, candidate is PQ-coded.
 ///
+/// Applies OPQ rotation to the query when the quantizer has a rotation matrix,
+/// matching the space in which the codebook centroids were trained.
+///
 /// This is a crate-internal function. Inputs are expected to be valid by
-/// construction: `query_vector.len() == codebook.dimension` and
-/// `pq_vector.codes.len() == codebook.num_subspaces`. These invariants are
-/// enforced at insert/train time and asserted only in debug builds.
+/// construction: `query_vector.len() == quantizer.codebook.dimension` and
+/// `pq_vector.codes.len() == quantizer.codebook.num_subspaces`. These invariants
+/// are enforced at insert/train time and asserted only in debug builds.
 #[must_use]
 #[allow(dead_code)]
 pub(crate) fn distance_pq_l2(
     query_vector: &[f32],
     pq_vector: &PQVector,
-    codebook: &PQCodebook,
+    quantizer: &ProductQuantizer,
 ) -> f32 {
+    let codebook = &quantizer.codebook;
     debug_assert_eq!(query_vector.len(), codebook.dimension);
     debug_assert_eq!(pq_vector.codes.len(), codebook.num_subspaces);
+
+    // SAFETY: apply_rotation returns Cow::Borrowed when rotation is None (no allocation),
+    // Cow::Owned with the rotated vector otherwise. Centroids are in rotated space when
+    // OPQ is enabled, so the query must be rotated to the same space before computing ADC.
+    let query = quantizer.apply_rotation(query_vector);
 
     let mut lookup_tables = Vec::with_capacity(codebook.num_subspaces);
     for subspace in 0..codebook.num_subspaces {
         let start = subspace * codebook.subspace_dim;
         let end = start + codebook.subspace_dim;
-        let q_sub = &query_vector[start..end];
+        let q_sub = &query[start..end];
 
         let table: Vec<f32> = codebook.centroids[subspace]
             .iter()
@@ -1026,8 +1035,8 @@ mod tests {
         let far = pq.quantize(&[5.0, 5.0, 5.0, 5.0]).unwrap();
         let query = [0.0, 0.0, 0.0, 0.0];
 
-        let d_near = distance_pq_l2(&query, &near, &pq.codebook);
-        let d_far = distance_pq_l2(&query, &far, &pq.codebook);
+        let d_near = distance_pq_l2(&query, &near, &pq);
+        let d_far = distance_pq_l2(&query, &far, &pq);
 
         assert!(d_near < d_far, "ADC did not preserve proximity ordering");
     }
@@ -1375,7 +1384,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, v)| {
                     let code = pq.quantize(v).unwrap();
-                    let d = distance_pq_l2(query, &code, &pq.codebook);
+                    let d = distance_pq_l2(query, &code, &pq);
                     (i, d)
                 })
                 .collect();

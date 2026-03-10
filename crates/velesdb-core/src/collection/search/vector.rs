@@ -112,7 +112,7 @@ fn rescore_with_metric(
     metric: DistanceMetric,
 ) -> Result<f32> {
     if metric == DistanceMetric::Euclidean {
-        Ok(distance_pq_l2(query, pq_vec, &quantizer.codebook))
+        Ok(distance_pq_l2(query, pq_vec, quantizer))
     } else {
         let reconstructed = quantizer.reconstruct(pq_vec)?;
         Ok(metric.calculate(query, &reconstructed))
