@@ -1,5 +1,7 @@
 //! Tests for `graph` module - Native HNSW graph implementation.
 
+#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
+
 use super::graph::NativeHnsw;
 use super::layer::NodeId;
 use crate::distance::DistanceMetric;

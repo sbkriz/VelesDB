@@ -437,20 +437,25 @@ impl Drop for ContiguousVectors {
 
 /// Computes multiple dot products in a single pass (cache-optimized).
 ///
-/// Uses prefetching and SIMD for maximum throughput.
+/// F-17: Delegates to `batch_dot_product_native` which includes `x86_64`
+/// prefetch hints for upcoming candidate vectors.
 #[must_use]
 pub fn batch_dot_products_simd(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    vectors
-        .iter()
-        .map(|v| crate::simd_native::dot_product_native(v, query))
-        .collect()
+    crate::simd_native::batch_dot_product_native(vectors, query)
 }
 
-/// Computes multiple cosine similarities in a single pass.
+/// Computes multiple cosine similarities in a single pass with prefetch.
 #[must_use]
 pub fn batch_cosine_similarities(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    vectors
-        .iter()
-        .map(|v| crate::simd_native::cosine_similarity_native(v, query))
-        .collect()
+    let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
+    let mut results = Vec::with_capacity(vectors.len());
+
+    for (i, v) in vectors.iter().enumerate() {
+        if i + prefetch_distance < vectors.len() {
+            crate::simd_native::prefetch_vector(vectors[i + prefetch_distance]);
+        }
+        results.push(crate::simd_native::cosine_similarity_native(v, query));
+    }
+
+    results
 }

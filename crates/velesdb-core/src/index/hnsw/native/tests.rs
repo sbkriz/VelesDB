@@ -1,6 +1,6 @@
 //! Tests for native HNSW implementation.
 
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_precision_loss, deprecated)]
 
 use super::distance::{CpuDistance, SimdDistance};
 use super::graph::NativeHnsw;
@@ -876,6 +876,103 @@ fn test_delete_exclusion_under_concurrent_search() {
         !results.is_empty(),
         "Odd IDs should still be searchable after deleting even IDs"
     );
+}
+
+// =============================================================================
+// F-22: Pre-normalization for Cosine metric
+// =============================================================================
+
+#[test]
+fn test_prenormalized_cosine_recall_matches_standard() {
+    use super::distance::CachedSimdDistance;
+
+    let dim = 128;
+
+    // Standard (non-prenormalized) cosine index
+    let engine_std = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw_std = NativeHnsw::new(engine_std, 16, 100, 500);
+
+    // Pre-normalized cosine index
+    let engine_pre = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim);
+    let hnsw_pre = NativeHnsw::new(engine_pre, 16, 100, 500);
+
+    let vectors: Vec<Vec<f32>> = (0..200)
+        .map(|i| {
+            (0..dim)
+                .map(|j| ((i * dim + j) as f32 * 0.001).sin())
+                .collect()
+        })
+        .collect();
+
+    // Insert same vectors into both indexes
+    for v in &vectors {
+        hnsw_std.insert(v.clone());
+        hnsw_pre.insert(v.clone());
+    }
+
+    // Verify search recall for pre-normalized vs standard
+    let k = 10;
+    for q_idx in [0, 40, 80, 120, 160] {
+        let query = &vectors[q_idx];
+
+        let results_std = hnsw_std.search(query, k, 128);
+        let results_pre = hnsw_pre.search(query, k, 128);
+
+        // Both should return results
+        assert_eq!(results_std.len(), k, "standard should return {k} results");
+        assert_eq!(results_pre.len(), k, "prenorm should return {k} results");
+
+        // First result should be the same (the query vector itself)
+        assert_eq!(
+            results_std[0].0, results_pre[0].0,
+            "Nearest neighbor should match (q={q_idx})"
+        );
+
+        // Verify overlap: at least 80% of top-k results should match
+        let std_ids: Vec<usize> = results_std.iter().map(|(id, _)| *id).collect();
+        let pre_ids: Vec<usize> = results_pre.iter().map(|(id, _)| *id).collect();
+        let overlap = std_ids.iter().filter(|id| pre_ids.contains(id)).count();
+        assert!(
+            overlap >= k * 8 / 10,
+            "Recall overlap too low at q={q_idx}: {overlap}/{k}"
+        );
+    }
+}
+
+#[test]
+fn test_prenormalized_search_distances_are_consistent() {
+    use super::distance::CachedSimdDistance;
+
+    let dim = 64;
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    for i in 0..50_u64 {
+        let v: Vec<f32> = (0..dim)
+            .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+            .collect();
+        hnsw.insert(v);
+    }
+
+    let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.01).sin()).collect();
+    let results = hnsw.search(&query, 10, 50);
+
+    // All distances should be in valid range [0, 2] for cosine
+    for &(_, dist) in &results {
+        assert!(
+            dist.is_finite() && dist >= -1e-6 && dist <= 2.0 + 1e-6,
+            "Cosine distance {dist} out of valid range"
+        );
+    }
+    // Results should be sorted by distance
+    for window in results.windows(2) {
+        assert!(
+            window[0].1 <= window[1].1,
+            "Results must be sorted: {} > {}",
+            window[0].1,
+            window[1].1
+        );
+    }
 }
 
 #[test]
