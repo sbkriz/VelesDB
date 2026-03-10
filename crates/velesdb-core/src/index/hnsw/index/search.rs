@@ -281,35 +281,41 @@ impl HnswIndex {
 
     /// Re-ranks candidates using SIMD-optimized exact distance computation.
     ///
-    /// Extracted helper to eliminate duplication between `search_with_rerank_with_ef`
-    /// and `search_with_rerank_quality` (Martin Fowler — Extract Method).
+    /// F-05: Zero-copy reranking — reads vector slices directly from
+    /// `ContiguousVectors` (64-byte aligned, cache-friendly) instead of
+    /// cloning via `ShardedVectors::get()`. Eliminates ~600KB of allocations
+    /// per search for k=100 × dim=1536.
     fn rerank_candidates(&self, query: &[f32], candidates: &[(u64, f32)]) -> Vec<(u64, f32)> {
-        // EPIC-A.2: Collect candidate vectors from ShardedVectors for re-ranking
-        let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
-            .iter()
-            .filter_map(|(id, _)| {
-                let idx = self.mappings.get_idx(*id)?;
-                let vec = self.vectors.get(idx)?;
-                Some((*id, idx, vec))
-            })
-            .collect();
+        let inner = self.inner.read();
 
-        // Perf TS-CORE-001: Adaptive prefetch distance based on vector size
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
+        inner.with_contiguous_vectors(|vectors| {
+            // Resolve external IDs → internal indices (no vector cloning)
+            let candidate_indices: Vec<(u64, usize)> = candidates
+                .iter()
+                .filter_map(|(id, _)| {
+                    let idx = self.mappings.get_idx(*id)?;
+                    Some((*id, idx))
+                })
+                .collect();
 
-        for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
-            // Prefetch upcoming vectors (P1 optimization on local snapshot)
-            if i + prefetch_distance < candidate_vectors.len() {
-                crate::simd_native::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
+            let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
+            let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_indices.len());
+
+            for (i, &(id, idx)) in candidate_indices.iter().enumerate() {
+                // Prefetch upcoming vectors from contiguous storage
+                if i + prefetch_distance < candidate_indices.len() {
+                    vectors.prefetch(candidate_indices[i + prefetch_distance].1);
+                }
+
+                // Zero-copy: get &[f32] slice directly from ContiguousVectors
+                if let Some(vec) = vectors.get(idx) {
+                    let exact_dist = self.compute_distance(query, vec);
+                    reranked.push((id, exact_dist));
+                }
             }
 
-            // Compute exact distance using SIMD-optimized function
-            let exact_dist = self.compute_distance(query, v);
-            reranked.push((*id, exact_dist));
-        }
-
-        reranked
+            reranked
+        })
     }
 
     /// Sets the index to searching mode after bulk insertions.

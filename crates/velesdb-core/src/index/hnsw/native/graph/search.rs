@@ -109,35 +109,45 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     // Layer-level search helpers
     // =========================================================================
 
+    /// F-04 optimization: acquires both vectors and layers read locks once
+    /// before the greedy descent loop, avoiding repeated lock cycles per hop.
     pub(in crate::index::hnsw::native::graph) fn search_layer_single(
         &self,
         query: &[f32],
         entry: NodeId,
         layer: usize,
     ) -> NodeId {
-        self.with_vectors_read(|vectors| {
+        self.with_vectors_and_layers_read(|vectors, layers| {
             let mut best = entry;
-            let mut best_dist = self.distance.distance(query, &vectors[entry]);
+            // SAFETY: `entry` is a valid node_id from entry_point (always a
+            // successfully inserted node).
+            // - Condition 1: entry < vectors.len() (from a prior successful insert).
+            // Reason: Hot-path greedy descent — bounds check eliminated.
+            let entry_vec = unsafe { vectors.get_unchecked(entry) };
+            let mut best_dist = self.distance.distance(query, entry_vec);
 
             loop {
-                let improved = self.with_layers_read(|layers| {
-                    layers[layer]
-                        .with_neighbors(best, |neighbors| {
-                            let mut improved = false;
+                let improved = layers[layer]
+                    .with_neighbors(best, |neighbors| {
+                        let mut improved = false;
 
-                            for &neighbor in neighbors {
-                                let dist = self.distance.distance(query, &vectors[neighbor]);
-                                if dist < best_dist {
-                                    best = neighbor;
-                                    best_dist = dist;
-                                    improved = true;
-                                }
+                        for &neighbor in neighbors {
+                            // SAFETY: neighbor is a valid node_id from the graph's
+                            // neighbor list, only containing IDs of inserted nodes.
+                            // - Condition 1: neighbor < vectors.len().
+                            // Reason: Inner loop of greedy descent — bounds check eliminated.
+                            let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
+                            let dist = self.distance.distance(query, neighbor_vec);
+                            if dist < best_dist {
+                                best = neighbor;
+                                best_dist = dist;
+                                improved = true;
                             }
+                        }
 
-                            improved
-                        })
-                        .unwrap_or(false)
-                });
+                        improved
+                    })
+                    .unwrap_or(false);
 
                 if !improved {
                     break;
@@ -149,6 +159,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Search a single layer with ef candidates.
+    ///
+    /// F-03 optimization: acquires both vectors and layers read locks once
+    /// before the search loop, avoiding ~ef lock acquire/release cycles.
     pub(in crate::index::hnsw::native::graph) fn search_layer(
         &self,
         query: &[f32],
@@ -163,16 +176,17 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedFloat, NodeId)> = BinaryHeap::new();
 
-        self.with_vectors_read(|vectors| {
-            let dimension = if vectors.is_empty() {
-                0
-            } else {
-                vectors[0].len()
-            };
+        self.with_vectors_and_layers_read(|vectors, layers| {
+            let dimension = vectors.dimension();
             let prefetch_distance = crate::simd_native::calculate_prefetch_distance(dimension);
 
             for ep in entry_points {
-                let dist = self.distance.distance(query, &vectors[ep]);
+                // SAFETY: ep is a valid node_id from entry_point or random probe,
+                // always IDs of successfully inserted nodes.
+                // - Condition 1: ep < vectors.len().
+                // Reason: Entry-point initialization in search hot path.
+                let ep_vec = unsafe { vectors.get_unchecked(ep) };
+                let dist = self.distance.distance(query, ep_vec);
                 candidates.push(Reverse((OrderedFloat(dist), ep)));
                 results.push((OrderedFloat(dist), ep));
                 visited.insert(ep);
@@ -185,39 +199,42 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     break;
                 }
 
-                self.with_layers_read(|layers| {
-                    let _ = layers[layer].with_neighbors(c_node, |neighbors| {
-                        if dimension >= 384 && neighbors.len() > prefetch_distance {
-                            for &neighbor_id in neighbors.iter().take(prefetch_distance) {
-                                if neighbor_id < vectors.len() {
-                                    crate::simd_native::prefetch_vector(&vectors[neighbor_id]);
-                                }
+                let _ = layers[layer].with_neighbors(c_node, |neighbors| {
+                    if dimension >= 384 && neighbors.len() > prefetch_distance {
+                        for &neighbor_id in neighbors.iter().take(prefetch_distance) {
+                            if neighbor_id < vectors.len() {
+                                vectors.prefetch(neighbor_id);
+                            }
+                        }
+                    }
+
+                    for (i, neighbor) in neighbors.iter().enumerate() {
+                        if dimension >= 384 && i + prefetch_distance < neighbors.len() {
+                            let prefetch_id = neighbors[i + prefetch_distance];
+                            if prefetch_id < vectors.len() {
+                                vectors.prefetch(prefetch_id);
                             }
                         }
 
-                        for (i, neighbor) in neighbors.iter().enumerate() {
-                            if dimension >= 384 && i + prefetch_distance < neighbors.len() {
-                                let prefetch_id = neighbors[i + prefetch_distance];
-                                if prefetch_id < vectors.len() {
-                                    crate::simd_native::prefetch_vector(&vectors[prefetch_id]);
-                                }
-                            }
+                        if visited.insert(*neighbor) {
+                            // SAFETY: *neighbor is a valid node_id from the graph's
+                            // neighbor list, only containing IDs of inserted nodes.
+                            // - Condition 1: *neighbor < vectors.len().
+                            // Reason: Inner search loop — bounds check eliminated.
+                            let n_vec = unsafe { vectors.get_unchecked(*neighbor) };
+                            let dist = self.distance.distance(query, n_vec);
+                            let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
 
-                            if visited.insert(*neighbor) {
-                                let dist = self.distance.distance(query, &vectors[*neighbor]);
-                                let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
+                            if dist < furthest || results.len() < ef {
+                                candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
+                                results.push((OrderedFloat(dist), *neighbor));
 
-                                if dist < furthest || results.len() < ef {
-                                    candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
-                                    results.push((OrderedFloat(dist), *neighbor));
-
-                                    if results.len() > ef {
-                                        results.pop();
-                                    }
+                                if results.len() > ef {
+                                    results.pop();
                                 }
                             }
                         }
-                    });
+                    }
                 });
             }
         });

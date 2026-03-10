@@ -93,7 +93,13 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         max_elements: usize,
     ) -> Self {
         Self {
-            inner: NativeHnsw::new(distance, max_connections, ef_construction, max_elements),
+            inner: NativeHnsw::new_with_dimension(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+            ),
             quantizer: None,
             quantized_store: None,
             dimension,
@@ -127,23 +133,21 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     pub fn insert(&mut self, vector: Vec<f32>) -> NodeId {
         debug_assert_eq!(vector.len(), self.dimension);
 
-        // Insert into inner HNSW (always stores float32)
-        let node_id = self.inner.insert(vector.clone());
-
-        // If quantizer is trained, quantize and store
+        // F-13: Push to quantized store or training buffer using a reference
+        // BEFORE passing ownership to inner.insert().
+        // Note: inner.insert() still clones internally (F-14), but we avoid an
+        // additional clone at this level for the quantized path.
         if let Some(ref mut store) = self.quantized_store {
             store.push(&vector);
         } else {
-            // Accumulate training samples
-            self.training_buffer.push(vector);
-
-            // Train quantizer when we have enough samples
+            // Training path: must clone because inner.insert() consumes vector
+            self.training_buffer.push(vector.clone());
             if self.training_buffer.len() >= self.training_sample_size {
                 self.train_quantizer();
             }
         }
 
-        node_id
+        self.inner.insert(vector)
     }
 
     /// Trains the quantizer on accumulated samples.
@@ -223,16 +227,19 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
 
         // Step 2: Re-rank using EXACT float32 distances
         // This is the key to dual-precision: approximate traversal + exact rerank
-        let vectors = self.inner.vectors.read();
-        let mut reranked: Vec<(NodeId, f32)> = candidates
-            .iter()
-            .filter_map(|&(node_id, _approx_dist)| {
-                // Get exact distance from original float32 vectors
-                let vec = vectors.get(node_id)?;
-                let exact_dist = self.inner.compute_distance(query, vec);
-                Some((node_id, exact_dist))
-            })
-            .collect();
+        let vectors_guard = self.inner.vectors.read();
+        let mut reranked: Vec<(NodeId, f32)> = if let Some(vectors) = vectors_guard.as_ref() {
+            candidates
+                .iter()
+                .filter_map(|&(node_id, _approx_dist)| {
+                    let vec = vectors.get(node_id)?;
+                    let exact_dist = self.inner.compute_distance(query, vec);
+                    Some((node_id, exact_dist))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Sort by exact distance
         reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -312,15 +319,19 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         }
 
         // Phase 2: Re-rank with exact f32 distances
-        let vectors = self.inner.vectors.read();
-        let mut reranked: Vec<(NodeId, f32)> = coarse_candidates
-            .into_iter()
-            .filter_map(|(node_id, _approx_dist)| {
-                let vec = vectors.get(node_id)?;
-                let exact_dist = self.inner.compute_distance(query, vec);
-                Some((node_id, exact_dist))
-            })
-            .collect();
+        let vectors_guard = self.inner.vectors.read();
+        let mut reranked: Vec<(NodeId, f32)> = if let Some(vectors) = vectors_guard.as_ref() {
+            coarse_candidates
+                .into_iter()
+                .filter_map(|(node_id, _approx_dist)| {
+                    let vec = vectors.get(node_id)?;
+                    let exact_dist = self.inner.compute_distance(query, vec);
+                    Some((node_id, exact_dist))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Sort by exact distance and return top k
         reranked.sort_by(|a, b| a.1.total_cmp(&b.1));

@@ -33,7 +33,17 @@ impl NativeHnswInner {
         dimension: usize,
     ) -> Self {
         let distance = CachedSimdDistance::new(metric, dimension);
-        let inner = NativeHnsw::new(distance, max_connections, ef_construction, max_elements);
+        let inner = if dimension > 0 {
+            NativeHnsw::new_with_dimension(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+            )
+        } else {
+            NativeHnsw::new(distance, max_connections, ef_construction, max_elements)
+        };
 
         Self { inner, metric }
     }
@@ -131,6 +141,20 @@ impl NativeHnswInner {
     #[must_use]
     pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
         self.inner.compute_distance(a, b)
+    }
+
+    /// Executes a closure with zero-copy access to the contiguous vector storage.
+    ///
+    /// F-05: Enables zero-copy reranking by providing direct `&[f32]` slices
+    /// from `ContiguousVectors` instead of cloning via `ShardedVectors::get()`.
+    ///
+    /// Returns `R::default()` if vector storage is not yet initialized.
+    #[inline]
+    pub fn with_contiguous_vectors<R: Default>(
+        &self,
+        f: impl FnOnce(&crate::perf_optimizations::ContiguousVectors) -> R,
+    ) -> R {
+        self.inner.with_vectors_read(f)
     }
 }
 
