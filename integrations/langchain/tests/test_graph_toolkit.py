@@ -1,7 +1,7 @@
 """Tests for VelesDB Graph Toolkit."""
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from langchain_velesdb.graph_toolkit import (
     GraphExtractor,

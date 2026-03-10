@@ -34,14 +34,14 @@ async def test_async():
     client = httpx.AsyncClient(base_url="http://localhost:8080", timeout=30.0)
     for i in range(5):
         t0 = time.perf_counter()
-        r = await client.get("/health")
+        _ = await client.get("/health")
         latency = (time.perf_counter() - t0) * 1000
         print(f"   Async Req {i+1}: {latency:.2f}ms")
     
     print("\n4. Test ASYNC SEARCH:")
     for i in range(5):
         t0 = time.perf_counter()
-        r = await client.post("/collections/rag_documents/search", json={"vector": vector, "top_k": 5})
+        _ = await client.post("/collections/rag_documents/search", json={"vector": vector, "top_k": 5})
         latency = (time.perf_counter() - t0) * 1000
         print(f"   Async Search {i+1}: {latency:.2f}ms")
     await client.aclose()

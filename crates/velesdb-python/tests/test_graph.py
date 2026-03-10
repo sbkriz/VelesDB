@@ -8,8 +8,7 @@ import pytest
 
 # Import will fail until the module is built with maturin
 try:
-    import velesdb
-    from velesdb import GraphStore, StreamingConfig, TraversalResult
+    from velesdb import GraphStore, StreamingConfig
 except ImportError:
     pytest.skip(
         "velesdb module not built yet - run 'maturin develop' first",

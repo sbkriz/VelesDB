@@ -17,7 +17,7 @@ Example:
     >>> docs = retriever.get_relevant_documents("What is machine learning?")
 """
 
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, List, Optional
 from dataclasses import dataclass, field
 import hashlib
 import logging
@@ -26,8 +26,6 @@ import requests
 from langchain_velesdb.security import (
     validate_url,
     validate_k,
-    validate_collection_name,
-    SecurityError,
 )
 
 logger = logging.getLogger(__name__)

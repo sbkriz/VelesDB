@@ -2,8 +2,6 @@
 
 import pytest
 import tempfile
-import os
-import json
 
 # Skip all tests if dependencies are not installed
 pytest.importorskip("velesdb")

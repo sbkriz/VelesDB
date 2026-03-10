@@ -12,11 +12,10 @@ import pytest
 import tempfile
 import shutil
 import numpy as np
-from pathlib import Path
 
 try:
     from llama_index.vector_stores.velesdb import VelesDBVectorStore
-    from llama_index.core.schema import TextNode, NodeWithScore
+    from llama_index.core.schema import TextNode
     from llama_index.core.vector_stores.types import VectorStoreQuery
     LLAMAINDEX_AVAILABLE = True
 except ImportError:

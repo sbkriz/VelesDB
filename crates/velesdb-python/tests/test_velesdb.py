@@ -7,7 +7,6 @@ Run with: pytest tests/test_velesdb.py -v
 import pytest
 import tempfile
 import shutil
-import os
 
 # Import will fail until the module is built with maturin
 # These tests are designed to run after: maturin develop

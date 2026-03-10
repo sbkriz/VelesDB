@@ -13,7 +13,7 @@ Interactive VelesQL REPL and CLI for VelesDB.
 - [Getting Started](#getting-started)
 - [REPL Mode](#repl-mode)
 - [CLI Subcommands](#cli-subcommands)
-- [VelesQL Examples](#velesql-examples)
+- [VelesQL Examples](#velesql-examples) (Vector, Graph, Hybrid, Sparse, Temporal, Aggregations, Joins, Set Operations)
 - [Session Settings](#session-settings)
 - [Output Formats](#output-formats)
 - [Shell Completions](#shell-completions)
@@ -182,9 +182,9 @@ All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 | `.graph degree <col> <node_id>` | Show in-degree, out-degree, and total degree |
 | `.graph traverse <col> <source> [--algo bfs\|dfs] [--depth N] [--limit N]` | BFS/DFS traversal from a source node |
 | `.graph neighbors <col> <node_id> [--direction in\|out\|both]` | List neighbors of a node (default: out) |
-| `.graph store-payload <col> <node_id> <json>` | Store a JSON payload on a graph node |
-| `.graph get-payload <col> <node_id>` | Retrieve the JSON payload of a graph node |
 | `.nodes <col> [page]` | Paginated browsing of all nodes referenced in edges (with payload if stored) |
+
+> **Note:** `store-payload` and `get-payload` are available as **CLI subcommands only** (`velesdb graph store-payload`, `velesdb graph get-payload`), not as REPL dot-commands.
 
 > **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 
@@ -535,25 +535,63 @@ LIMIT 5;
 
 > The distance metric is defined at collection creation time and applies to all searches on that collection. All five metrics are supported: Cosine, Euclidean, DotProduct, Hamming, Jaccard.
 
-### Hybrid Dense + Sparse (USING FUSION)
+### Multi-Vector Fusion (NEAR_FUSED)
 
 ```sql
 -- RRF fusion with multiple query vectors
 SELECT * FROM documents
-WHERE vector NEAR_FUSED [$v1, $v2, $v3]
-WITH (fusion = 'rrf', k = 60)
+WHERE vector NEAR_FUSED [$v1, $v2, $v3] USING FUSION 'rrf' (k = 60)
 LIMIT 10;
 
 -- Weighted fusion
 SELECT * FROM documents
-WHERE vector NEAR_FUSED [$query1, $query2]
-WITH (fusion = 'weighted', avg_weight = 0.6, max_weight = 0.3, hit_weight = 0.1)
+WHERE vector NEAR_FUSED [$query1, $query2] USING FUSION 'weighted'
 LIMIT 10;
 
--- Average or Maximum fusion
+-- Maximum fusion
 SELECT * FROM documents
-WHERE vector NEAR_FUSED $vectors
-WITH (fusion = 'average')
+WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'maximum'
+LIMIT 10;
+
+-- Default (RRF) -- USING FUSION clause is optional
+SELECT * FROM documents
+WHERE vector NEAR_FUSED [$v1, $v2]
+LIMIT 10;
+```
+
+### Hybrid Search (USING FUSION)
+
+The `USING FUSION` clause at query level combines results from multiple search strategies (vector + text, dense + sparse):
+
+```sql
+-- Dense vector + BM25 full-text combined with RRF
+SELECT * FROM documents
+WHERE vector NEAR $v AND content MATCH 'rust programming'
+USING FUSION(strategy = 'rrf', k = 60)
+LIMIT 10;
+
+-- Dense + sparse vector fusion with RSF
+SELECT * FROM documents
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+USING FUSION(strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3)
+LIMIT 10;
+
+-- Weighted fusion
+SELECT * FROM docs
+WHERE vector NEAR $v
+USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
+LIMIT 10;
+
+-- Maximum fusion (take best score)
+SELECT * FROM docs
+WHERE vector NEAR $v
+USING FUSION(strategy = 'maximum')
+LIMIT 10;
+
+-- Default USING FUSION (defaults to RRF)
+SELECT * FROM docs
+WHERE vector NEAR $v
+USING FUSION
 LIMIT 10;
 ```
 
@@ -566,6 +604,33 @@ WHERE similarity(doc.embedding, $question) > 0.8
 RETURN author.name, doc.title
 ORDER BY similarity() DESC
 LIMIT 5;
+
+-- Multi-hop traversal with depth range
+MATCH (user:User)-[:FOLLOWS*1..3]->(target:User)
+WHERE user.name = 'Alice'
+RETURN target.name, target.bio
+LIMIT 20;
+
+-- Undirected relationship (both directions)
+MATCH (a:Person)-[:KNOWS]-(b:Person)
+WHERE a.city = 'Paris'
+RETURN a.name, b.name
+LIMIT 10;
+
+-- Incoming relationships
+MATCH (doc:Document)<-[:AUTHORED_BY]-(author:Person)
+RETURN doc.title, author.name
+LIMIT 10;
+
+-- Node property filtering in pattern
+MATCH (doc:Document {status: 'published'})-[:HAS_TAG]->(tag:Tag)
+RETURN doc.title, tag.name
+LIMIT 20;
+
+-- Combined: graph + vector + metadata in WHERE
+SELECT * FROM articles
+WHERE category = 'tech' AND MATCH (d:Doc)-[:HAS_TAG]->(tag)
+LIMIT 10;
 ```
 
 ### Metadata-Only Collections
@@ -594,13 +659,84 @@ SELECT * FROM docs WHERE category = 'tech' LIMIT 10;
 SELECT * FROM docs WHERE price >= 50 AND price <= 200 LIMIT 10;
 SELECT * FROM docs WHERE title LIKE '%rust%' LIMIT 10;
 
+-- Case-insensitive pattern matching
+SELECT * FROM docs WHERE title ILIKE '%Rust%' LIMIT 10;
+
 -- IN, BETWEEN, NULL checks
 SELECT * FROM docs WHERE status IN ('published', 'featured') LIMIT 10;
 SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0 LIMIT 10;
 SELECT * FROM docs WHERE author IS NOT NULL LIMIT 10;
 
+-- NOT and OR operators
+SELECT * FROM docs WHERE NOT category = 'draft' LIMIT 10;
+SELECT * FROM docs WHERE category = 'tech' OR category = 'science' LIMIT 10;
+
+-- Nested field access (dot notation)
+SELECT metadata.source, profile.type FROM docs WHERE metadata.lang = 'en' LIMIT 10;
+
 -- Full-text search (BM25)
 SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
+```
+
+### Similarity Threshold
+
+```sql
+-- Return all documents above a similarity threshold (not just top-K)
+SELECT * FROM docs
+WHERE similarity(vector, $query) > 0.8
+LIMIT 20;
+
+-- Combine similarity threshold with metadata filters
+SELECT * FROM docs
+WHERE similarity(embedding, $ref) >= 0.9 AND category = 'tech'
+LIMIT 10;
+```
+
+### Sparse Vector Search
+
+```sql
+-- Sparse vector similarity search
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sparse_vector
+LIMIT 10;
+
+-- Sparse search with inline literal
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR {12: 0.8, 45: 0.3, 891: 0.1}
+LIMIT 10;
+
+-- Sparse search on a named index
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sv USING 'my_sparse_index'
+LIMIT 10;
+```
+
+### Temporal Queries
+
+```sql
+-- Filter by current time
+SELECT * FROM events WHERE timestamp > NOW() LIMIT 10;
+
+-- Last 7 days
+SELECT * FROM logs WHERE created_at > NOW() - INTERVAL '7 days' LIMIT 50;
+
+-- Last hour
+SELECT * FROM alerts WHERE fired_at > NOW() - INTERVAL '1 hour' LIMIT 20;
+
+-- Next week (scheduling)
+SELECT * FROM tasks WHERE due_date < NOW() + INTERVAL '7 days' LIMIT 20;
+
+-- Shorthand units: s, m, h, d, w, month
+SELECT * FROM metrics WHERE ts > NOW() - INTERVAL '30 min' LIMIT 100;
+```
+
+### DISTINCT
+
+```sql
+-- Deduplicate results
+SELECT DISTINCT category FROM documents LIMIT 50;
+
+SELECT DISTINCT status, priority FROM tasks LIMIT 20;
 ```
 
 ### Aggregations
@@ -612,6 +748,100 @@ GROUP BY category
 HAVING cnt > 5
 ORDER BY cnt DESC
 LIMIT 10;
+
+-- Multiple aggregates
+SELECT category, COUNT(*) as cnt, AVG(price) as avg_price, MIN(price), MAX(price)
+FROM products
+GROUP BY category
+LIMIT 20;
+
+-- SUM aggregate
+SELECT region, SUM(quantity) as total
+FROM orders
+GROUP BY region
+ORDER BY total DESC
+LIMIT 10;
+
+-- GROUP BY nested fields
+SELECT metadata.source, COUNT(*) as cnt
+FROM documents
+GROUP BY metadata.source
+LIMIT 20;
+```
+
+### ORDER BY
+
+```sql
+-- Multiple sort keys
+SELECT * FROM docs ORDER BY category ASC, created_at DESC LIMIT 20;
+
+-- Order by similarity score
+SELECT * FROM docs
+WHERE vector NEAR $v
+ORDER BY similarity(vector, $v) DESC
+LIMIT 10;
+```
+
+### OFFSET (Pagination)
+
+```sql
+-- Skip first 20 results, return next 10
+SELECT * FROM docs LIMIT 10 OFFSET 20;
+```
+
+### Set Operations
+
+```sql
+-- UNION: combine results from two queries
+SELECT id, title FROM news WHERE category = 'tech'
+UNION
+SELECT id, title FROM blog WHERE category = 'tech';
+
+-- UNION ALL: include duplicates
+SELECT id FROM collection_a
+UNION ALL
+SELECT id FROM collection_b;
+
+-- INTERSECT: rows in both queries
+SELECT id FROM favorites INTERSECT SELECT id FROM published;
+
+-- EXCEPT: rows in first but not second
+SELECT id FROM all_items EXCEPT SELECT id FROM archived;
+```
+
+### JOIN
+
+```sql
+-- INNER JOIN (default)
+SELECT o.id, c.name
+FROM orders AS o
+JOIN customers AS c ON o.customer_id = c.id
+LIMIT 20;
+
+-- LEFT JOIN
+SELECT d.title, a.name
+FROM documents AS d
+LEFT JOIN authors AS a ON d.author_id = a.id
+LIMIT 20;
+
+-- JOIN with vector search
+SELECT o.id, c.name
+FROM orders AS o
+JOIN customers AS c ON o.customer_id = c.id
+WHERE similarity(o.embedding, $q) > 0.7
+LIMIT 20;
+```
+
+> **Note:** `LEFT JOIN` and `RIGHT JOIN` are parsed but raise runtime errors. `INNER JOIN` is fully supported.
+
+### Subqueries
+
+```sql
+-- IN subquery
+SELECT * FROM docs WHERE id IN (SELECT doc_id FROM comments) LIMIT 10;
+
+-- Scalar subquery comparison
+SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 20;
 ```
 
 ### EXPLAIN
@@ -629,12 +859,17 @@ LIMIT 10;
 ```sql
 -- Train a product quantizer on a collection
 TRAIN QUANTIZER ON documents WITH (m = 8, k = 256);
+
+-- With oversampling and force retrain
+TRAIN QUANTIZER ON large_docs WITH (m = 16, k = 256, oversampling = 4, force = true);
 ```
 
 | Parameter | Description | Typical Values |
 |-----------|-------------|----------------|
 | `m` | Number of sub-spaces to divide the vector into. Higher = better recall, slower training. | 4, 8, 16, 32 |
 | `k` | Number of centroids per sub-space. Almost always 256 (one byte per sub-quantizer). | 256 |
+| `oversampling` | Oversampling factor for training data | 2, 4 |
+| `force` | Force retraining even if quantizer exists | `true`, `false` |
 
 ### WITH Clause (Per-Query Options)
 
@@ -644,14 +879,32 @@ WITH (mode = 'accurate');
 
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (ef_search = 512, timeout_ms = 5000, rerank = true);
+
+-- Quantization hints for dual-precision search
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (quantization = 'dual', oversampling = 4);
 ```
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect` |
+| `mode` | string | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` |
 | `ef_search` | integer | HNSW ef_search (16--4096) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
 | `rerank` | boolean | Enable reranking after quantized search |
+| `quantization` | string | Quantization precision: `f32`, `int8`, `dual`, `auto` |
+| `oversampling` | integer | Oversampling ratio for dual-precision mode (>= 1) |
+
+### Escaped Identifiers
+
+Use backticks or double-quotes to use reserved words as column names:
+
+```sql
+-- Backtick style
+SELECT `select`, `from`, `order` FROM docs LIMIT 10;
+
+-- Double-quote style (SQL standard)
+SELECT "select", "from", "order" FROM docs LIMIT 10;
+```
 
 ## Session Settings
 
@@ -659,7 +912,7 @@ Session settings control REPL search behavior. Set with `\set`, view with `\show
 
 | Setting | Range / Values | Default | Description |
 |---------|---------------|---------|-------------|
-| `mode` | `fast`, `balanced`, `accurate`, `perfect` | `balanced` | Search quality preset (sets `ef_search` automatically) |
+| `mode` | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` | `balanced` | Search quality preset (sets `ef_search` automatically) |
 | `ef_search` | 16--4096 (or `auto` from mode) | auto | HNSW graph exploration factor |
 | `timeout_ms` | >= 100 | 30000 | Query timeout in milliseconds. Also accepts the alias `timeout`. |
 | `rerank` | `true`/`false`, `on`/`off`, `1`/`0`, `yes`/`no` | `true` | Reranking after quantized search |

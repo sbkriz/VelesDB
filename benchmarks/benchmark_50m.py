@@ -27,7 +27,6 @@ License: ELv2
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -299,7 +298,7 @@ def benchmark_velesdb(config: BenchmarkConfig, vectors: np.ndarray, queries: np.
             "throughput_qps": len(latencies) / (sum(latencies) / 1000)
         }
         
-        print(f"\n   📊 VelesDB Results:")
+        print("\n   📊 VelesDB Results:")
         print(f"      p50: {results['latency_p50_ms']:.2f}ms")
         print(f"      p95: {results['latency_p95_ms']:.2f}ms")
         print(f"      p99: {results['latency_p99_ms']:.2f}ms")
@@ -343,7 +342,7 @@ def benchmark_qdrant(config: BenchmarkConfig, vectors: np.ndarray, queries: np.n
     collection_name = "benchmark_50m"
     
     # Create collection
-    print(f"   📦 Creating collection...")
+    print("   📦 Creating collection...")
     try:
         client.delete_collection(collection_name)
     except Exception:
@@ -427,7 +426,7 @@ def benchmark_qdrant(config: BenchmarkConfig, vectors: np.ndarray, queries: np.n
         "throughput_qps": len(latencies) / (sum(latencies) / 1000)
     }
     
-    print(f"\n   📊 Qdrant Results:")
+    print("\n   📊 Qdrant Results:")
     print(f"      p50: {results['latency_p50_ms']:.2f}ms")
     print(f"      p95: {results['latency_p95_ms']:.2f}ms")
     print(f"      p99: {results['latency_p99_ms']:.2f}ms")
@@ -449,8 +448,6 @@ def print_comparison(velesdb_results: dict, qdrant_results: dict):
     if not velesdb_results and not qdrant_results:
         print("No results to compare.")
         return
-    
-    headers = ["Metric", "VelesDB", "Qdrant", "Winner"]
     
     def format_row(metric: str, v_val: float, q_val: float, lower_is_better: bool = True):
         v_str = f"{v_val:.2f}" if v_val else "N/A"
@@ -537,7 +534,7 @@ Requirements:
         config.search_queries = 100
         print("🚀 Default mode: 1M vectors (use --full for 50M)")
     
-    print(f"\n📋 Configuration:")
+    print("\n📋 Configuration:")
     print(f"   Vectors: {config.vector_count:,}")
     print(f"   Dimension: {config.dimension}")
     print(f"   Queries: {config.search_queries}")

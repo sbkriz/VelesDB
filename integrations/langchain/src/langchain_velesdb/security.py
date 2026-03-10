@@ -6,8 +6,7 @@ Provides input validation, sanitization, and security constants.
 import math
 import os
 import re
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Security constants
 MAX_QUERY_LENGTH = 10_000  # Max characters for VelesQL queries
@@ -66,7 +65,7 @@ def validate_path(path: str) -> str:
     
     for pattern in suspicious_patterns:
         if re.search(pattern, path):
-            raise SecurityError(f"Suspicious path pattern detected")
+            raise SecurityError("Suspicious path pattern detected")
     
     return abs_path
 
