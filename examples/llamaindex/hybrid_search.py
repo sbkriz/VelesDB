@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import random
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import velesdb
 from llama_index.core.schema import NodeWithScore, TextNode

@@ -1,5 +1,7 @@
 //! Tests for `dual_precision` module
 
+#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
+
 use super::distance::SimdDistance;
 use super::dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 use crate::distance::DistanceMetric;

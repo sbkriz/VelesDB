@@ -12,11 +12,8 @@ import pytest
 import tempfile
 import shutil
 import numpy as np
-from pathlib import Path
-
 # Import will fail if maturin develop hasn't been run
 try:
-    import velesdb
     from velesdb import Database, FusionStrategy
     VELESDB_AVAILABLE = True
 except ImportError:

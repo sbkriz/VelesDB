@@ -18,7 +18,7 @@ Example:
     >>> nodes = retriever.retrieve("What is machine learning?")
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from dataclasses import dataclass, field
 import logging
 import requests
@@ -26,8 +26,6 @@ import requests
 from llamaindex_velesdb.security import (
     validate_url,
     validate_k,
-    validate_timeout,
-    SecurityError,
 )
 
 logger = logging.getLogger(__name__)

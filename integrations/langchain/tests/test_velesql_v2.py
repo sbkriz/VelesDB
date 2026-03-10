@@ -8,7 +8,6 @@ Run with: pytest tests/test_velesql_v2.py -v
 import tempfile
 import shutil
 from typing import List
-from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 

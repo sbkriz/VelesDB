@@ -29,11 +29,19 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     break;
                 }
 
-                let candidate_vec = &vectors[candidate_id];
+                // SAFETY: candidate_id is a valid node_id from the search results,
+                // which only contains IDs of successfully inserted nodes.
+                // - Condition 1: candidate_id < vectors.len().
+                // Reason: Neighbor selection after search — bounds check eliminated.
+                let candidate_vec = unsafe { vectors.get_unchecked(candidate_id) };
 
                 let is_diverse = selected.iter().all(|&selected_id| {
-                    let dist_to_selected =
-                        self.distance.distance(candidate_vec, &vectors[selected_id]);
+                    // SAFETY: selected_id is a valid node_id already confirmed above.
+                    // - Condition 1: selected_id < vectors.len().
+                    // Reason: Pairwise diversity check in neighbor selection.
+                    let dist_to_selected = self
+                        .distance
+                        .distance(candidate_vec, unsafe { vectors.get_unchecked(selected_id) });
                     self.alpha * candidate_dist <= dist_to_selected
                 });
 
@@ -71,11 +79,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         layer: usize,
         max_conn: usize,
     ) {
-        // Phase 1: Get current neighbors
-        let current_neighbors =
-            self.with_layers_read(|layers| layers[layer].get_neighbors(neighbor));
+        // Phase 1: Check neighbor count without cloning the full list (F-15)
+        let neighbor_count = self.with_layers_read(|layers| {
+            layers[layer]
+                .with_neighbors(neighbor, <[usize]>::len)
+                .unwrap_or(0)
+        });
 
-        if current_neighbors.len() < max_conn {
+        if neighbor_count < max_conn {
             // Simple case: append if absent under a single node write lock
             self.with_layers_read(|layers| {
                 let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
@@ -85,15 +96,29 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 });
             });
         } else {
-            // Pruning case: compute distances while holding vectors read lock only
-            let mut all_neighbors = current_neighbors;
+            // Pruning case: get current neighbors + new_node, compute distances
+            let mut all_neighbors =
+                self.with_layers_read(|layers| layers[layer].get_neighbors(neighbor));
             all_neighbors.push(new_node);
 
             let mut with_dist: Vec<(NodeId, f32)> = self.with_vectors_read(|vectors| {
-                let neighbor_vec = &vectors[neighbor];
+                // SAFETY: neighbor is a valid node_id from the graph's neighbor list.
+                // - Condition 1: neighbor < vectors.len().
+                // Reason: Distance computation for neighbor pruning.
+                let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
                 all_neighbors
                     .iter()
-                    .map(|&n| (n, self.distance.distance(neighbor_vec, &vectors[n])))
+                    .map(|&n| {
+                        // SAFETY: n is a valid node_id from the graph's neighbor list
+                        // or a just-inserted node_id.
+                        // - Condition 1: n < vectors.len().
+                        // Reason: Pairwise distance for pruning decision.
+                        (
+                            n,
+                            self.distance
+                                .distance(neighbor_vec, unsafe { vectors.get_unchecked(n) }),
+                        )
+                    })
                     .collect()
             });
 

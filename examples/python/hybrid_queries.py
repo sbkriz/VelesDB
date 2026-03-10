@@ -36,13 +36,13 @@ def example_1_contextual_rag():
     print("\n=== Use Case 1: Contextual RAG ===")
     
     # Mock data - replace with real VelesDB calls
-    documents = [
+    _ = [
         {"id": 1, "title": "Quantum Computing Basics", "category": "physics"},
         {"id": 2, "title": "Machine Learning Guide", "category": "ai"},
         {"id": 3, "title": "Neural Networks Deep Dive", "category": "ai"},
     ]
     
-    query_embedding = generate_embedding(42)
+    _ = generate_embedding(42)
     
     # VelesQL query (when parser supports execution)
     velesql = """

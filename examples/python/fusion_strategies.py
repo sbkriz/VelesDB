@@ -42,7 +42,7 @@ def example_rrf_fusion():
     print()
     
     # Generate multiple query variants (like MQG/HyDE)
-    queries = [
+    _ = [
         generate_embedding(42),   # Original query
         generate_embedding(43),   # Reformulation 1
         generate_embedding(44),   # Reformulation 2

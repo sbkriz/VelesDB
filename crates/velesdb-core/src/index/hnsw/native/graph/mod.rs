@@ -17,6 +17,7 @@ mod search;
 
 use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
+use crate::perf_optimizations::ContiguousVectors;
 use locking::{record_lock_acquire, record_lock_release, LockRank};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -29,8 +30,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 pub struct NativeHnsw<D: DistanceEngine> {
     /// Distance computation engine
     pub(in crate::index::hnsw::native) distance: D,
-    /// Vector data storage (node_id -> vector)
-    pub(in crate::index::hnsw::native) vectors: RwLock<Vec<Vec<f32>>>,
+    /// Contiguous vector storage (node_id -> vector slice).
+    /// `None` until the first vector is inserted (dimension is inferred lazily).
+    pub(in crate::index::hnsw::native) vectors: RwLock<Option<ContiguousVectors>>,
     /// Hierarchical layers (layer 0 = bottom, dense connections)
     pub(in crate::index::hnsw::native) layers: RwLock<Vec<Layer>>,
     /// Entry point for search (highest layer node)
@@ -55,6 +57,9 @@ pub struct NativeHnsw<D: DistanceEngine> {
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index.
+    ///
+    /// Vector storage is initialized lazily on the first `insert()` call,
+    /// using the dimension of the first inserted vector.
     #[must_use]
     pub fn new(
         distance: D,
@@ -62,22 +67,36 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         ef_construction: usize,
         max_elements: usize,
     ) -> Self {
-        let max_connections_0 = max_connections * 2;
-        let level_mult = 1.0 / (max_connections as f64).ln();
-        Self {
+        Self::build(
             distance,
-            vectors: RwLock::new(Vec::with_capacity(max_elements)),
-            layers: RwLock::new(vec![Layer::new(max_elements)]),
-            entry_point: RwLock::new(None),
-            max_layer: AtomicUsize::new(0),
-            count: AtomicUsize::new(0),
-            rng_state: AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
             max_connections,
-            max_connections_0,
             ef_construction,
-            level_mult,
-            alpha: 1.0,
-        }
+            max_elements,
+            1.0,
+            None,
+        )
+    }
+
+    /// Creates a new native HNSW index with a known vector dimension.
+    ///
+    /// Pre-allocates contiguous vector storage for cache-friendly access.
+    #[must_use]
+    pub fn new_with_dimension(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        dimension: usize,
+    ) -> Self {
+        let storage = ContiguousVectors::new(dimension, max_elements);
+        Self::build(
+            distance,
+            max_connections,
+            ef_construction,
+            max_elements,
+            1.0,
+            Some(storage),
+        )
     }
 
     /// Creates a new native HNSW index with VAMANA-style diversification.
@@ -89,11 +108,30 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         max_elements: usize,
         alpha: f32,
     ) -> Self {
+        Self::build(
+            distance,
+            max_connections,
+            ef_construction,
+            max_elements,
+            alpha,
+            None,
+        )
+    }
+
+    /// Internal constructor shared by all public constructors.
+    fn build(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        alpha: f32,
+        vectors: Option<ContiguousVectors>,
+    ) -> Self {
         let max_connections_0 = max_connections * 2;
         let level_mult = 1.0 / (max_connections as f64).ln();
         Self {
             distance,
-            vectors: RwLock::new(Vec::with_capacity(max_elements)),
+            vectors: RwLock::new(vectors),
             layers: RwLock::new(vec![Layer::new(max_elements)]),
             entry_point: RwLock::new(None),
             max_layer: AtomicUsize::new(0),
@@ -133,15 +171,25 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Executes a closure with a vectors read snapshot and tracked lock rank.
+    ///
+    /// The closure receives `&ContiguousVectors`; if storage is not yet
+    /// initialized (no vectors inserted), the closure is **not** called and
+    /// the supplied `default` value is returned instead.
     #[inline]
-    pub(in crate::index::hnsw::native) fn with_vectors_read<R>(
+    pub(in crate::index::hnsw) fn with_vectors_read<R>(
         &self,
-        f: impl FnOnce(&[Vec<f32>]) -> R,
-    ) -> R {
+        f: impl FnOnce(&ContiguousVectors) -> R,
+    ) -> R
+    where
+        R: Default,
+    {
         record_lock_acquire(LockRank::Vectors);
-        let vectors = self.vectors.read();
-        let result = f(&vectors);
-        drop(vectors);
+        let guard = self.vectors.read();
+        let result = match guard.as_ref() {
+            Some(v) => f(v),
+            None => R::default(),
+        };
+        drop(guard);
         record_lock_release(LockRank::Vectors);
         result
     }
@@ -157,6 +205,38 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let result = f(&layers);
         drop(layers);
         record_lock_release(LockRank::Layers);
+        result
+    }
+
+    /// Executes a closure with both vectors AND layers read locks held simultaneously.
+    ///
+    /// Acquires locks in correct rank order: vectors (10) → layers (20).
+    /// This avoids repeated lock acquire/release in tight search loops (F-03/F-04).
+    ///
+    /// If vector storage is not yet initialized, the closure is **not** called
+    /// and `R::default()` is returned.
+    #[inline]
+    pub(in crate::index::hnsw::native) fn with_vectors_and_layers_read<R>(
+        &self,
+        f: impl FnOnce(&ContiguousVectors, &[Layer]) -> R,
+    ) -> R
+    where
+        R: Default,
+    {
+        record_lock_acquire(LockRank::Vectors);
+        let vectors_guard = self.vectors.read();
+        let Some(vectors) = vectors_guard.as_ref() else {
+            drop(vectors_guard);
+            record_lock_release(LockRank::Vectors);
+            return R::default();
+        };
+        record_lock_acquire(LockRank::Layers);
+        let layers = self.layers.read();
+        let result = f(vectors, &layers);
+        drop(layers);
+        record_lock_release(LockRank::Layers);
+        drop(vectors_guard);
+        record_lock_release(LockRank::Vectors);
         result
     }
 

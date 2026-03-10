@@ -1,5 +1,7 @@
 //! Tests for `backend_adapter` module
 
+#![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
+
 use super::backend_adapter::*;
 use super::distance::SimdDistance;
 use super::graph::NativeHnsw;

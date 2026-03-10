@@ -4,7 +4,8 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
     clippy::float_cmp,
-    clippy::approx_constant
+    clippy::approx_constant,
+    deprecated // SimdDistance deprecated in favor of CachedSimdDistance
 )]
 //! Tests for distance computation engines.
 //!
@@ -647,4 +648,80 @@ fn test_cached_batch_distance_matches_single() {
             "batch vs single mismatch at {i}: batch={b}, single={s}"
         );
     }
+}
+
+// =========================================================================
+// F-22: Pre-normalization tests
+// =========================================================================
+
+#[test]
+fn test_prenormalized_cosine_uses_dot_product() {
+    let dim = 128;
+    let prenorm = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim);
+    assert!(prenorm.is_pre_normalized());
+
+    // Pre-normalize two vectors manually
+    let mut a = gen_vec(dim, 0.0);
+    let mut b = gen_vec(dim, 1.0);
+    crate::simd_native::normalize_inplace_native(&mut a);
+    crate::simd_native::normalize_inplace_native(&mut b);
+
+    // Prenormalized cosine distance should equal 1 - dot(a, b)
+    let prenorm_dist = prenorm.distance(&a, &b);
+    let dot = crate::simd_native::dot_product_native(&a, &b);
+    let expected = 1.0 - dot;
+    assert!(
+        (prenorm_dist - expected).abs() < 1e-6,
+        "prenorm cosine: got {prenorm_dist}, expected {expected}"
+    );
+}
+
+#[test]
+fn test_prenormalized_matches_standard_cosine_on_unit_vectors() {
+    let dim = 768;
+    let standard = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
+    let prenorm = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim);
+
+    let mut a = gen_vec(dim, 0.5);
+    let mut b = gen_vec(dim, 2.0);
+    crate::simd_native::normalize_inplace_native(&mut a);
+    crate::simd_native::normalize_inplace_native(&mut b);
+
+    let standard_dist = standard.distance(&a, &b);
+    let prenorm_dist = prenorm.distance(&a, &b);
+
+    // For unit vectors, both should give the same result
+    assert!(
+        (standard_dist - prenorm_dist).abs() < 1e-5,
+        "standard={standard_dist}, prenorm={prenorm_dist} should match on unit vectors"
+    );
+}
+
+#[test]
+fn test_prenormalized_flag_only_affects_cosine() {
+    let dim = 64;
+    let prenorm = CachedSimdDistance::new_prenormalized(DistanceMetric::Euclidean, dim);
+    let standard = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+
+    let a = gen_vec(dim, 0.0);
+    let b = gen_vec(dim, 1.0);
+
+    // Pre-normalization flag has no effect on non-Cosine metrics
+    assert_eq!(
+        prenorm.distance(&a, &b),
+        standard.distance(&a, &b),
+        "Pre-normalization must not affect Euclidean distance"
+    );
+}
+
+#[test]
+fn test_non_prenormalized_cosine_flag_is_false() {
+    let standard = CachedSimdDistance::new(DistanceMetric::Cosine, 128);
+    assert!(!standard.is_pre_normalized());
+}
+
+#[test]
+fn test_default_distance_engine_is_not_prenormalized() {
+    let cpu = CpuDistance::new(DistanceMetric::Cosine);
+    assert!(!cpu.is_pre_normalized());
 }

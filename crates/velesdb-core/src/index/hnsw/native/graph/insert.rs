@@ -9,11 +9,17 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Inserts a vector into the index.
     pub fn insert(&self, vector: Vec<f32>) -> NodeId {
         let node_id = {
-            let mut vectors = self.vectors.write();
-            let id = vectors.len();
-            vectors.push(vector);
+            let mut guard = self.vectors.write();
+            let storage = guard.get_or_insert_with(|| {
+                crate::perf_optimizations::ContiguousVectors::new(vector.len(), 16)
+            });
+            let id = storage.len();
+            storage.push(&vector);
             id
         };
+        // F-14: Use the original owned vector as the query — no clone needed
+        // because `push` copies from a slice reference.
+        let query = vector;
         let node_layer = self.random_layer();
         {
             let mut layers = self.layers.write();
@@ -29,8 +35,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         if let Some(ep) = entry_point {
             let mut current_ep = ep;
             let max_layer = self.max_layer.load(Ordering::Relaxed);
-
-            let query = self.with_vectors_read(|vectors| vectors[node_id].clone());
 
             for layer_idx in (node_layer + 1..=max_layer).rev() {
                 current_ep = self.search_layer_single(&query, current_ep, layer_idx);

@@ -6,7 +6,6 @@ for better knowledge graph construction.
 
 from dataclasses import dataclass
 from typing import List, Optional, Callable
-import re
 
 
 @dataclass

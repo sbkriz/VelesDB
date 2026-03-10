@@ -141,7 +141,7 @@ def test_velesdb_rest(data: np.ndarray, queries: np.ndarray, ground_truth: List[
         p50_latency = np.percentile(latencies, 50) * 1000
         p99_latency = np.percentile(latencies, 99) * 1000
         
-        print(f"\n📊 VelesDB REST Results:")
+        print("\n📊 VelesDB REST Results:")
         print(f"  Recall@{top_k}: {avg_recall:.1f}%")
         print(f"  Latency P50: {p50_latency:.2f}ms")
         print(f"  Latency P99: {p99_latency:.2f}ms")
@@ -254,7 +254,7 @@ def test_pgvector(data: np.ndarray, queries: np.ndarray, ground_truth: List[List
         p50_latency = np.percentile(latencies, 50) * 1000
         p99_latency = np.percentile(latencies, 99) * 1000
         
-        print(f"\n📊 pgvector Results:")
+        print("\n📊 pgvector Results:")
         print(f"  Recall@{top_k}: {avg_recall:.1f}%")
         print(f"  Latency P50: {p50_latency:.2f}ms")
         print(f"  Latency P99: {p99_latency:.2f}ms")

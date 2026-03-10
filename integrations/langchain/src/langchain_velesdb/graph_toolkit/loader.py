@@ -3,13 +3,14 @@
 Handles conversion from extracted data to VelesDB graph storage format.
 """
 
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from typing import List, Optional, Dict, TYPE_CHECKING
 import hashlib
 import logging
 import velesdb
 
 if TYPE_CHECKING:
     from velesdb import Database, Collection
+    from langchain_velesdb.graph_toolkit.extractor import ExtractionResult
 
 from langchain_velesdb.graph_toolkit.extractor import Entity, Relation
 

@@ -46,8 +46,11 @@ mod quantization;
 mod search;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
+#[allow(deprecated)]
+// F-06: SimdDistance/NativeSimdDistance are deprecated but re-exported for compat
 pub use distance::{
-    CachedSimdDistance, CpuDistance, DistanceEngine, NativeSimdDistance, SimdDistance,
+    AdaptiveSimdDistance, CachedSimdDistance, CpuDistance, DistanceEngine, NativeSimdDistance,
+    SimdDistance,
 };
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::NativeHnsw;

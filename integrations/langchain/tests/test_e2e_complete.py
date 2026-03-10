@@ -12,8 +12,6 @@ import pytest
 import tempfile
 import shutil
 import numpy as np
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 try:
     from langchain_velesdb import VelesDBVectorStore
@@ -153,8 +151,9 @@ class TestVectorStoreE2E:
         temp_vectorstore.delete([ids[0]])
         
         # Search should not return deleted document
-        results = temp_vectorstore.similarity_search("Document 1", k=3)
-        # Verify it's either not in results or results are fewer
+        remaining = temp_vectorstore.similarity_search("Document 1", k=3)
+        # Verify deleted document is not in results
+        assert len(remaining) <= 3
 
 
 class TestDistanceMetricsE2E:

@@ -170,7 +170,7 @@ def bench_full_api_search(iterations: int) -> BenchmarkResult:
     client.close()
     
     # Print sub-metrics
-    print(f"\n   📈 Sub-metrics from API response:")
+    print("\n   📈 Sub-metrics from API response:")
     print(f"      Embedding: mean={statistics.mean(embedding_times):.2f}ms, stdev={statistics.stdev(embedding_times):.2f}ms")
     print(f"      VelesDB:   mean={statistics.mean(search_times):.2f}ms, stdev={statistics.stdev(search_times):.2f}ms")
     

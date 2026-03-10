@@ -193,24 +193,31 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
         // Dump vectors
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let vectors = self.vectors.read();
+        let vectors_guard = self.vectors.read();
         let mut writer = BufWriter::new(File::create(&vectors_path)?);
 
         // Write header: version, count, dimension
         let version: u32 = 1;
-        let count = vectors.len() as u64;
         // SAFETY (EPIC-067/US-002): Vector dimensions are always < 65536 in practice
+        // and vector count fits u64.
         #[allow(clippy::cast_possible_truncation)]
-        let dimension = vectors.first().map_or(0, Vec::len) as u32;
+        let (count, dimension): (u64, u32) = match vectors_guard.as_ref() {
+            Some(v) => (v.len() as u64, v.dimension() as u32),
+            None => (0, 0),
+        };
 
         writer.write_all(&version.to_le_bytes())?;
         writer.write_all(&count.to_le_bytes())?;
         writer.write_all(&dimension.to_le_bytes())?;
 
-        // Write vectors
-        for vec in vectors.iter() {
-            for &val in vec {
-                writer.write_all(&val.to_le_bytes())?;
+        // Write vectors from contiguous storage (cold path — safe access preferred)
+        if let Some(vectors) = vectors_guard.as_ref() {
+            for i in 0..vectors.len() {
+                if let Some(vec) = vectors.get(i) {
+                    for &val in vec {
+                        writer.write_all(&val.to_le_bytes())?;
+                    }
+                }
             }
         }
         writer.flush()?;
@@ -289,11 +296,18 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
         let level_mult = 1.0 / (graph.max_connections as f64).ln();
 
+        // M-2: If no vectors were loaded, entry_point should be None
+        let entry_point = if count > 0 {
+            Some(graph.entry_point)
+        } else {
+            None
+        };
+
         Ok(Self {
             distance,
             vectors: parking_lot::RwLock::new(vectors),
             layers: parking_lot::RwLock::new(graph.layers),
-            entry_point: parking_lot::RwLock::new(Some(graph.entry_point)),
+            entry_point: parking_lot::RwLock::new(entry_point),
             max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
             count: std::sync::atomic::AtomicUsize::new(count),
             rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
@@ -305,7 +319,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         })
     }
 
-    fn load_vectors_file(path: &Path) -> std::io::Result<(Vec<Vec<f32>>, usize)> {
+    fn load_vectors_file(
+        path: &Path,
+    ) -> std::io::Result<(Option<crate::perf_optimizations::ContiguousVectors>, usize)> {
         let mut reader = BufReader::new(File::open(path)?);
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
@@ -324,16 +340,21 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         reader.read_exact(&mut buf4)?;
         let dimension = u32::from_le_bytes(buf4) as usize;
 
-        let mut vectors = Vec::with_capacity(count);
-        for _ in 0..count {
-            let mut vec = Vec::with_capacity(dimension);
-            for _ in 0..dimension {
-                reader.read_exact(&mut buf4)?;
-                vec.push(f32::from_le_bytes(buf4));
-            }
-            vectors.push(vec);
+        if count == 0 || dimension == 0 {
+            return Ok((None, 0));
         }
-        Ok((vectors, count))
+
+        let mut storage =
+            crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16));
+        let mut buf_vec = vec![0f32; dimension];
+        for _ in 0..count {
+            for slot in &mut buf_vec {
+                reader.read_exact(&mut buf4)?;
+                *slot = f32::from_le_bytes(buf4);
+            }
+            storage.push(&buf_vec);
+        }
+        Ok((Some(storage), count))
     }
 
     fn load_graph_file(path: &Path) -> std::io::Result<LoadedGraph> {
