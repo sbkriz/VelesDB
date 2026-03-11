@@ -30,6 +30,7 @@ jobs:
           - name: Linux all features
             os: ubuntu-latest
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
+          # velesdb-wasm is wasm32-only; it is checked in the wasm-no-default job below.
           - name: Linux no default features
             os: ubuntu-latest
             command: cargo check -p velesdb-core --no-default-features
