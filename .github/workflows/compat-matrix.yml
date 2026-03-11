@@ -32,7 +32,7 @@ jobs:
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
           - name: Linux no default features
             os: ubuntu-latest
-            command: cargo check -p velesdb-core -p velesdb-wasm --no-default-features
+            command: cargo check -p velesdb-core --no-default-features
           - name: Windows all features
             os: windows-latest
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
@@ -74,8 +74,8 @@ jobs:
         with:
           shared-key: "velesdb-compat-wasm"
 
-      - name: Check velesdb-core on wasm32 no-default-features
-        run: cargo check -p velesdb-core --target wasm32-unknown-unknown --no-default-features
+      - name: Check velesdb-core and velesdb-wasm on wasm32 no-default-features
+        run: cargo check -p velesdb-core -p velesdb-wasm --target wasm32-unknown-unknown --no-default-features
 
   loom-check:
     name: Loom check (nightly optional)
