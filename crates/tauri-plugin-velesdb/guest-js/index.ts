@@ -627,8 +627,8 @@ export interface GetEdgesRequest {
 export interface TraverseGraphRequest {
   collection: string;
   source: number;
-  max_depth: number;
-  rel_types?: string[];
+  maxDepth: number;
+  relTypes?: string[];
   limit: number;
   algorithm: 'bfs' | 'dfs';
 }
@@ -636,7 +636,7 @@ export interface TraverseGraphRequest {
 /** Request to get the degree of a node. */
 export interface GetNodeDegreeRequest {
   collection: string;
-  node_id: number;
+  nodeId: number;
 }
 
 /** A single edge in the knowledge graph. */
@@ -650,16 +650,16 @@ export interface EdgeOutput {
 
 /** A single traversal result node. */
 export interface TraversalOutput {
-  target_id: number;
+  targetId: number;
   depth: number;
   path: number[];
 }
 
 /** In/out degree of a graph node. */
 export interface NodeDegreeOutput {
-  node_id: number;
-  in_degree: number;
-  out_degree: number;
+  nodeId: number;
+  inDegree: number;
+  outDegree: number;
 }
 
 /**
@@ -699,14 +699,14 @@ export async function getEdges(request: GetEdgesRequest): Promise<EdgeOutput[]> 
 /**
  * Traverses the knowledge graph from a source node.
  *
- * @param request - Traversal parameters (source, max depth, algorithm, optional rel_types filter)
+ * @param request - Traversal parameters (source, maxDepth, algorithm, optional relTypes filter)
  * @returns Array of reachable nodes with their depth and path
  * @throws {CommandError} If the collection doesn't exist
  *
  * @example
  * ```typescript
  * const result = await traverseGraph({
- *   collection: 'social', source: 100, algorithm: 'bfs', max_depth: 3, limit: 50
+ *   collection: 'social', source: 100, algorithm: 'bfs', maxDepth: 3, limit: 50
  * });
  * ```
  */
@@ -718,13 +718,13 @@ export async function traverseGraph(request: TraverseGraphRequest): Promise<Trav
  * Gets the in-degree and out-degree of a graph node.
  *
  * @param request - Collection name and node ID
- * @returns Node degree information (in_degree, out_degree)
+ * @returns Node degree information (inDegree, outDegree)
  * @throws {CommandError} If the collection doesn't exist
  *
  * @example
  * ```typescript
- * const degree = await getNodeDegree({ collection: 'social', node_id: 100 });
- * console.log(`In: ${degree.in_degree}, Out: ${degree.out_degree}`);
+ * const degree = await getNodeDegree({ collection: 'social', nodeId: 100 });
+ * console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
  * ```
  */
 export async function getNodeDegree(request: GetNodeDegreeRequest): Promise<NodeDegreeOutput> {
