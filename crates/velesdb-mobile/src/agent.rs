@@ -2,7 +2,7 @@
 //!
 //! Provides semantic memory for AI agents on iOS/Android.
 
-use super::{VelesCollection, VelesDatabase, VelesError};
+use super::{DistanceMetric, VelesCollection, VelesDatabase, VelesError, VelesPoint};
 
 /// Result from semantic memory query.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -28,7 +28,7 @@ pub struct SemanticResult {
 /// ```
 #[derive(uniffi::Object)]
 pub struct VelesSemanticMemory {
-    collection: VelesCollection,
+    collection: std::sync::Arc<VelesCollection>,
     contents: std::sync::RwLock<std::collections::HashMap<u64, String>>,
 }
 
@@ -40,9 +40,19 @@ impl VelesSemanticMemory {
         let collection_name = "_semantic_memory";
 
         // Try to get existing or create new collection
-        let collection = match db.get_collection(collection_name.to_string()) {
-            Ok(coll) => coll,
-            Err(_) => db.create_collection(collection_name.to_string(), dimension, "cosine".to_string())?,
+        let collection = match db.get_collection(collection_name.to_string())? {
+            Some(coll) => coll,
+            None => {
+                db.create_collection(
+                    collection_name.to_string(),
+                    dimension,
+                    DistanceMetric::Cosine,
+                )?;
+                db.get_collection(collection_name.to_string())?
+                    .ok_or(VelesError::Database {
+                        message: "Failed to retrieve collection after creation".to_string(),
+                    })?
+            }
         };
 
         Ok(Self {
@@ -53,7 +63,12 @@ impl VelesSemanticMemory {
 
     /// Stores a knowledge fact with its embedding vector.
     pub fn store(&self, id: u64, content: String, embedding: Vec<f32>) -> Result<(), VelesError> {
-        self.collection.upsert(id, embedding, None)?;
+        let point = VelesPoint {
+            id,
+            vector: embedding,
+            payload: None,
+        };
+        self.collection.upsert(point)?;
         self.contents
             .write()
             .map_err(|e| VelesError::Database {
@@ -96,7 +111,7 @@ impl VelesSemanticMemory {
 
     /// Removes a knowledge fact by ID.
     pub fn remove(&self, id: u64) -> Result<bool, VelesError> {
-        self.collection.delete(vec![id])?;
+        self.collection.delete(id)?;
         let mut contents = self.contents.write().map_err(|e| VelesError::Database {
             message: format!("Lock error: {e}"),
         })?;
@@ -104,17 +119,32 @@ impl VelesSemanticMemory {
     }
 
     /// Clears all knowledge facts.
+    ///
+    /// The in-memory content map is cleared eagerly before issuing deletes
+    /// to the underlying collection. This avoids a desync if a delete fails
+    /// mid-loop — the map stays consistent at the cost of possibly leaving
+    /// orphaned vectors in the collection (acceptable for an in-memory-only
+    /// content map).
     pub fn clear(&self) -> Result<(), VelesError> {
-        let mut contents = self.contents.write().map_err(|e| VelesError::Database {
-            message: format!("Lock error: {e}"),
-        })?;
+        let ids: Vec<u64> = {
+            let contents = self.contents.read().map_err(|e| VelesError::Database {
+                message: format!("Lock error: {e}"),
+            })?;
+            contents.keys().copied().collect()
+        };
 
-        // Get all IDs and delete them
-        let ids: Vec<u64> = contents.keys().copied().collect();
-        if !ids.is_empty() {
-            self.collection.delete(ids)?;
+        // Clear the in-memory map first to avoid desync on partial delete failure
+        {
+            let mut contents = self.contents.write().map_err(|e| VelesError::Database {
+                message: format!("Lock error: {e}"),
+            })?;
+            contents.clear();
         }
-        contents.clear();
+
+        // Delete from collection — failures are non-fatal since the map is already cleared
+        for id in ids {
+            let _ = self.collection.delete(id);
+        }
         Ok(())
     }
 
@@ -129,7 +159,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_db() -> (TempDir, VelesDatabase) {
+    fn create_test_db() -> (TempDir, std::sync::Arc<VelesDatabase>) {
         let dir = TempDir::new().unwrap();
         let db = VelesDatabase::open(dir.path().to_string_lossy().to_string()).unwrap();
         (dir, db)

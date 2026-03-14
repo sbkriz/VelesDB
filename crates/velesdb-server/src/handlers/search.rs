@@ -385,9 +385,9 @@ pub async fn batch_search(
         }
     }
 
-    let top_k = req.searches.first().map_or(10, |s| s.top_k);
+    let max_top_k = req.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
-    let all_results = match collection.search_batch_with_filters(&queries, top_k, &filters) {
+    let all_results = match collection.search_batch_with_filters(&queries, max_top_k, &filters) {
         Ok(batch_results) => {
             let empty_count = batch_results
                 .iter()
@@ -396,11 +396,18 @@ pub async fn batch_search(
             for _ in 0..empty_count {
                 state.onboarding_metrics.record_empty_search_results();
             }
+            debug_assert_eq!(
+                batch_results.len(),
+                req.searches.len(),
+                "search_batch_with_filters must return one result-vec per query"
+            );
             batch_results
                 .into_iter()
-                .map(|results| SearchResponse {
+                .zip(req.searches.iter())
+                .map(|(results, search)| SearchResponse {
                     results: results
                         .into_iter()
+                        .take(search.top_k)
                         .map(|r| SearchResultResponse {
                             id: r.point.id,
                             score: r.score,

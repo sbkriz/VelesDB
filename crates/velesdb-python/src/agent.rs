@@ -55,13 +55,10 @@ impl AgentMemory {
     pub fn new(db: &crate::Database, dimension: Option<usize>) -> PyResult<Self> {
         let dim = dimension.unwrap_or(DEFAULT_DIMENSION);
 
-        // Open the database once and wrap in Arc for shared ownership.
-        // PyO3 classes cannot hold lifetime parameters, so we open an owned
-        // instance here rather than borrowing from the Python-side Database.
-        let owned_db = Arc::new(
-            CoreDatabase::open(db.path())
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {e}")))?,
-        );
+        // PyO3 classes cannot hold lifetime parameters, so we open an
+        // independent Database handle from the same path. Each handle has its
+        // own in-memory registries but reads/writes the same on-disk data.
+        let owned_db = db.open_shared().map_err(PyRuntimeError::new_err)?;
 
         // Initialize memory subsystems — this creates the underlying collections
         // if they do not already exist.
