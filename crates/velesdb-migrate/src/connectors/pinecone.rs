@@ -33,6 +33,23 @@ impl PineconeConnector {
             .header("Api-Key", &self.config.api_key)
             .header("Content-Type", "application/json")
     }
+
+    /// Control-plane base URL (index describe, etc.).
+    fn control_plane_url(&self) -> String {
+        self.config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://api.pinecone.io".to_string())
+    }
+
+    /// Data-plane base URL (list, fetch, stats).
+    fn data_plane_url(&self) -> String {
+        if let Some(base) = &self.config.base_url {
+            return base.clone();
+        }
+        let host = self.host.as_deref().unwrap_or("localhost");
+        format!("https://{host}")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,7 +137,8 @@ impl SourceConnector for PineconeConnector {
         info!("Connecting to Pinecone index: {}", self.config.index);
 
         // Get index description to find the host
-        let url = format!("https://api.pinecone.io/indexes/{}", self.config.index);
+        let base = self.control_plane_url();
+        let url = format!("{base}/indexes/{}", self.config.index);
 
         let resp = self.api_request(reqwest::Method::GET, &url).send().await?;
 
@@ -150,12 +168,13 @@ impl SourceConnector for PineconeConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        let host = self
+        let _host = self
             .host
             .as_ref()
             .ok_or_else(|| Error::SourceConnection("Not connected to Pinecone".to_string()))?;
 
-        let url = format!("https://{host}/describe_index_stats");
+        let base = self.data_plane_url();
+        let url = format!("{base}/describe_index_stats");
         let resp = self
             .api_request(reqwest::Method::POST, &url)
             .json(&serde_json::json!({}))
@@ -195,7 +214,7 @@ impl SourceConnector for PineconeConnector {
         offset: Option<serde_json::Value>,
         batch_size: usize,
     ) -> Result<ExtractedBatch> {
-        let host = self
+        let _host = self
             .host
             .as_ref()
             .ok_or_else(|| Error::SourceConnection("Not connected to Pinecone".to_string()))?;
@@ -203,7 +222,8 @@ impl SourceConnector for PineconeConnector {
         let pagination_token = offset.and_then(|v| v.as_str().map(String::from));
 
         // First, list vector IDs
-        let list_url = format!("https://{host}/vectors/list");
+        let base = self.data_plane_url();
+        let list_url = format!("{base}/vectors/list");
         let _list_req = ListRequest {
             namespace: self.config.namespace.clone(),
             limit: batch_size,
@@ -244,7 +264,7 @@ impl SourceConnector for PineconeConnector {
         }
 
         // Fetch full vectors
-        let fetch_url = format!("https://{host}/vectors/fetch");
+        let fetch_url = format!("{base}/vectors/fetch");
         let resp = self
             .api_request(reqwest::Method::GET, &fetch_url)
             .query(&[("ids", ids.join(","))])
@@ -315,6 +335,7 @@ mod tests {
             environment: "us-east-1".to_string(),
             index: "test-index".to_string(),
             namespace: None,
+            base_url: None,
         };
 
         let connector = PineconeConnector::new(config);
