@@ -26,9 +26,9 @@ This restriction includes, without limitation:
 
 - offering the Software as a cloud service, hosted service, managed service, or database-as-a-service (DBaaS),
 - operating the Software for third parties, including as a managed service provider (MSP), outsourcer, consultant, hosting provider, or service provider, even if provided to a single customer,
-- exposing the Software's query, administration, indexing, ingestion, storage, or management capabilities (or any substantially similar capabilities) to third parties through any interface, including but not limited to: APIs, SDKs, web interfaces, command lines, gateways, middleware, service layers, application wrappers, proxy layers, or any other programmatic or interactive mechanism.
+- exposing the Software's query, administration, indexing, ingestion, storage, graph traversal, knowledge graph, columnar filtering, or management capabilities (or any substantially similar capabilities) to third parties through any interface, including but not limited to: APIs, SDKs, web interfaces, command lines, gateways, middleware, service layers, application wrappers, proxy layers, or any other programmatic or interactive mechanism.
 
-If third parties can store data in, query, manage collections or indexes, administer schemas, or otherwise use the Software as a database, vector database, search engine, or query engine — whether directly or through any intermediary layer — this constitutes a Hosted or Managed Service and requires a separate commercial license from the Licensor.
+If third parties can store data in, query, manage collections or indexes, traverse or manage graph nodes and edges, filter structured data, administer schemas, or otherwise use the Software as a database, vector database, graph database, knowledge graph engine, columnar store, search engine, or query engine — whether directly or through any intermediary layer — this constitutes a Hosted or Managed Service and requires a separate commercial license from the Licensor.
 
 ### 2) No Competitive Offering
 
@@ -36,9 +36,11 @@ You may not use the Software to build, sell, offer, operate, or otherwise make c
 
 - a database,
 - a vector database,
+- a graph database or knowledge graph engine,
+- a columnar store or analytical engine,
 - a search engine,
 - a query engine, or
-- a hybrid search or retrieval system.
+- a hybrid search, retrieval, or multi-model data system.
 
 This restriction applies whether the product is offered as software, as a service, or as a component of a larger offering, and regardless of whether the Software's code is modified.
 
@@ -94,7 +96,11 @@ For example, it is permitted to use the Software internally to power features su
 - retrieval-augmented generation (RAG),
 - ranking and recommendations,
 - document indexing and similarity matching,
+- knowledge graph traversal and relationship discovery,
+- structured data filtering and analytics,
 - any other feature where end users receive only the results produced by your application and do not receive access to the Software itself.
+
+**Embedded and local-first use.** The Software is designed to run as an embedded database (in-process, WASM, mobile, desktop, or server). Using the Software in embedded mode within your own application — including in browser-based (WASM), mobile (iOS/Android), desktop (Tauri), or server-side deployments — is expressly permitted under this license, provided the Software serves only as an internal component and end users do not receive direct access to the Software's database capabilities.
 
 ## Business Model Clarification
 
@@ -169,11 +175,11 @@ The **"Author"** is Julien Lange.
 
 **"Use"** means anything you do with the Software requiring one of your licenses.
 
-**"Hosted or Managed Service"** means any service, platform, or offering where You (or a third party acting on Your behalf) host, operate, or make available the Software for third parties, and those third parties are provided with access — directly or indirectly — to a Substantial Set of the Software's features or functionality. Access includes, without limitation, access through any of the following: APIs, SDKs, web interfaces, command lines, gateways, middleware, service layers, application wrappers, proxy layers, webhooks, message queues, or any other programmatic or interactive mechanism that enables third parties to create, manage, query, administer, index, ingest, store, or otherwise use the Software's core database capabilities.
+**"Hosted or Managed Service"** means any service, platform, or offering where You (or a third party acting on Your behalf) host, operate, or make available the Software for third parties, and those third parties are provided with access — directly or indirectly — to a Substantial Set of the Software's features or functionality. Access includes, without limitation, access through any of the following: APIs, SDKs, web interfaces, command lines, gateways, middleware, service layers, application wrappers, proxy layers, webhooks, message queues, or any other programmatic or interactive mechanism that enables third parties to create, manage, query, administer, index, ingest, store, traverse graphs, manage knowledge graph nodes or edges, filter structured data, or otherwise use the Software's core database, vector, graph, columnar, or hybrid capabilities.
 
-**"Substantial Set of features or functionality"** means access to features or functionality that, taken together, would reasonably allow a third party to use the Software as a general-purpose database, vector database, search engine, query engine, or hybrid search system, or as a replacement for the Software, rather than merely receiving the results of your product's or application's features.
+**"Substantial Set of features or functionality"** means access to features or functionality that, taken together, would reasonably allow a third party to use the Software as a general-purpose database, vector database, graph database, knowledge graph engine, columnar store, search engine, query engine, or hybrid/multi-model data system, or as a replacement for the Software, rather than merely receiving the results of your product's or application's features.
 
-**"Substantially Similar"** means a product or service that provides database, vector database, search engine, query engine, or hybrid search capabilities that overlap in purpose and function with the core capabilities of the Software to a degree that would reasonably be considered competitive. A product is not Substantially Similar merely because it uses the Software internally as a component.
+**"Substantially Similar"** means a product or service that provides database, vector database, graph database, knowledge graph, columnar store, search engine, query engine, hybrid search, or multi-model data capabilities that overlap in purpose and function with the core capabilities of the Software to a degree that would reasonably be considered competitive. A product is not Substantially Similar merely because it uses the Software internally as a component.
 
 **"Competitive Offering"** means any product or service that is Substantially Similar to the Software and is made commercially available to third parties, whether as software, as a service, or as a component of a larger offering.
 
@@ -252,7 +258,7 @@ Redistribution does not grant recipients any right to provide the Software as a 
 
 ### 13) Can I build a competing database product using VelesDB Core?
 
-**No.** The No Competitive Offering clause prohibits using the Software to build, sell, or offer a product that competes with VelesDB as a database, vector database, search engine, or query engine.
+**No.** The No Competitive Offering clause prohibits using the Software to build, sell, or offer a product that competes with VelesDB as a database, vector database, graph database, columnar store, search engine, or query engine.
 
 However, using VelesDB Core as an internal component of a non-competing product (e.g., a CRM, an e-commerce platform, a content management system) is permitted.
 
@@ -287,3 +293,19 @@ Contact Wiscale France (contact@wiscale.fr) to discuss licensing for hosted/mana
 | **VelesDB Core** | This license (source-available) | Internal use, embedding, SaaS backend, development, testing |
 | **VelesDB Enterprise** | Commercial license | Advanced features, support, hosted/managed services, competitive offerings |
 | **VelesDB Cloud** | Proprietary SaaS | Fully managed database service operated by Wiscale France |
+
+### 21) Can I use VelesDB's graph engine and knowledge graph features in my product?
+
+**Yes.** You can use the vector, graph, columnar, and hybrid search features internally within your product. The restriction applies only if you expose those capabilities directly to third parties as a database service, or if you build a competing graph/vector/search product.
+
+### 22) Can I embed VelesDB in a browser (WASM), mobile app, or Tauri desktop app?
+
+**Yes.** Embedded and local-first use is expressly permitted. VelesDB is designed to run in-process (WASM, iOS, Android, Tauri, server). As long as the Software serves as an internal component of your application, this is a permitted use.
+
+### 23) Does the license cover the premium features (Hybrid Search, RBAC, SSO, etc.)?
+
+The VelesDB Core license covers VelesDB Core. Premium features (such as RBAC, SSO, GPU Acceleration, Audit Logging, Multi-Tenancy, Encryption at Rest, and Snapshots) are available under VelesDB Enterprise with a separate commercial license. You may not circumvent the licensing mechanism that enforces premium features.
+
+### 24) Can I use VelesDB Core's VelesQL query language in my product?
+
+**Yes.** Using VelesQL to query data internally within your product is permitted. However, exposing a general-purpose VelesQL endpoint to third parties (allowing them to run arbitrary queries) would constitute providing access to a Substantial Set of the Software's capabilities and is not permitted without a commercial license.
