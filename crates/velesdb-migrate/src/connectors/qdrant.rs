@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::QdrantConfig;
@@ -281,14 +281,23 @@ impl SourceConnector for QdrantConnector {
             .result
             .points
             .into_iter()
-            .map(|p| {
+            .filter_map(|p| {
                 let sparse = p.vector.extract_sparse();
-                ExtractedPoint {
+                let dense = p.vector.into_dense();
+                if dense.is_empty() {
+                    warn!(
+                        point_id = %p.id,
+                        "Skipping point with no dense vector \
+                         (sparse-only points are not supported)"
+                    );
+                    return None;
+                }
+                Some(ExtractedPoint {
                     id: p.id.to_string(),
-                    vector: p.vector.into_dense(),
+                    vector: dense,
                     payload: p.payload.unwrap_or_default(),
                     sparse_vector: sparse,
-                }
+                })
             })
             .collect();
 
@@ -397,5 +406,21 @@ mod tests {
         )]));
 
         assert!(named.extract_sparse().is_none());
+    }
+
+    #[test]
+    fn test_qdrant_sparse_only_into_dense_is_empty() {
+        let json = r#"{"sparse":{"indices":[1,2],"values":[0.5,0.3]}}"#;
+
+        let map: HashMap<String, QdrantNamedVectorValue> =
+            serde_json::from_str(json).expect("valid JSON");
+        let v = QdrantVector::Named(map);
+        assert!(v.extract_sparse().is_some());
+
+        // `into_dense` consumes, so test separately
+        let map2: HashMap<String, QdrantNamedVectorValue> =
+            serde_json::from_str(json).expect("valid JSON");
+        let v2 = QdrantVector::Named(map2);
+        assert!(v2.into_dense().is_empty());
     }
 }
