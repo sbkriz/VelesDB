@@ -110,7 +110,7 @@ pub mod perf_optimizations;
 #[cfg(test)]
 mod perf_optimizations_tests;
 pub mod point;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod point_tests;
 pub mod quantization;
 #[cfg(test)]
