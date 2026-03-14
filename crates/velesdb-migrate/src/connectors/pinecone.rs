@@ -94,11 +94,20 @@ struct FetchResponse {
     vectors: HashMap<String, PineconeVector>,
 }
 
+/// Pinecone sparse vector format from REST API.
+#[derive(Debug, Deserialize)]
+struct PineconeSparseValues {
+    indices: Vec<u32>,
+    values: Vec<f32>,
+}
+
 #[derive(Debug, Deserialize)]
 struct PineconeVector {
     id: String,
     values: Vec<f32>,
     metadata: Option<HashMap<String, serde_json::Value>>,
+    #[serde(rename = "sparseValues", default)]
+    sparse_values: Option<PineconeSparseValues>,
 }
 
 #[async_trait]
@@ -255,11 +264,20 @@ impl SourceConnector for PineconeConnector {
         let points: Vec<ExtractedPoint> = fetch_resp
             .vectors
             .into_values()
-            .map(|v| ExtractedPoint {
-                id: v.id,
-                vector: v.values,
-                payload: v.metadata.unwrap_or_default(),
-                sparse_vector: None,
+            .map(|v| {
+                let sparse = v.sparse_values.and_then(|sv| {
+                    if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                        Some(sv.indices.into_iter().zip(sv.values).collect())
+                    } else {
+                        None
+                    }
+                });
+                ExtractedPoint {
+                    id: v.id,
+                    vector: v.values,
+                    payload: v.metadata.unwrap_or_default(),
+                    sparse_vector: sparse,
+                }
             })
             .collect();
 
@@ -316,5 +334,69 @@ mod tests {
         assert!(json.contains("\"limit\":100"));
         assert!(json.contains("\"namespace\":\"ns1\""));
         assert!(!json.contains("paginationToken"));
+    }
+
+    #[test]
+    fn test_pinecone_vector_with_sparse() {
+        let json = r#"{
+            "id": "vec-1",
+            "values": [0.1, 0.2],
+            "sparseValues": {
+                "indices": [0, 5, 11],
+                "values": [0.5, 0.3, 0.8]
+            }
+        }"#;
+
+        let v: PineconeVector = serde_json::from_str(json).unwrap();
+        assert_eq!(v.id, "vec-1");
+        assert_eq!(v.values, vec![0.1, 0.2]);
+
+        let sv = v.sparse_values.expect("sparse_values should be present");
+        assert_eq!(sv.indices, vec![0, 5, 11]);
+        assert_eq!(sv.values, vec![0.5, 0.3, 0.8]);
+    }
+
+    #[test]
+    fn test_pinecone_vector_without_sparse() {
+        let json = r#"{
+            "id": "vec-2",
+            "values": [0.4, 0.5]
+        }"#;
+
+        let v: PineconeVector = serde_json::from_str(json).unwrap();
+        assert_eq!(v.id, "vec-2");
+        assert!(v.sparse_values.is_none());
+    }
+
+    #[test]
+    fn test_pinecone_sparse_extraction_in_point() {
+        let v = PineconeVector {
+            id: "vec-3".to_string(),
+            values: vec![1.0, 2.0, 3.0],
+            metadata: None,
+            sparse_values: Some(PineconeSparseValues {
+                indices: vec![2, 7],
+                values: vec![0.9, 0.1],
+            }),
+        };
+
+        let sparse = v.sparse_values.and_then(|sv| {
+            if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                Some(sv.indices.into_iter().zip(sv.values).collect::<Vec<_>>())
+            } else {
+                None
+            }
+        });
+
+        let point = ExtractedPoint {
+            id: v.id,
+            vector: v.values,
+            payload: v.metadata.unwrap_or_default(),
+            sparse_vector: sparse,
+        };
+
+        assert_eq!(point.id, "vec-3");
+        let sv = point.sparse_vector.expect("should have sparse vector");
+        assert_eq!(sv, vec![(2, 0.9), (7, 0.1)]);
     }
 }
