@@ -1,7 +1,7 @@
 //! Pinecone vector database connector.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
@@ -72,16 +72,6 @@ struct IndexStats {
     total_vector_count: u64,
 }
 
-#[derive(Debug, Serialize)]
-struct ListRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    namespace: Option<String>,
-    limit: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "paginationToken")]
-    pagination_token: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 struct ListResponse {
     vectors: Option<Vec<VectorInfo>>,
@@ -96,14 +86,6 @@ struct VectorInfo {
 #[derive(Debug, Deserialize)]
 struct Pagination {
     next: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[allow(dead_code)] // Reserved for future use in batch fetch
-struct FetchRequest {
-    ids: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    namespace: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,17 +206,20 @@ impl SourceConnector for PineconeConnector {
         // First, list vector IDs
         let base = self.data_plane_url();
         let list_url = format!("{base}/vectors/list");
-        let _list_req = ListRequest {
-            namespace: self.config.namespace.clone(),
-            limit: batch_size,
-            pagination_token,
-        };
+
+        let mut list_params: Vec<(&str, String)> = vec![("limit", batch_size.to_string())];
+        if let Some(ref token) = pagination_token {
+            list_params.push(("paginationToken", token.clone()));
+        }
+        if let Some(ref ns) = self.config.namespace {
+            list_params.push(("namespace", ns.clone()));
+        }
 
         debug!("Listing Pinecone vectors, limit={}", batch_size);
 
         let resp = self
             .api_request(reqwest::Method::GET, &list_url)
-            .query(&[("limit", batch_size.to_string())])
+            .query(&list_params)
             .send()
             .await?;
 
@@ -263,11 +248,16 @@ impl SourceConnector for PineconeConnector {
             });
         }
 
-        // Fetch full vectors
+        // Fetch full vectors — Pinecone expects repeated `ids` query params
         let fetch_url = format!("{base}/vectors/fetch");
+        let mut fetch_params: Vec<(&str, String)> =
+            ids.iter().map(|id| ("ids", id.clone())).collect();
+        if let Some(ref ns) = self.config.namespace {
+            fetch_params.push(("namespace", ns.clone()));
+        }
         let resp = self
             .api_request(reqwest::Method::GET, &fetch_url)
-            .query(&[("ids", ids.join(","))])
+            .query(&fetch_params)
             .send()
             .await?;
 
@@ -344,17 +334,59 @@ mod tests {
     }
 
     #[test]
-    fn test_list_request_serialization() {
-        let req = ListRequest {
-            namespace: Some("ns1".to_string()),
-            limit: 100,
-            pagination_token: None,
-        };
+    fn test_list_query_params_construction() {
+        let batch_size: usize = 100;
+        let pagination_token: Option<String> = Some("tok-abc".to_string());
+        let namespace: Option<String> = Some("ns1".to_string());
 
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"limit\":100"));
-        assert!(json.contains("\"namespace\":\"ns1\""));
-        assert!(!json.contains("paginationToken"));
+        let mut params: Vec<(&str, String)> = vec![("limit", batch_size.to_string())];
+        if let Some(ref token) = pagination_token {
+            params.push(("paginationToken", token.clone()));
+        }
+        if let Some(ref ns) = namespace {
+            params.push(("namespace", ns.clone()));
+        }
+
+        assert_eq!(params.len(), 3);
+        assert_eq!(params[0], ("limit", "100".to_string()));
+        assert_eq!(params[1], ("paginationToken", "tok-abc".to_string()));
+        assert_eq!(params[2], ("namespace", "ns1".to_string()));
+    }
+
+    #[test]
+    fn test_list_query_params_without_optional_fields() {
+        let batch_size: usize = 50;
+        let pagination_token: Option<String> = None;
+        let namespace: Option<String> = None;
+
+        let mut params: Vec<(&str, String)> = vec![("limit", batch_size.to_string())];
+        if let Some(ref token) = pagination_token {
+            params.push(("paginationToken", token.clone()));
+        }
+        if let Some(ref ns) = namespace {
+            params.push(("namespace", ns.clone()));
+        }
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0], ("limit", "50".to_string()));
+    }
+
+    #[test]
+    fn test_fetch_query_params_with_namespace() {
+        let ids = vec!["id-1".to_string(), "id-2".to_string(), "id-3".to_string()];
+        let namespace: Option<String> = Some("ns1".to_string());
+
+        let mut fetch_params: Vec<(&str, String)> =
+            ids.iter().map(|id| ("ids", id.clone())).collect();
+        if let Some(ref ns) = namespace {
+            fetch_params.push(("namespace", ns.clone()));
+        }
+
+        assert_eq!(fetch_params.len(), 4);
+        assert_eq!(fetch_params[0], ("ids", "id-1".to_string()));
+        assert_eq!(fetch_params[1], ("ids", "id-2".to_string()));
+        assert_eq!(fetch_params[2], ("ids", "id-3".to_string()));
+        assert_eq!(fetch_params[3], ("namespace", "ns1".to_string()));
     }
 
     #[test]
