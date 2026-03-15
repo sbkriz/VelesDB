@@ -40,19 +40,27 @@ export interface AgentMemoryTransport {
  * Monotonic unique ID generator.
  * Combines millisecond timestamp with a sub-ms counter to avoid
  * collisions when multiple IDs are generated within the same millisecond.
+ *
+ * Uses a 1000-slot counter per millisecond. When the counter exceeds 999,
+ * the timestamp is artificially advanced to the next millisecond to prevent
+ * ID collisions with future real-time IDs in the same ms bucket.
  */
 let _idCounter = 0;
 let _lastTimestamp = 0;
 
 export function generateUniqueId(): number {
-  const now = Date.now();
-  if (now === _lastTimestamp) {
+  let now = Date.now();
+  if (now <= _lastTimestamp) {
     _idCounter++;
+    if (_idCounter >= 1000) {
+      _lastTimestamp++;
+      _idCounter = 0;
+    }
   } else {
     _lastTimestamp = now;
     _idCounter = 0;
   }
-  return now * 1000 + _idCounter;
+  return _lastTimestamp * 1000 + _idCounter;
 }
 
 /** @internal Reset state — only for tests. */
