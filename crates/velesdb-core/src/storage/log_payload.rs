@@ -443,11 +443,14 @@ impl PayloadStorage for LogPayloadStorage {
 
         let record_start = *offset;
 
+        // H-3: Build complete record in one buffer to minimize partial-write window.
         // Op: Store (1) | ID (8) | Len (4) | Data (N)
-        wal.write_all(&[1u8])?;
-        wal.write_all(&id.to_le_bytes())?;
-        wal.write_all(&len_u32.to_le_bytes())?;
-        wal.write_all(&payload_bytes)?;
+        let mut record = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len());
+        record.push(1u8);
+        record.extend_from_slice(&id.to_le_bytes());
+        record.extend_from_slice(&len_u32.to_le_bytes());
+        record.extend_from_slice(&payload_bytes);
+        wal.write_all(&record)?;
 
         // Sync WAL according to durability mode
         Self::sync_wal(&mut wal, self.durability)?;
@@ -467,9 +470,13 @@ impl PayloadStorage for LogPayloadStorage {
         };
         drop(index);
 
-        // Flush the BufWriter so buffered data is visible to the reader file handle.
-        // This is a cheap userspace-to-kernel transfer, not an fsync.
-        self.wal.write().flush()?;
+        // H-2: Only flush when DurabilityMode::None is configured, because sync_wal()
+        // already flushes the BufWriter after every write in Fsync and FlushOnly modes.
+        // Skipping this avoids acquiring the WAL write lock on every read, which would
+        // serialize all readers behind writers.
+        if self.durability == DurabilityMode::None {
+            self.wal.write().flush()?;
+        }
 
         let mut reader = self.reader.write(); // Need write lock to seek
         reader.seek(SeekFrom::Start(offset))?;
@@ -492,9 +499,12 @@ impl PayloadStorage for LogPayloadStorage {
         let mut index = self.index.write();
         let mut offset = self.write_offset.write();
 
+        // H-3: Build complete delete record in one buffer to minimize partial-write window.
         // Op: Delete (1) | ID (8)
-        wal.write_all(&[2u8])?;
-        wal.write_all(&id.to_le_bytes())?;
+        let mut record = [0u8; 1 + 8];
+        record[0] = 2u8;
+        record[1..9].copy_from_slice(&id.to_le_bytes());
+        wal.write_all(&record)?;
 
         // Sync WAL according to durability mode
         Self::sync_wal(&mut wal, self.durability)?;
