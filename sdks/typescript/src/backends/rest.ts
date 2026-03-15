@@ -44,6 +44,15 @@ import {
   matchProceduralPatterns as _matchProceduralPatterns,
 } from './agent-memory-backend';
 import type { AgentMemoryTransport } from './agent-memory-backend';
+import {
+  search as _search,
+  searchBatch as _searchBatch,
+  textSearch as _textSearch,
+  hybridSearch as _hybridSearch,
+  multiQuerySearch as _multiQuerySearch,
+  searchIds as _searchIds,
+} from './search-backend';
+import type { SearchTransport } from './search-backend';
 
 // Re-export for backward compatibility
 export { generateUniqueId, _resetIdState } from './agent-memory-backend';
@@ -55,15 +64,6 @@ interface ApiResponse<T> {
     code: string;
     message: string;
   };
-}
-
-/** Batch search response structure */
-interface BatchSearchResponse {
-  results: Array<{ results: SearchResult[] }>;
-}
-
-interface SearchResponse {
-  results: SearchResult[];
 }
 
 interface QueryExplainApiResponse {
@@ -437,35 +437,7 @@ export class RestBackend implements IVelesDBBackend {
     options?: SearchOptions
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    const queryVector = query instanceof Float32Array ? Array.from(query) : query;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body: Record<string, any> = {
-      vector: queryVector,
-      top_k: options?.k ?? 10,
-      filter: options?.filter,
-      include_vectors: options?.includeVectors ?? false,
-    };
-
-    if (options?.sparseVector) {
-      body.sparse_vector = this.sparseVectorToRestFormat(options.sparseVector);
-    }
-
-    const response = await this.request<SearchResponse>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search`,
-      body
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _search(this.asSearchTransport(), collection, query, options);
   }
 
   async searchBatch(
@@ -477,27 +449,7 @@ export class RestBackend implements IVelesDBBackend {
     }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();
-
-    const formattedSearches = searches.map(s => ({
-      vector: s.vector instanceof Float32Array ? Array.from(s.vector) : s.vector,
-      top_k: s.k ?? 10,
-      filter: s.filter,
-    }));
-
-    const response = await this.request<BatchSearchResponse>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/batch`,
-      { searches: formattedSearches }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results.map(r => r.results) ?? [];
+    return _searchBatch(this.asSearchTransport(), collection, searches);
   }
 
   async delete(collection: string, id: string | number): Promise<boolean> {
@@ -544,25 +496,7 @@ export class RestBackend implements IVelesDBBackend {
     options?: { k?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    const response = await this.request<{ results: SearchResult[] }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/text`,
-      {
-        query,
-        top_k: options?.k ?? 10,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _textSearch(this.asSearchTransport(), collection, query, options);
   }
 
   async hybridSearch(
@@ -572,29 +506,7 @@ export class RestBackend implements IVelesDBBackend {
     options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    const queryVector = vector instanceof Float32Array ? Array.from(vector) : vector;
-
-    const response = await this.request<{ results: SearchResult[] }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/hybrid`,
-      {
-        vector: queryVector,
-        query: textQuery,
-        top_k: options?.k ?? 10,
-        vector_weight: options?.vectorWeight ?? 0.5,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _hybridSearch(this.asSearchTransport(), collection, vector, textQuery, options);
   }
 
   async query(
@@ -757,34 +669,7 @@ export class RestBackend implements IVelesDBBackend {
     options?: MultiQuerySearchOptions
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    const formattedVectors = vectors.map(v => 
-      v instanceof Float32Array ? Array.from(v) : v
-    );
-
-    const response = await this.request<{ results: SearchResult[] }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/multi`,
-      {
-        vectors: formattedVectors,
-        top_k: options?.k ?? 10,
-        strategy: options?.fusion ?? 'rrf',
-        rrf_k: options?.fusionParams?.k ?? 60,
-        avg_weight: options?.fusionParams?.avgWeight,
-        max_weight: options?.fusionParams?.maxWeight,
-        hit_weight: options?.fusionParams?.hitWeight,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _multiQuerySearch(this.asSearchTransport(), collection, vectors, options);
   }
 
   async isEmpty(collection: string): Promise<boolean> {
@@ -1251,34 +1136,20 @@ export class RestBackend implements IVelesDBBackend {
     options?: SearchOptions
   ): Promise<Array<{ id: number; score: number }>> {
     this.ensureInitialized();
-
-    const queryVector = query instanceof Float32Array ? Array.from(query) : query;
-
-    const response = await this.request<{
-      results: Array<{ id: number; score: number }>;
-    }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/ids`,
-      {
-        vector: queryVector,
-        top_k: options?.k ?? 10,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _searchIds(this.asSearchTransport(), collection, query, options);
   }
 
   // ========================================================================
   // Agent Memory (Phase 8) — delegates to agent-memory-backend.ts
   // ========================================================================
+
+  private asSearchTransport(): SearchTransport {
+    return {
+      requestJson: <T>(method: string, path: string, body?: unknown) =>
+        this.request<T>(method, path, body),
+      sparseToRest: (sv: SparseVector) => this.sparseVectorToRestFormat(sv),
+    };
+  }
 
   private asTransport(): AgentMemoryTransport {
     return {
