@@ -177,6 +177,32 @@ fn test_except_nothing_removed() {
     assert!(ids.contains(&2));
 }
 
+// ─── Large dataset (>10 per operand) — regression for default LIMIT bug ──────
+
+#[test]
+fn test_union_large_dataset_not_truncated() {
+    let dir = TempDir::new().unwrap();
+    // 20 points with category='a' (ids 1..=20) and 20 with category='b' (ids 21..=40)
+    let mut data: Vec<(u64, &str)> = (1..=20).map(|id| (id, "a")).collect();
+    data.extend((21..=40).map(|id| (id, "b")));
+    let col = make_collection_with_data(dir.path(), "union_large", &data);
+    let params = HashMap::new();
+
+    let sql = "SELECT * FROM union_large WHERE category = 'a' \
+               UNION \
+               SELECT * FROM union_large WHERE category = 'b' LIMIT 100";
+    let results = col
+        .execute_query_str(sql, &params)
+        .expect("UNION large execution failed");
+
+    // Both operands have 20 rows each, no overlap → UNION = 40 rows.
+    assert_eq!(
+        results.len(),
+        40,
+        "UNION must return all 40 points, not be truncated by default LIMIT"
+    );
+}
+
 // ─── Simple SELECT still works ───────────────────────────────────────────────
 
 #[test]

@@ -203,9 +203,11 @@ impl Database {
         // EPIC-040 US-006: For compound queries, strip LIMIT from each operand so
         // the set operation sees the full result sets.  The final LIMIT is applied
         // once on the merged output (SQL-standard behaviour).
+        // Use MAX_LIMIT (not None) to avoid the default-10 cap downstream.
+        let compound_limit = Some(100_000_u64);
         let left_results = if query.compound.is_some() {
             let mut left_query = query.clone();
-            left_query.select.limit = None;
+            left_query.select.limit = compound_limit;
             self.execute_single_select(&left_query, params)?
         } else {
             return self.execute_single_select(query, params);
@@ -214,7 +216,7 @@ impl Database {
         // compound is guaranteed Some here (non-compound returns above).
         if let Some(ref compound) = query.compound {
             let mut right_query = crate::velesql::Query::new_select(*compound.right.clone());
-            right_query.select.limit = None;
+            right_query.select.limit = compound_limit;
             let right_results = self.execute_single_select(&right_query, params)?;
             let mut merged = crate::collection::search::query::set_operations::apply_set_operation(
                 left_results,
