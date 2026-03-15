@@ -385,6 +385,12 @@ class SearchOpsMixin:
         Returns:
             List of Document lists, one per query.
         """
+        if not queries:
+            return []
+        validate_k(k)
+        validate_batch_size(len(queries))
+        for q in queries:
+            validate_text(q)
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         collection = self._get_collection(len(query_embeddings[0]))
         searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
@@ -407,6 +413,12 @@ class SearchOpsMixin:
         Returns:
             List of (Document, score) tuple lists, one per query.
         """
+        if not queries:
+            return []
+        validate_k(k)
+        validate_batch_size(len(queries))
+        for q in queries:
+            validate_text(q)
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         collection = self._get_collection(len(query_embeddings[0]))
         searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
@@ -489,6 +501,11 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
+
+        validate_k(k)
+        validate_batch_size(len(queries))
+        for q in queries:
+            validate_text(q)
 
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         collection = self._get_collection(len(query_embeddings[0]))
