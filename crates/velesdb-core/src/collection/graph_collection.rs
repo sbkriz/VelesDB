@@ -146,6 +146,12 @@ impl GraphCollection {
         self.inner.get_incoming_edges(node_id)
     }
 
+    /// Returns the total number of edges in the graph without materializing them.
+    #[must_use]
+    pub fn edge_count(&self) -> usize {
+        self.inner.edge_count()
+    }
+
     /// Returns `(in_degree, out_degree)` for a node.
     #[must_use]
     pub fn node_degree(&self, node_id: u64) -> (usize, usize) {
@@ -257,5 +263,28 @@ mod tests {
         assert!(ids.contains(&10), "node 10 should be present");
         assert!(ids.contains(&20), "node 20 should be present");
         assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn test_edge_count_returns_correct_count() {
+        let dir = tempdir().unwrap();
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            None,
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+
+        assert_eq!(col.edge_count(), 0);
+
+        let edge1 = crate::collection::graph::GraphEdge::new(1, 10, 20, "knows").unwrap();
+        col.add_edge(edge1).unwrap();
+        assert_eq!(col.edge_count(), 1);
+
+        let edge2 = crate::collection::graph::GraphEdge::new(2, 20, 30, "likes").unwrap();
+        col.add_edge(edge2).unwrap();
+        assert_eq!(col.edge_count(), 2);
     }
 }
