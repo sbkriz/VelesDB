@@ -46,6 +46,18 @@ describe('generateUniqueId', () => {
     expect(a).not.toBe(b);
   });
 
+  it('should produce 2000 unique IDs when called 2000 times in the same millisecond', () => {
+    const fixed = 1700000000000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixed);
+
+    const ids = new Set<number>();
+    for (let i = 0; i < 2000; i++) {
+      ids.add(generateUniqueId());
+    }
+
+    expect(ids.size).toBe(2000);
+  });
+
   it('should never exceed Number.MAX_SAFE_INTEGER for realistic timestamps', () => {
     // A timestamp ~year 2100 with 999 sub-ms calls
     const futureMs = 4_102_444_800_000; // 2100-01-01

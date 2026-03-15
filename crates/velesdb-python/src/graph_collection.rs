@@ -363,7 +363,7 @@ impl PyGraphCollection {
     /// Returns:
     ///     int: Edge count
     fn edge_count(&self) -> usize {
-        self.inner.get_edges(None).len()
+        self.inner.edge_count()
     }
 
     fn __repr__(&self) -> String {

@@ -1,7 +1,8 @@
 /**
  * REST Backend for VelesDB
- * 
- * Connects to VelesDB server via REST API
+ *
+ * Connects to VelesDB server via REST API.
+ * This is the composition root that delegates to focused backend modules.
  */
 
 import type {
@@ -24,7 +25,6 @@ import type {
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
-  RestPointId,
   PqTrainOptions,
   SparseVector,
   GraphCollectionConfig,
@@ -34,7 +34,73 @@ import type {
   EpisodicEvent,
   ProceduralPattern,
 } from '../types';
-import { BackpressureError, ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../types';
+import { ConnectionError } from '../types';
+import {
+  storeSemanticFact as _storeSemanticFact,
+  searchSemanticMemory as _searchSemanticMemory,
+  recordEpisodicEvent as _recordEpisodicEvent,
+  recallEpisodicEvents as _recallEpisodicEvents,
+  storeProceduralPattern as _storeProceduralPattern,
+  matchProceduralPatterns as _matchProceduralPatterns,
+} from './agent-memory-backend';
+import type { AgentMemoryTransport } from './agent-memory-backend';
+import {
+  search as _search,
+  searchBatch as _searchBatch,
+  textSearch as _textSearch,
+  hybridSearch as _hybridSearch,
+  multiQuerySearch as _multiQuerySearch,
+  searchIds as _searchIds,
+} from './search-backend';
+import type { SearchTransport } from './search-backend';
+import {
+  addEdge as _addEdge,
+  getEdges as _getEdges,
+  traverseGraph as _traverseGraph,
+  getNodeDegree as _getNodeDegree,
+  createGraphCollection as _createGraphCollection,
+} from './graph-backend';
+import {
+  query as _query,
+  queryExplain as _queryExplain,
+  collectionSanity as _collectionSanity,
+} from './query-backend';
+import type { QueryTransport } from './query-backend';
+import {
+  getCollectionStats as _getCollectionStats,
+  analyzeCollection as _analyzeCollection,
+  getCollectionConfig as _getCollectionConfig,
+} from './admin-backend';
+import {
+  createIndex as _createIndex,
+  listIndexes as _listIndexes,
+  hasIndex as _hasIndex,
+  dropIndex as _dropIndex,
+} from './index-backend';
+import {
+  trainPq as _trainPq,
+  streamInsert as _streamInsert,
+} from './streaming-backend';
+import type { StreamingTransport } from './streaming-backend';
+import {
+  createCollection as _createCollection,
+  deleteCollection as _deleteCollection,
+  getCollection as _getCollection,
+  listCollections as _listCollections,
+  insert as _insert,
+  insertBatch as _insertBatch,
+  deletePoint as _deletePoint,
+  get as _get,
+  isEmpty as _isEmpty,
+  flush as _flush,
+  parseRestPointId,
+  sparseVectorToRestFormat,
+} from './crud-backend';
+import type { CrudTransport } from './crud-backend';
+
+// Re-export for backward compatibility
+export { generateUniqueId, _resetIdState } from './agent-memory-backend';
+export type { QueryExplainApiResponse, CollectionSanityApiResponse } from './query-backend';
 
 /** REST API response wrapper */
 interface ApiResponse<T> {
@@ -43,84 +109,6 @@ interface ApiResponse<T> {
     code: string;
     message: string;
   };
-}
-
-/** Batch search response structure */
-interface BatchSearchResponse {
-  results: Array<{ results: SearchResult[] }>;
-}
-
-interface SearchResponse {
-  results: SearchResult[];
-}
-
-interface QueryExplainApiResponse {
-  query: string;
-  query_type: string;
-  collection: string;
-  plan: Array<{ step: number; operation: string; description: string; estimated_rows: number | null }>;
-  estimated_cost: {
-    uses_index: boolean;
-    index_name: string | null;
-    selectivity: number;
-    complexity: string;
-  };
-  features: {
-    has_vector_search: boolean;
-    has_filter: boolean;
-    has_order_by: boolean;
-    has_group_by: boolean;
-    has_aggregation: boolean;
-    has_join: boolean;
-    has_fusion: boolean;
-    limit: number | null;
-    offset: number | null;
-  };
-}
-
-interface CollectionSanityApiResponse {
-  collection: string;
-  dimension: number;
-  metric: string;
-  point_count: number;
-  is_empty: boolean;
-  checks: {
-    has_vectors: boolean;
-    search_ready: boolean;
-    dimension_configured: boolean;
-  };
-  diagnostics: {
-    search_requests_total: number;
-    dimension_mismatch_total: number;
-    empty_search_results_total: number;
-    filter_parse_errors_total: number;
-  };
-  hints: string[];
-}
-
-/**
- * Monotonic unique ID generator.
- * Combines millisecond timestamp with a sub-ms counter to avoid
- * collisions when multiple IDs are generated within the same millisecond.
- */
-let _idCounter = 0;
-let _lastTimestamp = 0;
-
-export function generateUniqueId(): number {
-  const now = Date.now();
-  if (now === _lastTimestamp) {
-    _idCounter++;
-  } else {
-    _lastTimestamp = now;
-    _idCounter = 0;
-  }
-  return now * 1000 + _idCounter;
-}
-
-/** @internal Reset state — only for tests. */
-export function _resetIdState(): void {
-  _idCounter = 0;
-  _lastTimestamp = 0;
 }
 
 /**
@@ -135,7 +123,7 @@ export class RestBackend implements IVelesDBBackend {
   private _initialized = false;
 
   constructor(url: string, apiKey?: string, timeout = 30000) {
-    this.baseUrl = url.replace(/\/$/, ''); // Remove trailing slash
+    this.baseUrl = url.replace(/\/$/, '');
     this.apiKey = apiKey;
     this.timeout = timeout;
   }
@@ -144,9 +132,7 @@ export class RestBackend implements IVelesDBBackend {
     if (this._initialized) {
       return;
     }
-
     try {
-      // Health check
       const response = await this.request<{ status: string }>('GET', '/health');
       if (response.error) {
         throw new Error(response.error.message);
@@ -172,24 +158,15 @@ export class RestBackend implements IVelesDBBackend {
 
   private mapStatusToErrorCode(status: number): string {
     switch (status) {
-      case 400:
-        return 'BAD_REQUEST';
-      case 401:
-        return 'UNAUTHORIZED';
-      case 403:
-        return 'FORBIDDEN';
-      case 404:
-        return 'NOT_FOUND';
-      case 409:
-        return 'CONFLICT';
-      case 429:
-        return 'RATE_LIMITED';
-      case 500:
-        return 'INTERNAL_ERROR';
-      case 503:
-        return 'SERVICE_UNAVAILABLE';
-      default:
-        return 'UNKNOWN_ERROR';
+      case 400: return 'BAD_REQUEST';
+      case 401: return 'UNAUTHORIZED';
+      case 403: return 'FORBIDDEN';
+      case 404: return 'NOT_FOUND';
+      case 409: return 'CONFLICT';
+      case 429: return 'RATE_LIMITED';
+      case 500: return 'INTERNAL_ERROR';
+      case 503: return 'SERVICE_UNAVAILABLE';
+      default:  return 'UNKNOWN_ERROR';
     }
   }
 
@@ -197,92 +174,41 @@ export class RestBackend implements IVelesDBBackend {
     if (!data || typeof data !== 'object') {
       return {};
     }
-
     const payload = data as Record<string, unknown>;
     const nestedError =
       payload.error && typeof payload.error === 'object'
         ? (payload.error as Record<string, unknown>)
         : undefined;
-
     const codeField = nestedError?.code ?? payload.code;
     const code = typeof codeField === 'string' ? codeField : undefined;
-
     const messageField = nestedError?.message ?? payload.message ?? payload.error;
     const message = typeof messageField === 'string' ? messageField : undefined;
     return { code, message };
   }
 
-  /**
-   * Parse node ID safely to handle u64 values above Number.MAX_SAFE_INTEGER.
-   * Returns bigint for large values, number for safe values.
-   */
   private parseNodeId(value: unknown): bigint | number {
     if (value === null || value === undefined) {
       return 0;
     }
-    
-    // If already a bigint, return as-is
     if (typeof value === 'bigint') {
       return value;
     }
-    
-    // If string (JSON may serialize large numbers as strings), parse as BigInt
     if (typeof value === 'string') {
       const num = Number(value);
-      if (num > Number.MAX_SAFE_INTEGER) {
-        return BigInt(value);
-      }
-      return num;
+      return num > Number.MAX_SAFE_INTEGER ? BigInt(value) : num;
     }
-    
-    // If number, check if precision is at risk
     if (typeof value === 'number') {
-      if (value > Number.MAX_SAFE_INTEGER) {
-        // Precision already lost, but return as-is (best effort)
-        // Note: This case indicates the API should return strings for large IDs
-        return value;
-      }
       return value;
     }
-    
     return 0;
   }
 
-  private parseRestPointId(id: string | number): RestPointId {
-    if (
-      typeof id !== 'number' ||
-      !Number.isFinite(id) ||
-      id < 0 ||
-      !Number.isInteger(id) ||
-      id > Number.MAX_SAFE_INTEGER
-    ) {
-      throw new ValidationError(
-        `REST backend requires numeric u64-compatible IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER}). Received: ${String(id)}`
-      );
-    }
-    return id;
-  }
-
-  private isLikelyAggregationQuery(query: string): boolean {
-    return /\bGROUP\s+BY\b|\bHAVING\b|\bCOUNT\s*\(|\bSUM\s*\(|\bAVG\s*\(|\bMIN\s*\(|\bMAX\s*\(/i.test(
-      query
-    );
-  }
-
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<ApiResponse<T>> {
+  private async request<T>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>> {
     const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
     }
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
@@ -293,11 +219,8 @@ export class RestBackend implements IVelesDBBackend {
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
-
       clearTimeout(timeoutId);
-
       const data = await response.json().catch(() => ({}));
-
       if (!response.ok) {
         const errorPayload = this.extractErrorPayload(data);
         return {
@@ -307,15 +230,12 @@ export class RestBackend implements IVelesDBBackend {
           },
         };
       }
-
       return { data };
     } catch (error) {
       clearTimeout(timeoutId);
-
       if (error instanceof Error && error.name === 'AbortError') {
         throw new ConnectionError('Request timeout');
       }
-
       throw new ConnectionError(
         `Request failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         error instanceof Error ? error : undefined
@@ -323,1089 +243,290 @@ export class RestBackend implements IVelesDBBackend {
     }
   }
 
+  // ==========================================================================
+  // Transport adapters
+  // ==========================================================================
+
+  private asCrudTransport(): CrudTransport {
+    return {
+      requestJson: <T>(m: string, p: string, b?: unknown) => this.request<T>(m, p, b),
+    };
+  }
+
+  private asSearchTransport(): SearchTransport {
+    return {
+      requestJson: <T>(m: string, p: string, b?: unknown) => this.request<T>(m, p, b),
+      sparseToRest: (sv: SparseVector) => sparseVectorToRestFormat(sv),
+    };
+  }
+
+  private asAgentMemoryTransport(): AgentMemoryTransport {
+    return {
+      requestJson: <T>(m: string, p: string, b?: unknown) => this.request<T>(m, p, b),
+      searchVectors: (c: string, e: number[], k: number, f: Record<string, string>) =>
+        this.search(c, e, { k, filter: f }),
+    };
+  }
+
+  private asQueryTransport(): QueryTransport {
+    return {
+      requestJson: <T>(m: string, p: string, b?: unknown) => this.request<T>(m, p, b),
+      parseNodeId: (v: unknown) => this.parseNodeId(v),
+    };
+  }
+
+  private asStreamingTransport(): StreamingTransport {
+    return {
+      requestJson: <T>(m: string, p: string, b?: unknown) => this.request<T>(m, p, b),
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      timeout: this.timeout,
+      parseRestPointId,
+      sparseVectorToRestFormat,
+      mapStatusToErrorCode: (s: number) => this.mapStatusToErrorCode(s),
+      extractErrorPayload: (d: unknown) => this.extractErrorPayload(d),
+    };
+  }
+
+  // ==========================================================================
+  // Collection CRUD — delegates to crud-backend.ts
+  // ==========================================================================
+
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request('POST', '/collections', {
-      name,
-      dimension: config.dimension,
-      metric: config.metric ?? 'cosine',
-      storage_mode: config.storageMode ?? 'full',
-      collection_type: config.collectionType ?? 'vector',
-      description: config.description,
-      hnsw_m: config.hnsw?.m,
-      hnsw_ef_construction: config.hnsw?.efConstruction,
-    });
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _createCollection(this.asCrudTransport(), name, config);
   }
 
   async deleteCollection(name: string): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request('DELETE', `/collections/${encodeURIComponent(name)}`);
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${name}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _deleteCollection(this.asCrudTransport(), name);
   }
 
   async getCollection(name: string): Promise<Collection | null> {
     this.ensureInitialized();
-
-    const response = await this.request<Collection>(
-      'GET',
-      `/collections/${encodeURIComponent(name)}`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        return null;
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data ?? null;
+    return _getCollection(this.asCrudTransport(), name);
   }
 
   async listCollections(): Promise<Collection[]> {
     this.ensureInitialized();
-
-    const response = await this.request<Collection[]>('GET', '/collections');
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data ?? [];
+    return _listCollections(this.asCrudTransport());
   }
 
   async insert(collection: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
-    const restId = this.parseRestPointId(doc.id);
-
-    const vector = doc.vector instanceof Float32Array 
-      ? Array.from(doc.vector) 
-      : doc.vector;
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id: restId,
-          vector,
-          payload: doc.payload,
-        }],
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _insert(this.asCrudTransport(), collection, doc);
   }
 
   async insertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-
-    const vectors = docs.map(doc => ({
-      id: this.parseRestPointId(doc.id),
-      vector: doc.vector instanceof Float32Array ? Array.from(doc.vector) : doc.vector,
-      payload: doc.payload,
-    }));
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      { points: vectors }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-  }
-
-  private sparseVectorToRestFormat(sv: SparseVector): Record<string, number> {
-    const result: Record<string, number> = {};
-    for (const [k, v] of Object.entries(sv)) {
-      result[String(k)] = v;
-    }
-    return result;
-  }
-
-  async search(
-    collection: string,
-    query: number[] | Float32Array,
-    options?: SearchOptions
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-
-    const queryVector = query instanceof Float32Array ? Array.from(query) : query;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body: Record<string, any> = {
-      vector: queryVector,
-      top_k: options?.k ?? 10,
-      filter: options?.filter,
-      include_vectors: options?.includeVectors ?? false,
-    };
-
-    if (options?.sparseVector) {
-      body.sparse_vector = this.sparseVectorToRestFormat(options.sparseVector);
-    }
-
-    const response = await this.request<SearchResponse>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search`,
-      body
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
-  }
-
-  async searchBatch(
-    collection: string,
-    searches: Array<{
-      vector: number[] | Float32Array;
-      k?: number;
-      filter?: Record<string, unknown>;
-    }>
-  ): Promise<SearchResult[][]> {
-    this.ensureInitialized();
-
-    const formattedSearches = searches.map(s => ({
-      vector: s.vector instanceof Float32Array ? Array.from(s.vector) : s.vector,
-      top_k: s.k ?? 10,
-      filter: s.filter,
-    }));
-
-    const response = await this.request<BatchSearchResponse>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/batch`,
-      { searches: formattedSearches }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results.map(r => r.results) ?? [];
+    return _insertBatch(this.asCrudTransport(), collection, docs);
   }
 
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
-    const restId = this.parseRestPointId(id);
-
-    const response = await this.request<{ deleted: boolean }>(
-      'DELETE',
-      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(restId))}`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        return false;
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.deleted ?? false;
+    return _deletePoint(this.asCrudTransport(), collection, id);
   }
 
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
-    const restId = this.parseRestPointId(id);
-
-    const response = await this.request<VectorDocument>(
-      'GET',
-      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(restId))}`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        return null;
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data ?? null;
-  }
-
-  async textSearch(
-    collection: string,
-    query: string,
-    options?: { k?: number; filter?: Record<string, unknown> }
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-
-    const response = await this.request<{ results: SearchResult[] }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/text`,
-      {
-        query,
-        top_k: options?.k ?? 10,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
-  }
-
-  async hybridSearch(
-    collection: string,
-    vector: number[] | Float32Array,
-    textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-
-    const queryVector = vector instanceof Float32Array ? Array.from(vector) : vector;
-
-    const response = await this.request<{ results: SearchResult[] }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/hybrid`,
-      {
-        vector: queryVector,
-        query: textQuery,
-        top_k: options?.k ?? 10,
-        vector_weight: options?.vectorWeight ?? 0.5,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
-  }
-
-  async query(
-    collection: string,
-    queryString: string,
-    params?: Record<string, unknown>,
-    options?: QueryOptions
-  ): Promise<QueryApiResponse> {
-    this.ensureInitialized();
-
-    // Note: Server uses POST /query or POST /aggregate (not /collections/{name}/query)
-    // SELECT queries use FROM clause for collection resolution.
-    // MATCH top-level queries require `collection` in the request body.
-    const endpoint = this.isLikelyAggregationQuery(queryString) ? '/aggregate' : '/query';
-    const response = await this.request<Record<string, unknown>>(
-      'POST',
-      endpoint,
-      {
-        query: queryString,
-        params: params ?? {},
-        collection,
-        timeout_ms: options?.timeoutMs,
-        stream: options?.stream ?? false,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    // Map server response to SDK QueryResponse or AggregationQueryResponse
-    // Server returns: { results: [{id, score, payload}], timing_ms, rows_returned }
-    // SDK expects: { results: [{nodeId, vectorScore, ...}], stats: {...} }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rawData = response.data as any;
-    if (rawData && Object.prototype.hasOwnProperty.call(rawData, 'result')) {
-      return {
-        result: rawData.result as Record<string, unknown> | unknown[],
-        stats: {
-          executionTimeMs: rawData.timing_ms ?? 0,
-          strategy: 'aggregation',
-          scannedNodes: 0,
-        },
-      };
-    }
-
-    return {
-      results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
-        // Server returns `id` (u64), map to nodeId with precision handling
-        nodeId: this.parseNodeId(r.id ?? r.node_id ?? r.nodeId),
-        // Server returns `score`, map to vectorScore (primary score for SELECT queries)
-        vectorScore: (r.score ?? r.vector_score ?? r.vectorScore) as number | null,
-        // graph_score not returned by SELECT queries, only by future MATCH queries
-        graphScore: (r.graph_score ?? r.graphScore) as number | null,
-        // Use score as fusedScore for compatibility
-        fusedScore: (r.score ?? r.fused_score ?? r.fusedScore ?? 0) as number,
-        // payload maps to bindings for compatibility
-        bindings: (r.payload ?? r.bindings) as Record<string, unknown> ?? {},
-        columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
-      })),
-      stats: {
-        executionTimeMs: rawData?.timing_ms ?? 0,
-        strategy: 'select',
-        scannedNodes: rawData?.rows_returned ?? 0,
-      },
-    };
-  }
-
-
-  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
-    this.ensureInitialized();
-
-    const response = await this.request<QueryExplainApiResponse>(
-      'POST',
-      '/query/explain',
-      {
-        query: queryString,
-        params: params ?? {},
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    const data = response.data!;
-    return {
-      query: data.query,
-      queryType: data.query_type,
-      collection: data.collection,
-      plan: data.plan.map(step => ({
-        step: step.step,
-        operation: step.operation,
-        description: step.description,
-        estimatedRows: step.estimated_rows,
-      })),
-      estimatedCost: {
-        usesIndex: data.estimated_cost.uses_index,
-        indexName: data.estimated_cost.index_name,
-        selectivity: data.estimated_cost.selectivity,
-        complexity: data.estimated_cost.complexity,
-      },
-      features: {
-        hasVectorSearch: data.features.has_vector_search,
-        hasFilter: data.features.has_filter,
-        hasOrderBy: data.features.has_order_by,
-        hasGroupBy: data.features.has_group_by,
-        hasAggregation: data.features.has_aggregation,
-        hasJoin: data.features.has_join,
-        hasFusion: data.features.has_fusion,
-        limit: data.features.limit,
-        offset: data.features.offset,
-      },
-    };
-  }
-
-  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
-    this.ensureInitialized();
-
-    const response = await this.request<CollectionSanityApiResponse>(
-      'GET',
-      `/collections/${encodeURIComponent(collection)}/sanity`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    const data = response.data!;
-    return {
-      collection: data.collection,
-      dimension: data.dimension,
-      metric: data.metric,
-      pointCount: data.point_count,
-      isEmpty: data.is_empty,
-      checks: {
-        hasVectors: data.checks.has_vectors,
-        searchReady: data.checks.search_ready,
-        dimensionConfigured: data.checks.dimension_configured,
-      },
-      diagnostics: {
-        searchRequestsTotal: data.diagnostics.search_requests_total,
-        dimensionMismatchTotal: data.diagnostics.dimension_mismatch_total,
-        emptySearchResultsTotal: data.diagnostics.empty_search_results_total,
-        filterParseErrorsTotal: data.diagnostics.filter_parse_errors_total,
-      },
-      hints: data.hints ?? [],
-    };
-  }
-
-  async multiQuerySearch(
-    collection: string,
-    vectors: Array<number[] | Float32Array>,
-    options?: MultiQuerySearchOptions
-  ): Promise<SearchResult[]> {
-    this.ensureInitialized();
-
-    const formattedVectors = vectors.map(v => 
-      v instanceof Float32Array ? Array.from(v) : v
-    );
-
-    const response = await this.request<{ results: SearchResult[] }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/multi`,
-      {
-        vectors: formattedVectors,
-        top_k: options?.k ?? 10,
-        strategy: options?.fusion ?? 'rrf',
-        rrf_k: options?.fusionParams?.k ?? 60,
-        avg_weight: options?.fusionParams?.avgWeight,
-        max_weight: options?.fusionParams?.maxWeight,
-        hit_weight: options?.fusionParams?.hitWeight,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _get(this.asCrudTransport(), collection, id);
   }
 
   async isEmpty(collection: string): Promise<boolean> {
     this.ensureInitialized();
-
-    const response = await this.request<{ is_empty: boolean }>(
-      'GET',
-      `/collections/${encodeURIComponent(collection)}/empty`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.is_empty ?? true;
+    return _isEmpty(this.asCrudTransport(), collection);
   }
 
   async flush(collection: string): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/flush`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-  }
-
-  // ========================================================================
-  // Sparse / PQ / Streaming (v1.5)
-  // ========================================================================
-
-  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
-    this.ensureInitialized();
-
-    const m = options?.m ?? 8;
-    const k = options?.k ?? 256;
-    const withClause = options?.opq
-      ? `WITH (m=${m}, k=${k}, opq=true)`
-      : `WITH (m=${m}, k=${k})`;
-    const queryString = `TRAIN QUANTIZER ON ${collection} ${withClause}`;
-
-    const response = await this.request<{ message: string }>(
-      'POST',
-      '/query',
-      { query: queryString }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.message ?? 'PQ training initiated';
-  }
-
-  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
-    this.ensureInitialized();
-
-    for (const doc of docs) {
-      const restId = this.parseRestPointId(doc.id);
-      const vector = doc.vector instanceof Float32Array
-        ? Array.from(doc.vector)
-        : doc.vector;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body: Record<string, any> = {
-        id: restId,
-        vector,
-        payload: doc.payload,
-      };
-
-      if (doc.sparseVector) {
-        body.sparse_vector = this.sparseVectorToRestFormat(doc.sparseVector);
-      }
-
-      const url = `${this.baseUrl}/collections/${encodeURIComponent(collection)}/stream/insert`;
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (this.apiKey) {
-        headers['Authorization'] = `Bearer ${this.apiKey}`;
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        if (response.status === 429) {
-          throw new BackpressureError();
-        }
-
-        if (!response.ok && response.status !== 202) {
-          const data = await response.json().catch(() => ({}));
-          const errorPayload = this.extractErrorPayload(data);
-          throw new VelesDBError(
-            errorPayload.message ?? `HTTP ${response.status}`,
-            errorPayload.code ?? this.mapStatusToErrorCode(response.status)
-          );
-        }
-      } catch (error) {
-        clearTimeout(timeoutId);
-
-        if (error instanceof BackpressureError || error instanceof VelesDBError) {
-          throw error;
-        }
-
-        if (error instanceof Error && error.name === 'AbortError') {
-          throw new ConnectionError('Request timeout');
-        }
-
-        throw new ConnectionError(
-          `Stream insert failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          error instanceof Error ? error : undefined
-        );
-      }
-    }
+    return _flush(this.asCrudTransport(), collection);
   }
 
   async close(): Promise<void> {
     this._initialized = false;
   }
 
-  // ========================================================================
-  // Index Management (EPIC-009)
-  // ========================================================================
+  // ==========================================================================
+  // Search — delegates to search-backend.ts
+  // ==========================================================================
 
-  async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
+  async search(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/indexes`,
-      {
-        label: options.label,
-        property: options.property,
-        index_type: options.indexType ?? 'hash',
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _search(this.asSearchTransport(), c, q, o);
   }
 
-  async listIndexes(collection: string): Promise<IndexInfo[]> {
+  async searchBatch(
+    collection: string,
+    searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: Record<string, unknown> }>
+  ): Promise<SearchResult[][]> {
     this.ensureInitialized();
-
-    const response = await this.request<{ indexes: Array<{
-      label: string;
-      property: string;
-      index_type: string;
-      cardinality: number;
-      memory_bytes: number;
-    }>; total: number }>(
-      'GET',
-      `/collections/${encodeURIComponent(collection)}/indexes`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return (response.data?.indexes ?? []).map(idx => ({
-      label: idx.label,
-      property: idx.property,
-      indexType: idx.index_type as 'hash' | 'range',
-      cardinality: idx.cardinality,
-      memoryBytes: idx.memory_bytes,
-    }));
+    return _searchBatch(this.asSearchTransport(), collection, searches);
   }
 
-  async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
-    const indexes = await this.listIndexes(collection);
-    return indexes.some(idx => idx.label === label && idx.property === property);
-  }
-
-  async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
+  async textSearch(
+    c: string, q: string, o?: { k?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    const response = await this.request<{ dropped: boolean }>(
-      'DELETE',
-      `/collections/${encodeURIComponent(collection)}/indexes/${encodeURIComponent(label)}/${encodeURIComponent(property)}`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        return false;  // Index didn't exist
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    // BUG-2 FIX: Success without error = index was dropped
-    // API may return 200/204 without body, so default to true on success
-    return response.data?.dropped ?? true;
+    return _textSearch(this.asSearchTransport(), c, q, o);
   }
 
-  // ========================================================================
-  // Knowledge Graph (EPIC-016 US-041)
-  // ========================================================================
+  async hybridSearch(
+    c: string, v: number[] | Float32Array, t: string,
+    o?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return _hybridSearch(this.asSearchTransport(), c, v, t, o);
+  }
+
+  async multiQuerySearch(
+    c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    return _multiQuerySearch(this.asSearchTransport(), c, v, o);
+  }
+
+  async searchIds(
+    c: string, q: number[] | Float32Array, o?: SearchOptions
+  ): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+    return _searchIds(this.asSearchTransport(), c, q, o);
+  }
+
+  // ==========================================================================
+  // Query — delegates to query-backend.ts
+  // ==========================================================================
+
+  async query(
+    c: string, q: string, p?: Record<string, unknown>, o?: QueryOptions
+  ): Promise<QueryApiResponse> {
+    this.ensureInitialized();
+    return _query(this.asQueryTransport(), c, q, p, o);
+  }
+
+  async queryExplain(q: string, p?: Record<string, unknown>): Promise<ExplainResponse> {
+    this.ensureInitialized();
+    return _queryExplain(this.asQueryTransport(), q, p);
+  }
+
+  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+    return _collectionSanity(this.asQueryTransport(), collection);
+  }
+
+  // ==========================================================================
+  // Graph — delegates to graph-backend.ts
+  // ==========================================================================
 
   async addEdge(collection: string, edge: AddEdgeRequest): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/graph/edges`,
-      {
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        label: edge.label,
-        properties: edge.properties ?? {},
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _addEdge(this.asCrudTransport(), collection, edge);
   }
 
   async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
     this.ensureInitialized();
-
-    const queryParams = options?.label ? `?label=${encodeURIComponent(options.label)}` : '';
-
-    const response = await this.request<{ edges: GraphEdge[]; count: number }>(
-      'GET',
-      `/collections/${encodeURIComponent(collection)}/graph/edges${queryParams}`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.edges ?? [];
+    return _getEdges(this.asCrudTransport(), collection, options);
   }
 
-  // ========================================================================
-  // Graph Traversal (EPIC-016 US-050)
-  // ========================================================================
-
-  async traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse> {
+  async traverseGraph(collection: string, req: TraverseRequest): Promise<TraverseResponse> {
     this.ensureInitialized();
-
-    const response = await this.request<{
-      results: Array<{ target_id: number; depth: number; path: number[] }>;
-      next_cursor: string | null;
-      has_more: boolean;
-      stats: { visited: number; depth_reached: number };
-    }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/graph/traverse`,
-      {
-        source: request.source,
-        strategy: request.strategy ?? 'bfs',
-        max_depth: request.maxDepth ?? 3,
-        limit: request.limit ?? 100,
-        cursor: request.cursor,
-        rel_types: request.relTypes ?? [],
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    const data = response.data!;
-    return {
-      results: data.results.map(r => ({
-        targetId: r.target_id,
-        depth: r.depth,
-        path: r.path,
-      })),
-      nextCursor: data.next_cursor ?? undefined,
-      hasMore: data.has_more,
-      stats: {
-        visited: data.stats.visited,
-        depthReached: data.stats.depth_reached,
-      },
-    };
+    return _traverseGraph(this.asCrudTransport(), collection, req);
   }
 
   async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
     this.ensureInitialized();
-
-    const response = await this.request<{ in_degree: number; out_degree: number }>(
-      'GET',
-      `/collections/${encodeURIComponent(collection)}/graph/nodes/${nodeId}/degree`
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return {
-      inDegree: response.data?.in_degree ?? 0,
-      outDegree: response.data?.out_degree ?? 0,
-    };
+    return _getNodeDegree(this.asCrudTransport(), collection, nodeId);
   }
-
-  // ========================================================================
-  // Graph Collection Management (Phase 8)
-  // ========================================================================
 
   async createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request('POST', '/collections', {
-      name,
-      collection_type: 'graph',
-      dimension: config?.dimension,
-      metric: config?.metric ?? 'cosine',
-      schema_mode: config?.schemaMode ?? 'schemaless',
-    });
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _createGraphCollection(this.asCrudTransport(), name, config);
   }
 
-  // ========================================================================
-  // Collection Stats / Config (Phase 8)
-  // ========================================================================
+  // ==========================================================================
+  // Index — delegates to index-backend.ts
+  // ==========================================================================
+
+  async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
+    this.ensureInitialized();
+    return _createIndex(this.asCrudTransport(), collection, options);
+  }
+
+  async listIndexes(collection: string): Promise<IndexInfo[]> {
+    this.ensureInitialized();
+    return _listIndexes(this.asCrudTransport(), collection);
+  }
+
+  async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
+    this.ensureInitialized();
+    return _hasIndex(this.asCrudTransport(), collection, label, property);
+  }
+
+  async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
+    this.ensureInitialized();
+    return _dropIndex(this.asCrudTransport(), collection, label, property);
+  }
+
+  // ==========================================================================
+  // Admin — delegates to admin-backend.ts
+  // ==========================================================================
 
   async getCollectionStats(collection: string): Promise<CollectionStatsResponse | null> {
     this.ensureInitialized();
-
-    const response = await this.request<{
-      total_points: number;
-      total_size_bytes: number;
-      row_count: number;
-      deleted_count: number;
-      avg_row_size_bytes: number;
-      payload_size_bytes: number;
-      last_analyzed_epoch_ms: number;
-    }>('GET', `/collections/${encodeURIComponent(collection)}/stats`);
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        return null;
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return this.mapStatsResponse(response.data!);
+    return _getCollectionStats(this.asCrudTransport(), collection);
   }
 
   async analyzeCollection(collection: string): Promise<CollectionStatsResponse> {
     this.ensureInitialized();
-
-    const response = await this.request<{
-      total_points: number;
-      total_size_bytes: number;
-      row_count: number;
-      deleted_count: number;
-      avg_row_size_bytes: number;
-      payload_size_bytes: number;
-      last_analyzed_epoch_ms: number;
-    }>('POST', `/collections/${encodeURIComponent(collection)}/analyze`);
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return this.mapStatsResponse(response.data!);
-  }
-
-  private mapStatsResponse(data: {
-    total_points: number;
-    total_size_bytes: number;
-    row_count: number;
-    deleted_count: number;
-    avg_row_size_bytes: number;
-    payload_size_bytes: number;
-    last_analyzed_epoch_ms: number;
-  }): CollectionStatsResponse {
-    return {
-      totalPoints: data.total_points,
-      totalSizeBytes: data.total_size_bytes,
-      rowCount: data.row_count,
-      deletedCount: data.deleted_count,
-      avgRowSizeBytes: data.avg_row_size_bytes,
-      payloadSizeBytes: data.payload_size_bytes,
-      lastAnalyzedEpochMs: data.last_analyzed_epoch_ms,
-    };
+    return _analyzeCollection(this.asCrudTransport(), collection);
   }
 
   async getCollectionConfig(collection: string): Promise<CollectionConfigResponse> {
     this.ensureInitialized();
-
-    const response = await this.request<{
-      name: string;
-      dimension: number;
-      metric: string;
-      storage_mode: string;
-      point_count: number;
-      metadata_only: boolean;
-      graph_schema?: Record<string, unknown>;
-      embedding_dimension?: number;
-    }>('GET', `/collections/${encodeURIComponent(collection)}/config`);
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    const data = response.data!;
-    return {
-      name: data.name,
-      dimension: data.dimension,
-      metric: data.metric,
-      storageMode: data.storage_mode,
-      pointCount: data.point_count,
-      metadataOnly: data.metadata_only,
-      graphSchema: data.graph_schema,
-      embeddingDimension: data.embedding_dimension,
-    };
+    return _getCollectionConfig(this.asCrudTransport(), collection);
   }
 
-  async searchIds(
-    collection: string,
-    query: number[] | Float32Array,
-    options?: SearchOptions
-  ): Promise<Array<{ id: number; score: number }>> {
+  // ==========================================================================
+  // Streaming / PQ — delegates to streaming-backend.ts
+  // ==========================================================================
+
+  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
     this.ensureInitialized();
-
-    const queryVector = query instanceof Float32Array ? Array.from(query) : query;
-
-    const response = await this.request<{
-      results: Array<{ id: number; score: number }>;
-    }>(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/search/ids`,
-      {
-        vector: queryVector,
-        top_k: options?.k ?? 10,
-        filter: options?.filter,
-      }
-    );
-
-    if (response.error) {
-      if (response.error.code === 'NOT_FOUND') {
-        throw new NotFoundError(`Collection '${collection}'`);
-      }
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
-
-    return response.data?.results ?? [];
+    return _trainPq(this.asStreamingTransport(), collection, options);
   }
 
-  // ========================================================================
-  // Agent Memory (Phase 8)
-  // ========================================================================
+  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
+    this.ensureInitialized();
+    return _streamInsert(this.asStreamingTransport(), collection, docs);
+  }
+
+  // ==========================================================================
+  // Agent Memory — delegates to agent-memory-backend.ts
+  // ==========================================================================
 
   async storeSemanticFact(collection: string, entry: SemanticEntry): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id: entry.id,
-          vector: entry.embedding,
-          payload: {
-            _memory_type: 'semantic',
-            text: entry.text,
-            ...entry.metadata,
-          },
-        }],
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _storeSemanticFact(this.asAgentMemoryTransport(), collection, entry);
   }
 
-  async searchSemanticMemory(
-    collection: string,
-    embedding: number[],
-    k = 5
-  ): Promise<SearchResult[]> {
-    return this.search(collection, embedding, {
-      k,
-      filter: { _memory_type: 'semantic' },
-    });
+  async searchSemanticMemory(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return _searchSemanticMemory(this.asAgentMemoryTransport(), collection, embedding, k);
   }
 
   async recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void> {
     this.ensureInitialized();
-
-    const id = generateUniqueId();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id,
-          vector: event.embedding,
-          payload: {
-            _memory_type: 'episodic',
-            event_type: event.eventType,
-            timestamp: new Date().toISOString(),
-            ...event.data,
-            ...event.metadata,
-          },
-        }],
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _recordEpisodicEvent(this.asAgentMemoryTransport(), collection, event);
   }
 
-  async recallEpisodicEvents(
-    collection: string,
-    embedding: number[],
-    k = 5
-  ): Promise<SearchResult[]> {
-    return this.search(collection, embedding, {
-      k,
-      filter: { _memory_type: 'episodic' },
-    });
+  async recallEpisodicEvents(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return _recallEpisodicEvents(this.asAgentMemoryTransport(), collection, embedding, k);
   }
 
-  async storeProceduralPattern(
-    collection: string,
-    pattern: ProceduralPattern
-  ): Promise<void> {
+  async storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<void> {
     this.ensureInitialized();
-
-    // Procedural patterns are stored as metadata-only points.
-    // The server handles missing vector → zero-vector internally.
-    const id = generateUniqueId();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id,
-          payload: {
-            _memory_type: 'procedural',
-            name: pattern.name,
-            steps: pattern.steps,
-            ...pattern.metadata,
-          },
-        }],
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _storeProceduralPattern(this.asAgentMemoryTransport(), collection, pattern);
   }
 
-  async matchProceduralPatterns(
-    collection: string,
-    embedding: number[],
-    k = 5
-  ): Promise<SearchResult[]> {
-    return this.search(collection, embedding, {
-      k,
-      filter: { _memory_type: 'procedural' },
-    });
+  async matchProceduralPatterns(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return _matchProceduralPatterns(this.asAgentMemoryTransport(), collection, embedding, k);
   }
 }
