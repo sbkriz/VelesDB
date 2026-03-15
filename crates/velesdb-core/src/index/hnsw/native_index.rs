@@ -378,6 +378,7 @@ impl NativeHnswIndex {
         let count = items.len();
         if let Err(e) = self.insert_batch(items.as_slice()) {
             tracing::error!("insert_batch_parallel failed: {e}");
+            return 0;
         }
         count
     }

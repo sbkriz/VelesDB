@@ -125,9 +125,6 @@ impl HnswIndex {
         params: HnswParams,
         enable_vector_storage: bool,
     ) -> Self {
-        // Allocation failure here would only occur under extreme conditions
-        // (dimension=0 or system OOM during pre-allocation). Log and fall back
-        // to lazy init (dimension=0 case) rather than panicking the host app.
         let inner = HnswInner::new(
             metric,
             params.max_connections,
@@ -135,18 +132,7 @@ impl HnswIndex {
             params.ef_construction,
             dimension,
         )
-        .unwrap_or_else(|e| {
-            tracing::error!("HnswIndex pre-allocation failed, falling back to lazy init: {e}");
-            // Fall back to lazy init by passing dimension=0
-            HnswInner::new(
-                metric,
-                params.max_connections,
-                params.max_elements,
-                params.ef_construction,
-                0,
-            )
-            .expect("Lazy-init HnswInner with dimension=0 must succeed")
-        });
+        .expect("HnswIndex allocation failed: requires valid dimension and sufficient memory");
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);
 

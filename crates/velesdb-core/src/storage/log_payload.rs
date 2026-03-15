@@ -109,6 +109,8 @@ pub struct LogPayloadStorage {
     last_snapshot_wal_pos: RwLock<u64>,
     /// Durability mode for WAL writes
     durability: DurabilityMode,
+    /// Tracked WAL write position (avoids flush+metadata syscall for `DurabilityMode::None`)
+    write_offset: RwLock<u64>,
 }
 
 impl LogPayloadStorage {
@@ -175,6 +177,7 @@ impl LogPayloadStorage {
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
             durability,
+            write_offset: RwLock::new(wal_len),
         })
     }
 
@@ -362,17 +365,18 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn create_snapshot(&mut self) -> io::Result<()> {
-        // Sync WAL first to ensure all writes are durable before snapshotting
+        // Flush WAL before snapshotting to ensure data is on disk for the reader
         {
             let mut wal = self.wal.write();
-            Self::sync_wal(&mut wal, self.durability)?;
+            wal.flush()?;
+            wal.get_ref().sync_all()?;
         }
 
         let snapshot_path = self.path.join("payloads.snapshot");
         let index = self.index.read();
 
-        // Get current WAL position
-        let wal_pos = self.wal.write().get_ref().metadata()?.len();
+        // Use tracked offset — accurate and avoids an extra metadata syscall
+        let wal_pos = *self.write_offset.read();
 
         // Calculate buffer size
         let entry_count = index.len();
@@ -419,12 +423,7 @@ impl LogPayloadStorage {
     #[must_use]
     pub fn should_create_snapshot(&self) -> bool {
         let last_pos = *self.last_snapshot_wal_pos.read();
-
-        // Get current WAL size
-        let current_pos = match self.wal.write().get_ref().metadata() {
-            Ok(m) => m.len(),
-            Err(_) => return false,
-        };
+        let current_pos = *self.write_offset.read();
 
         current_pos.saturating_sub(last_pos) >= DEFAULT_SNAPSHOT_THRESHOLD
     }
@@ -435,28 +434,28 @@ impl PayloadStorage for LogPayloadStorage {
         let payload_bytes = serde_json::to_vec(payload)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        let mut wal = self.wal.write();
-        let mut index = self.index.write();
-
-        // Let's force flush to get accurate position or track it manually.
-        wal.flush()?;
-        let pos = wal.get_ref().metadata()?.len();
-
-        // Op: Store (1) | ID | Len | Data
-        // Pos points to start of record (Marker)
-        // We want index to point to Len (Marker(1) + ID(8) = +9 bytes)
-
-        wal.write_all(&[1u8])?;
-        wal.write_all(&id.to_le_bytes())?;
         let len_u32 = u32::try_from(payload_bytes.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
+
+        let mut wal = self.wal.write();
+        let mut index = self.index.write();
+        let mut offset = self.write_offset.write();
+
+        let record_start = *offset;
+
+        // Op: Store (1) | ID (8) | Len (4) | Data (N)
+        wal.write_all(&[1u8])?;
+        wal.write_all(&id.to_le_bytes())?;
         wal.write_all(&len_u32.to_le_bytes())?;
         wal.write_all(&payload_bytes)?;
 
         // Sync WAL according to durability mode
         Self::sync_wal(&mut wal, self.durability)?;
 
-        index.insert(id, pos + 9);
+        // Marker(1) + ID(8) = 9 bytes before the length field
+        let bytes_written = 1 + 8 + 4 + u64::from(len_u32);
+        *offset += bytes_written;
+        index.insert(id, record_start + 9);
 
         Ok(())
     }
@@ -467,6 +466,10 @@ impl PayloadStorage for LogPayloadStorage {
             return Ok(None);
         };
         drop(index);
+
+        // Flush the BufWriter so buffered data is visible to the reader file handle.
+        // This is a cheap userspace-to-kernel transfer, not an fsync.
+        self.wal.write().flush()?;
 
         let mut reader = self.reader.write(); // Need write lock to seek
         reader.seek(SeekFrom::Start(offset))?;
@@ -487,13 +490,16 @@ impl PayloadStorage for LogPayloadStorage {
     fn delete(&mut self, id: u64) -> io::Result<()> {
         let mut wal = self.wal.write();
         let mut index = self.index.write();
+        let mut offset = self.write_offset.write();
 
+        // Op: Delete (1) | ID (8)
         wal.write_all(&[2u8])?;
         wal.write_all(&id.to_le_bytes())?;
 
         // Sync WAL according to durability mode
         Self::sync_wal(&mut wal, self.durability)?;
 
+        *offset += 1 + 8; // Marker(1) + ID(8)
         index.remove(&id);
 
         Ok(())
