@@ -99,8 +99,33 @@ interface CollectionSanityApiResponse {
 }
 
 /**
+ * Monotonic unique ID generator.
+ * Combines millisecond timestamp with a sub-ms counter to avoid
+ * collisions when multiple IDs are generated within the same millisecond.
+ */
+let _idCounter = 0;
+let _lastTimestamp = 0;
+
+export function generateUniqueId(): number {
+  const now = Date.now();
+  if (now === _lastTimestamp) {
+    _idCounter++;
+  } else {
+    _lastTimestamp = now;
+    _idCounter = 0;
+  }
+  return now * 1000 + _idCounter;
+}
+
+/** @internal Reset state — only for tests. */
+export function _resetIdState(): void {
+  _idCounter = 0;
+  _lastTimestamp = 0;
+}
+
+/**
  * REST Backend
- * 
+ *
  * Provides vector storage via VelesDB REST API server.
  */
 export class RestBackend implements IVelesDBBackend {
@@ -1306,7 +1331,7 @@ export class RestBackend implements IVelesDBBackend {
   async recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void> {
     this.ensureInitialized();
 
-    const id = Date.now();
+    const id = generateUniqueId();
 
     const response = await this.request(
       'POST',
@@ -1349,8 +1374,8 @@ export class RestBackend implements IVelesDBBackend {
     this.ensureInitialized();
 
     // Procedural patterns are stored as metadata-only points.
-    // A zero-vector placeholder is used; retrieval is by metadata filter.
-    const id = Date.now();
+    // The server handles missing vector → zero-vector internally.
+    const id = generateUniqueId();
 
     const response = await this.request(
       'POST',
@@ -1358,7 +1383,6 @@ export class RestBackend implements IVelesDBBackend {
       {
         points: [{
           id,
-          vector: [],
           payload: {
             _memory_type: 'procedural',
             name: pattern.name,

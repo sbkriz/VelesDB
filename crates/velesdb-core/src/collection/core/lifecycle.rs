@@ -63,6 +63,7 @@ impl Collection {
             graph_schema: None,
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
+            hnsw_params: None,
         };
 
         // Initialize persistent storages
@@ -155,6 +156,7 @@ impl Collection {
             graph_schema: None,
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
+            hnsw_params: Some(hnsw_params),
         };
 
         let vector_storage = Arc::new(RwLock::new(
@@ -256,6 +258,7 @@ impl Collection {
             graph_schema: None,
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
+            hnsw_params: None,
         };
 
         // For metadata-only, we only need payload storage
@@ -349,9 +352,17 @@ impl Collection {
             LogPayloadStorage::new(&path).map_err(Error::Io)?,
         ));
 
-        // Load HNSW index if it exists, otherwise create new (empty)
+        // Load HNSW index if it exists, otherwise create new (empty).
+        // When hnsw.bin is absent and config.hnsw_params is set, honour the
+        // persisted custom params so they survive collection reopen.
         let index = if path.join("hnsw.bin").exists() {
             Arc::new(HnswIndex::load(&path, config.dimension, config.metric).map_err(Error::Io)?)
+        } else if let Some(params) = config.hnsw_params {
+            Arc::new(HnswIndex::with_params(
+                config.dimension,
+                config.metric,
+                params,
+            ))
         } else {
             Arc::new(HnswIndex::new(config.dimension, config.metric))
         };
@@ -437,6 +448,7 @@ impl Collection {
             graph_schema: Some(schema),
             embedding_dimension: embedding_dim,
             pq_rescore_oversampling: Some(4),
+            hnsw_params: None,
         };
 
         let vector_storage = Arc::new(RwLock::new(

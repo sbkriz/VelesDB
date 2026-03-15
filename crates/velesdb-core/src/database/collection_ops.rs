@@ -524,6 +524,18 @@ impl Database {
         self.open_metadata_collection_from_disk(name)
     }
 
+    /// Propagates updated query limits to all active collections.
+    ///
+    /// Called by the REST `PUT /guardrails` handler to ensure that runtime
+    /// limit changes take effect for subsequent queries across every
+    /// collection, not just new ones created after the change.
+    pub fn update_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
+        let collections = self.collections.read();
+        for collection in collections.values() {
+            collection.guard_rails.update_limits(limits);
+        }
+    }
+
     /// Disk fallback for `get_metadata_collection`.
     fn open_metadata_collection_from_disk(&self, name: &str) -> Option<MetadataCollection> {
         let path = self.data_dir.join(name);

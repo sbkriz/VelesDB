@@ -950,9 +950,9 @@ paths:
       - search
       summary: Lightweight search returning only IDs and scores (no payload hydration).
       description: |-
-        More efficient than the standard search endpoint when only point
-        identifiers and similarity scores are needed (e.g., re-ranking pipelines,
-        deduplication, or ID-based lookups in an external store).
+        Supports the same search modes as the standard `/search` endpoint:
+        dense, sparse, and hybrid. Honors filter, ef_search, mode, fusion,
+        and all other `SearchRequest` parameters.
       operationId: search_ids
       parameters:
       - name: name

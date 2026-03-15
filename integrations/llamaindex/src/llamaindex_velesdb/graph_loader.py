@@ -79,6 +79,29 @@ def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]
         return None
 
 
+def _normalise_edge(raw: Any) -> Dict[str, Any]:
+    """Normalise a raw edge dict to the canonical format.
+
+    Both the native graph and the in-memory list may return edges that are
+    missing optional keys.  This function fills every key with a safe default
+    so callers never have to guard against ``KeyError``.
+
+    Args:
+        raw: Edge mapping as returned by the native graph or stored in
+            ``self._edges``.
+
+    Returns:
+        Dict with guaranteed keys: id, source, target, label, properties.
+    """
+    return {
+        "id": raw.get("id", 0),
+        "source": raw.get("source", 0),
+        "target": raw.get("target", 0),
+        "label": raw.get("label", ""),
+        "properties": raw.get("properties", {}),
+    }
+
+
 class GraphLoader:
     """Load entities and relations into VelesDB's Knowledge Graph.
 
@@ -214,8 +237,15 @@ class GraphLoader:
     ) -> List[Dict[str, Any]]:
         """Get edges from the graph.
 
+        When a native graph collection is available it is used as the source of
+        truth (ensuring cross-session persistence).  If the native graph raises
+        an exception the method falls back to the in-memory list and logs a
+        warning.  Without a native graph the in-memory list is used directly
+        (legacy behaviour).
+
         Args:
-            label: Optional filter by edge label.
+            label: Optional filter by edge label.  Forwarded to the native graph
+                when available so filtering happens at the storage layer.
 
         Returns:
             List of edge dictionaries with id, source, target, label, properties.
@@ -225,21 +255,24 @@ class GraphLoader:
             >>> for edge in edges:
             ...     print(f"{edge['source']} -> {edge['target']}")
         """
-        if label:
-            edges = [e for e in self._edges if e.get("label") == label]
-        else:
-            edges = list(self._edges)
+        if self._native_graph is not None:
+            try:
+                raw_edges = self._native_graph.get_edges(label)
+                return [_normalise_edge(e) for e in raw_edges]
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read edges from native graph (%s); "
+                    "falling back to in-memory list.",
+                    exc,
+                )
 
-        return [
-            {
-                "id": e.get("id", 0),
-                "source": e.get("source", 0),
-                "target": e.get("target", 0),
-                "label": e.get("label", ""),
-                "properties": e.get("properties", {}),
-            }
-            for e in edges
-        ]
+        # In-memory fallback (no native graph, or native graph failed).
+        if label:
+            source = [e for e in self._edges if e.get("label") == label]
+        else:
+            source = list(self._edges)
+
+        return [_normalise_edge(e) for e in source]
 
     def load_from_nodes(
         self,
