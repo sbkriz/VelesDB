@@ -4,6 +4,39 @@ use super::{distance_pq_l2, PQVector, ProductQuantizer};
 use crate::error::Error;
 use crate::quantization::pq_kmeans::l2_squared;
 
+/// Compute brute-force L2 top-k neighbors for a query.
+///
+/// Returns the indices of the `top_k` closest vectors by squared L2 distance.
+fn brute_force_l2_top_k(query: &[f32], vectors: &[Vec<f32>], top_k: usize) -> Vec<usize> {
+    let mut dists: Vec<(usize, f32)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let d: f32 = query
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| {
+                    let diff = a - b;
+                    diff * diff
+                })
+                .sum();
+            (i, d)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    dists.iter().take(top_k).map(|&(i, _)| i).collect()
+}
+
+/// Compute recall: fraction of `ground_truth` entries present in `predicted`.
+#[allow(clippy::cast_precision_loss)]
+fn recall_fraction(ground_truth: &[usize], predicted: &[usize]) -> f64 {
+    let hits = ground_truth
+        .iter()
+        .filter(|&&idx| predicted.contains(&idx))
+        .count();
+    hits as f64 / ground_truth.len() as f64
+}
+
 /// Generate clustered test vectors with seeded RNG.
 ///
 /// Each cluster is centered at a well-separated point and samples are drawn with
@@ -378,87 +411,78 @@ fn product_quantizer_rotation_none_serializes_via_postcard() {
     assert_eq!(pq2.codebook.num_centroids, pq.codebook.num_centroids);
 }
 
-#[test]
-#[allow(clippy::too_many_lines)]
-fn recall_at_10_on_clustered_data() {
+/// Compute PQ ADC top-k for a query against all vectors.
+fn pq_adc_top_k(
+    query: &[f32],
+    vectors: &[Vec<f32>],
+    pq: &ProductQuantizer,
+    top_k: usize,
+) -> Vec<usize> {
+    let mut pq_dists: Vec<(usize, f32)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let code = pq.quantize(v).unwrap();
+            let d = distance_pq_l2(query, &code, pq);
+            (i, d)
+        })
+        .collect();
+    pq_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    pq_dists.iter().take(top_k).map(|&(i, _)| i).collect()
+}
+
+/// Generate clustered vectors with large inter-cluster offsets and small noise.
+fn generate_offset_clustered_vectors(
+    n: usize,
+    dim: usize,
+    num_clusters: usize,
+    noise: f32,
+    seed: u64,
+) -> Vec<Vec<f32>> {
     use rand::{Rng, SeedableRng};
-    let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
-    let num_clusters = 4;
+    let centers: Vec<Vec<f32>> = (0..num_clusters)
+        .map(|c| {
+            #[allow(clippy::cast_precision_loss)]
+            let offset = c as f32 * 100.0;
+            (0..dim)
+                .map(|d| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let v = offset + d as f32 * 0.5;
+                    v
+                })
+                .collect()
+        })
+        .collect();
+
+    (0..n)
+        .map(|i| {
+            let cluster = i % num_clusters;
+            centers[cluster]
+                .iter()
+                .map(|&c| c + (rng.gen::<f32>() - 0.5) * noise)
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn recall_at_10_on_clustered_data() {
     let n = 1000;
-    let dim = 64;
-
-    let mut centers = Vec::new();
-    for c in 0..num_clusters {
-        #[allow(clippy::cast_precision_loss)]
-        let offset = c as f32 * 100.0;
-        let center: Vec<f32> = (0..dim)
-            .map(|d| {
-                #[allow(clippy::cast_precision_loss)]
-                let v = offset + d as f32 * 0.5;
-                v
-            })
-            .collect();
-        centers.push(center);
-    }
-
-    let mut vectors = Vec::with_capacity(n);
-    for i in 0..n {
-        let cluster = i % num_clusters;
-        let v: Vec<f32> = centers[cluster]
-            .iter()
-            .map(|&c| c + (rng.gen::<f32>() - 0.5) * 5.0)
-            .collect();
-        vectors.push(v);
-    }
-
-    let pq = ProductQuantizer::train(&vectors, 8, 256).unwrap();
-
     let num_queries = 20;
     let top_k = 10;
-    let mut total_recall = 0.0_f64;
 
+    let vectors = generate_offset_clustered_vectors(n, 64, 4, 5.0, 12345);
+    let pq = ProductQuantizer::train(&vectors, 8, 256).unwrap();
+
+    let mut total_recall = 0.0_f64;
     for qi in 0..num_queries {
         let query_idx = qi * (n / num_queries);
         let query = &vectors[query_idx];
-
-        let mut true_dists: Vec<(usize, f32)> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let d: f32 = query
-                    .iter()
-                    .zip(v.iter())
-                    .map(|(a, b)| {
-                        let diff = a - b;
-                        diff * diff
-                    })
-                    .sum();
-                (i, d)
-            })
-            .collect();
-        true_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let true_top_k: Vec<usize> = true_dists.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        let mut pq_dists: Vec<(usize, f32)> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let code = pq.quantize(v).unwrap();
-                let d = distance_pq_l2(query, &code, &pq);
-                (i, d)
-            })
-            .collect();
-        pq_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let pq_top_k: Vec<usize> = pq_dists.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        let hits = true_top_k
-            .iter()
-            .filter(|&&idx| pq_top_k.contains(&idx))
-            .count();
-        #[allow(clippy::cast_precision_loss)]
-        let recall = hits as f64 / top_k as f64;
-        total_recall += recall;
+        let true_top = brute_force_l2_top_k(query, &vectors, top_k);
+        let pq_top = pq_adc_top_k(query, &vectors, &pq, top_k);
+        total_recall += recall_fraction(&true_top, &pq_top);
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -677,19 +701,19 @@ fn opq_rotation_is_approximately_orthogonal() {
     }
 }
 
+/// Generate directional clustered vectors for OPQ testing.
+///
+/// Each cluster has 3 random principal directions with large variance along
+/// those axes, making the data anisotropic — the scenario where OPQ shines.
 #[cfg(feature = "persistence")]
-#[test]
-#[allow(clippy::too_many_lines)]
-fn opq_recall_improvement_over_standard_pq() {
-    use crate::quantization::pq_opq::train_opq;
+fn generate_directional_clustered_vectors(
+    n: usize,
+    dim: usize,
+    num_clusters: usize,
+    seed: u64,
+) -> Vec<Vec<f32>> {
     use rand::{Rng, SeedableRng};
-    let mut rng = rand::rngs::StdRng::seed_from_u64(54321);
-
-    let num_clusters = 8;
-    let n = 4000;
-    let dim = 64;
-    let m = 8;
-    let k = 16;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     let mut cluster_dirs: Vec<Vec<Vec<f32>>> = Vec::new();
     let mut cluster_centers: Vec<Vec<f32>> = Vec::new();
@@ -705,31 +729,41 @@ fn opq_recall_improvement_over_standard_pq() {
             .collect();
         cluster_centers.push(center);
 
-        let mut dirs = Vec::new();
-        for _ in 0..3 {
-            let dir: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
-            let norm: f32 = dir.iter().map(|&x| x * x).sum::<f32>().sqrt();
-            let dir: Vec<f32> = dir.iter().map(|&x| x / norm).collect();
-            dirs.push(dir);
-        }
+        let dirs: Vec<Vec<f32>> = (0..3)
+            .map(|_| {
+                let dir: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() - 0.5).collect();
+                let norm: f32 = dir.iter().map(|&x| x * x).sum::<f32>().sqrt();
+                dir.iter().map(|&x| x / norm).collect()
+            })
+            .collect();
         cluster_dirs.push(dirs);
     }
 
-    let mut vectors = Vec::with_capacity(n);
-    for i in 0..n {
-        let cluster = i % num_clusters;
-        let v: Vec<f32> = (0..dim)
-            .map(|d| {
-                let mut val = cluster_centers[cluster][d];
-                for dir in &cluster_dirs[cluster] {
-                    val += (rng.gen::<f32>() - 0.5) * 15.0 * dir[d];
-                }
-                val += (rng.gen::<f32>() - 0.5) * 0.5;
-                val
-            })
-            .collect();
-        vectors.push(v);
-    }
+    (0..n)
+        .map(|i| {
+            let cluster = i % num_clusters;
+            (0..dim)
+                .map(|d| {
+                    let mut val = cluster_centers[cluster][d];
+                    for dir in &cluster_dirs[cluster] {
+                        val += (rng.gen::<f32>() - 0.5) * 15.0 * dir[d];
+                    }
+                    val += (rng.gen::<f32>() - 0.5) * 0.5;
+                    val
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn opq_recall_improvement_over_standard_pq() {
+    use crate::quantization::pq_opq::train_opq;
+
+    let m = 8;
+    let k = 16;
+    let vectors = generate_directional_clustered_vectors(4000, 64, 8, 54321);
 
     let mut best_improvement = f64::NEG_INFINITY;
     for _ in 0..3 {
@@ -794,6 +828,33 @@ fn opq_handles_non_common_dimension_split() {
     assert_eq!(pq.codebook.subspace_dim, 8);
 }
 
+/// Compute LUT-based PQ top-k for a query against precomputed codes.
+#[cfg(feature = "persistence")]
+fn pq_lut_top_k(
+    query: &[f32],
+    codes: &[PQVector],
+    pq: &ProductQuantizer,
+    top_k: usize,
+) -> Vec<usize> {
+    let lut = pq.precompute_lut(query);
+    let k = pq.codebook.num_centroids;
+    let mut pq_dists: Vec<(usize, f32)> = codes
+        .iter()
+        .enumerate()
+        .map(|(i, code)| {
+            let d: f32 = code
+                .codes
+                .iter()
+                .enumerate()
+                .map(|(s, &c)| lut[s * k + usize::from(c)])
+                .sum();
+            (i, d)
+        })
+        .collect();
+    pq_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    pq_dists.iter().take(top_k).map(|&(i, _)| i).collect()
+}
+
 /// Helper to compute average recall@k for a quantizer on given vectors.
 #[cfg(feature = "persistence")]
 #[allow(clippy::cast_precision_loss)]
@@ -804,56 +865,15 @@ fn compute_avg_recall(
     top_k: usize,
 ) -> f64 {
     let n = vectors.len();
-    let mut total_recall = 0.0_f64;
-
     let codes: Vec<PQVector> = vectors.iter().map(|v| pq.quantize(v).unwrap()).collect();
+    let mut total_recall = 0.0_f64;
 
     for qi in 0..num_queries {
         let query_idx = qi * (n / num_queries);
         let query = &vectors[query_idx];
-
-        let mut true_dists: Vec<(usize, f32)> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let d: f32 = query
-                    .iter()
-                    .zip(v.iter())
-                    .map(|(a, b)| {
-                        let diff = a - b;
-                        diff * diff
-                    })
-                    .sum();
-                (i, d)
-            })
-            .collect();
-        true_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let true_top_k: Vec<usize> = true_dists.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        let lut = pq.precompute_lut(query);
-        let k = pq.codebook.num_centroids;
-        let mut pq_dists: Vec<(usize, f32)> = codes
-            .iter()
-            .enumerate()
-            .map(|(i, code)| {
-                let d: f32 = code
-                    .codes
-                    .iter()
-                    .enumerate()
-                    .map(|(s, &c)| lut[s * k + usize::from(c)])
-                    .sum();
-                (i, d)
-            })
-            .collect();
-        pq_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let pq_top_k: Vec<usize> = pq_dists.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        let hits = true_top_k
-            .iter()
-            .filter(|&&idx| pq_top_k.contains(&idx))
-            .count();
-        let recall = hits as f64 / top_k as f64;
-        total_recall += recall;
+        let true_top = brute_force_l2_top_k(query, vectors, top_k);
+        let pq_top = pq_lut_top_k(query, &codes, pq, top_k);
+        total_recall += recall_fraction(&true_top, &pq_top);
     }
 
     total_recall / num_queries as f64

@@ -55,10 +55,9 @@ pub fn train_opq(
     Ok(final_pq)
 }
 
-/// Compute the covariance matrix of the dataset (flattened row-major d x d, f64).
+/// Compute the column-wise mean of the dataset.
 #[cfg(feature = "persistence")]
-fn compute_covariance_matrix(vectors: &[Vec<f32>], d: usize) -> Vec<f64> {
-    let n = vectors.len();
+fn compute_column_mean(vectors: &[Vec<f32>], d: usize) -> Vec<f64> {
     let mut mean = vec![0.0_f64; d];
     for v in vectors {
         for (i, &val) in v.iter().enumerate() {
@@ -66,11 +65,20 @@ fn compute_covariance_matrix(vectors: &[Vec<f32>], d: usize) -> Vec<f64> {
         }
     }
     #[allow(clippy::cast_precision_loss)]
-    let inv_n = 1.0_f64 / n as f64;
+    let inv_n = 1.0_f64 / vectors.len() as f64;
     for m in &mut mean {
         *m *= inv_n;
     }
+    mean
+}
 
+/// Compute the covariance matrix of the dataset (flattened row-major d x d, f64).
+#[cfg(feature = "persistence")]
+fn compute_covariance_matrix(vectors: &[Vec<f32>], d: usize) -> Vec<f64> {
+    let mean = compute_column_mean(vectors, d);
+
+    #[allow(clippy::cast_precision_loss)]
+    let inv_n = 1.0_f64 / vectors.len() as f64;
     let mut cov = vec![0.0_f64; d * d];
     for v in vectors {
         for i in 0..d {

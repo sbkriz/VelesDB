@@ -61,6 +61,21 @@ pub(super) fn validate_train_params(
     num_subspaces: usize,
     num_centroids: usize,
 ) -> Result<(usize, usize), Error> {
+    validate_basic_params(vectors, num_subspaces, num_centroids)?;
+
+    let dimension = vectors[0].len();
+    validate_dimension(vectors, dimension, num_subspaces, num_centroids)?;
+
+    let subspace_dim = dimension / num_subspaces;
+    Ok((dimension, subspace_dim))
+}
+
+/// Validates non-empty dataset and non-zero subspace/centroid counts.
+fn validate_basic_params(
+    vectors: &[Vec<f32>],
+    num_subspaces: usize,
+    num_centroids: usize,
+) -> Result<(), Error> {
     if vectors.is_empty() {
         return Err(Error::InvalidQuantizerConfig(
             "cannot train PQ with empty dataset".into(),
@@ -81,8 +96,16 @@ pub(super) fn validate_train_params(
             "num_centroids must fit in u16 (max 65535)".into(),
         ));
     }
+    Ok(())
+}
 
-    let dimension = vectors[0].len();
+/// Validates dimension uniformity, divisibility, and centroid count bounds.
+fn validate_dimension(
+    vectors: &[Vec<f32>],
+    dimension: usize,
+    num_subspaces: usize,
+    num_centroids: usize,
+) -> Result<(), Error> {
     if dimension == 0 {
         return Err(Error::InvalidQuantizerConfig(
             "vectors must have non-zero dimension".into(),
@@ -104,9 +127,7 @@ pub(super) fn validate_train_params(
             vectors.len()
         )));
     }
-
-    let subspace_dim = dimension / num_subspaces;
-    Ok((dimension, subspace_dim))
+    Ok(())
 }
 
 impl ProductQuantizer {
@@ -225,6 +246,29 @@ impl ProductQuantizer {
     }
 }
 
+/// Train centroids for a single subspace via k-means.
+fn train_single_subspace(
+    vectors: &[Vec<f32>],
+    subspace: usize,
+    subspace_dim: usize,
+    num_centroids: usize,
+    #[cfg(feature = "gpu")] gpu_ctx: Option<&crate::gpu::PqGpuContext>,
+) -> Vec<Vec<f32>> {
+    let start = subspace * subspace_dim;
+    let end = start + subspace_dim;
+    let sub_vectors: Vec<Vec<f32>> = vectors.iter().map(|v| v[start..end].to_vec()).collect();
+    #[allow(clippy::cast_possible_truncation)]
+    let seed = 42u64.wrapping_add(subspace as u64);
+    kmeans_train(
+        &sub_vectors,
+        num_centroids,
+        50,
+        seed,
+        #[cfg(feature = "gpu")]
+        gpu_ctx,
+    )
+}
+
 /// Train centroids for all subspaces, using rayon when persistence is enabled.
 fn train_subspace_centroids(
     vectors: &[Vec<f32>],
@@ -232,31 +276,22 @@ fn train_subspace_centroids(
     subspace_dim: usize,
     num_centroids: usize,
 ) -> Vec<Vec<Vec<f32>>> {
-    // Create GPU context once before the (possibly parallel) subspace training loop.
     #[cfg(feature = "gpu")]
     let gpu_ctx = crate::gpu::PqGpuContext::new();
 
     #[cfg(feature = "persistence")]
     {
         use rayon::prelude::*;
-        #[cfg(feature = "gpu")]
-        let gpu_ctx_ref = gpu_ctx.as_ref();
         (0..num_subspaces)
             .into_par_iter()
-            .map(|subspace| {
-                let start = subspace * subspace_dim;
-                let end = start + subspace_dim;
-                let sub_vectors: Vec<Vec<f32>> =
-                    vectors.iter().map(|v| v[start..end].to_vec()).collect();
-                #[allow(clippy::cast_possible_truncation)]
-                let seed = 42u64.wrapping_add(subspace as u64);
-                kmeans_train(
-                    &sub_vectors,
+            .map(|s| {
+                train_single_subspace(
+                    vectors,
+                    s,
+                    subspace_dim,
                     num_centroids,
-                    50,
-                    seed,
                     #[cfg(feature = "gpu")]
-                    gpu_ctx_ref,
+                    gpu_ctx.as_ref(),
                 )
             })
             .collect()
@@ -264,18 +299,12 @@ fn train_subspace_centroids(
     #[cfg(not(feature = "persistence"))]
     {
         (0..num_subspaces)
-            .map(|subspace| {
-                let start = subspace * subspace_dim;
-                let end = start + subspace_dim;
-                let sub_vectors: Vec<Vec<f32>> =
-                    vectors.iter().map(|v| v[start..end].to_vec()).collect();
-                #[allow(clippy::cast_possible_truncation)]
-                let seed = 42u64.wrapping_add(subspace as u64);
-                kmeans_train(
-                    &sub_vectors,
+            .map(|s| {
+                train_single_subspace(
+                    vectors,
+                    s,
+                    subspace_dim,
                     num_centroids,
-                    50,
-                    seed,
                     #[cfg(feature = "gpu")]
                     gpu_ctx.as_ref(),
                 )

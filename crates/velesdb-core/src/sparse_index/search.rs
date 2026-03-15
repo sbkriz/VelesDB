@@ -195,6 +195,22 @@ fn score_document(
     score
 }
 
+/// Finds the smallest `doc_id` among essential posting lists (from `split..n_terms`).
+fn find_min_essential_doc_id(
+    term_data: &[TermPostings],
+    cursors: &[usize],
+    split: usize,
+) -> Option<u64> {
+    let mut min_doc_id: Option<u64> = None;
+    for i in split..term_data.len() {
+        if cursors[i] < term_data[i].postings.len() {
+            let did = term_data[i].postings[cursors[i]].doc_id;
+            min_doc_id = Some(min_doc_id.map_or(did, |m: u64| m.min(did)));
+        }
+    }
+    min_doc_id
+}
+
 /// `MaxScore` DAAT search over the inverted index.
 fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) -> Vec<ScoredDoc> {
     let Some(prepared) = prepare_term_data(index, query) else {
@@ -204,28 +220,14 @@ fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) 
         terms: term_data,
         upper_bound,
     } = prepared;
-    let n_terms = term_data.len();
 
     let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
     let mut threshold: f32 = 0.0;
     let mut split = find_split(&upper_bound, threshold);
-    let mut cursors: Vec<usize> = vec![0; n_terms];
+    let mut cursors: Vec<usize> = vec![0; term_data.len()];
 
     loop {
-        // Find the smallest doc_id among essential posting lists
-        let mut min_doc_id: Option<u64> = None;
-        for i in split..n_terms {
-            if cursors[i] < term_data[i].postings.len() {
-                let did = term_data[i].postings[cursors[i]].doc_id;
-                match min_doc_id {
-                    None => min_doc_id = Some(did),
-                    Some(m) if did < m => min_doc_id = Some(did),
-                    _ => {}
-                }
-            }
-        }
-
-        let Some(doc_id) = min_doc_id else {
+        let Some(doc_id) = find_min_essential_doc_id(&term_data, &cursors, split) else {
             break;
         };
 

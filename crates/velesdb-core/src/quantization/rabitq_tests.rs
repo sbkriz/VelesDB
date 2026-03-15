@@ -1,5 +1,130 @@
 use super::*;
 
+/// Compute brute-force L2 (Euclidean) top-k neighbors for a query.
+///
+/// Returns the indices of the `top_k` closest vectors by L2 distance.
+fn brute_force_l2_top_k(query: &[f32], vectors: &[Vec<f32>], top_k: usize) -> Vec<usize> {
+    let mut dists: Vec<(usize, f32)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let d: f32 = query
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| {
+                    let diff = a - b;
+                    diff * diff
+                })
+                .sum::<f32>()
+                .sqrt();
+            (i, d)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    dists.iter().take(top_k).map(|&(i, _)| i).collect()
+}
+
+/// Compute RaBitQ approximate top-k neighbors for a query.
+fn rabitq_top_k(
+    query: &[f32],
+    encoded: &[RaBitQVector],
+    index: &RaBitQIndex,
+    top_k: usize,
+) -> Vec<usize> {
+    let dists = index.batch_distance(query, encoded);
+    let mut ranked: Vec<(usize, f32)> = dists.into_iter().enumerate().collect();
+    ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    ranked.iter().take(top_k).map(|&(i, _)| i).collect()
+}
+
+/// Compute recall: fraction of `ground_truth` entries present in `predicted`.
+#[allow(clippy::cast_precision_loss)]
+fn recall_fraction(ground_truth: &[usize], predicted: &[usize]) -> f64 {
+    let hits = ground_truth
+        .iter()
+        .filter(|&&idx| predicted.contains(&idx))
+        .count();
+    hits as f64 / ground_truth.len() as f64
+}
+
+/// Generate random clustered vectors where each cluster center is uniformly
+/// distributed and samples have controlled noise around the center.
+fn generate_random_clustered_vectors(
+    n: usize,
+    dim: usize,
+    num_clusters: usize,
+    noise: f32,
+    seed: u64,
+) -> Vec<Vec<f32>> {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+
+    let centers: Vec<Vec<f32>> = (0..num_clusters)
+        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 200.0 - 100.0).collect())
+        .collect();
+
+    (0..n)
+        .map(|i| {
+            let cluster = i % num_clusters;
+            centers[cluster]
+                .iter()
+                .map(|&c| c + (rng.gen::<f32>() - 0.5) * noise)
+                .collect()
+        })
+        .collect()
+}
+
+/// Compute the centroid (mean) of a set of vectors.
+#[allow(clippy::cast_precision_loss)]
+fn compute_centroid(vectors: &[Vec<f32>], dim: usize) -> Vec<f32> {
+    let mut c = vec![0.0f32; dim];
+    for v in vectors {
+        for (ci, &vi) in c.iter_mut().zip(v.iter()) {
+            *ci += vi;
+        }
+    }
+    let inv = 1.0 / vectors.len() as f32;
+    for x in &mut c {
+        *x *= inv;
+    }
+    c
+}
+
+/// Build a `RaBitQIndex` with identity rotation and computed centroid.
+fn identity_index_with_centroid(vectors: &[Vec<f32>], dim: usize) -> RaBitQIndex {
+    let centroid = compute_centroid(vectors, dim);
+    let mut rotation = vec![0.0f32; dim * dim];
+    for i in 0..dim {
+        rotation[i * dim + i] = 1.0;
+    }
+    RaBitQIndex {
+        rotation,
+        centroid,
+        dimension: dim,
+    }
+}
+
+/// Compute average recall@k across evenly-spaced queries using RaBitQ.
+#[allow(clippy::cast_precision_loss)]
+fn rabitq_avg_recall(
+    vectors: &[Vec<f32>],
+    encoded: &[RaBitQVector],
+    index: &RaBitQIndex,
+    num_queries: usize,
+    top_k: usize,
+) -> f64 {
+    let n = vectors.len();
+    let mut total_recall = 0.0_f64;
+    for qi in 0..num_queries {
+        let query_idx = qi * (n / num_queries);
+        let query = &vectors[query_idx];
+        let true_top = brute_force_l2_top_k(query, vectors, top_k);
+        let approx_top = rabitq_top_k(query, encoded, index, top_k);
+        total_recall += recall_fraction(&true_top, &approx_top);
+    }
+    total_recall / num_queries as f64
+}
+
 /// Create an identity rotation matrix (for testing without training).
 fn identity_index(dim: usize) -> RaBitQIndex {
     let mut rotation = vec![0.0f32; dim * dim];
@@ -128,111 +253,17 @@ fn rabitq_signs_to_bits_packing() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
 fn rabitq_recall_at_10_identity_rotation() {
     // With identity rotation (no training), RaBitQ is essentially binary
     // quantization. Test that it correctly ranks cross-cluster neighbors
     // (coarse ranking). The 85% recall threshold with trained rotation
     // is validated in Task 2's tests after `RaBitQIndex::train` is available.
-    use rand::{Rng, SeedableRng};
-
-    let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
-
     let dim = 64;
-    let n = 1000;
-    let num_clusters = 10;
-    let top_k = 10;
-    let num_queries = 20;
-
-    // Generate clusters with moderate spread -- vectors within a cluster
-    // differ significantly in each dimension so sign bits carry info.
-    let mut centers = Vec::new();
-    for _ in 0..num_clusters {
-        let center: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 200.0 - 100.0).collect();
-        centers.push(center);
-    }
-
-    let mut vectors = Vec::with_capacity(n);
-    for i in 0..n {
-        let cluster = i % num_clusters;
-        let v: Vec<f32> = centers[cluster]
-            .iter()
-            .map(|&c| c + (rng.gen::<f32>() - 0.5) * 20.0)
-            .collect();
-        vectors.push(v);
-    }
-
-    // Centroid = mean
-    let centroid: Vec<f32> = {
-        let mut c = vec![0.0f32; dim];
-        for v in &vectors {
-            for (ci, &vi) in c.iter_mut().zip(v.iter()) {
-                *ci += vi;
-            }
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let inv = 1.0 / n as f32;
-        for x in &mut c {
-            *x *= inv;
-        }
-        c
-    };
-
-    let mut rotation = vec![0.0f32; dim * dim];
-    for i in 0..dim {
-        rotation[i * dim + i] = 1.0;
-    }
-
-    let index = RaBitQIndex {
-        rotation,
-        centroid,
-        dimension: dim,
-    };
-
+    let vectors = generate_random_clustered_vectors(1000, dim, 10, 20.0, 12345);
+    let index = identity_index_with_centroid(&vectors, dim);
     let encoded: Vec<RaBitQVector> = vectors.iter().map(|v| index.encode(v).unwrap()).collect();
 
-    let mut total_recall = 0.0_f64;
-    for qi in 0..num_queries {
-        let query_idx = qi * (n / num_queries);
-        let query = &vectors[query_idx];
-
-        // True top-k by L2
-        let mut true_dists: Vec<(usize, f32)> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let d: f32 = query
-                    .iter()
-                    .zip(v.iter())
-                    .map(|(a, b)| {
-                        let diff = a - b;
-                        diff * diff
-                    })
-                    .sum::<f32>()
-                    .sqrt();
-                (i, d)
-            })
-            .collect();
-        true_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let true_top: Vec<usize> = true_dists.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        // RaBitQ top-k
-        let rabitq_dists = index.batch_distance(query, &encoded);
-        let mut rabitq_ranked: Vec<(usize, f32)> = rabitq_dists.into_iter().enumerate().collect();
-        rabitq_ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let rabitq_top: Vec<usize> = rabitq_ranked.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        let hits = true_top
-            .iter()
-            .filter(|&&idx| rabitq_top.contains(&idx))
-            .count();
-        #[allow(clippy::cast_precision_loss)]
-        let recall = hits as f64 / top_k as f64;
-        total_recall += recall;
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    let avg_recall = total_recall / num_queries as f64;
+    let avg_recall = rabitq_avg_recall(&vectors, &encoded, &index, 20, 10);
     // Identity rotation gives ~20-30% recall on random clustered data
     // (well above random baseline of 1%). Trained rotation (Task 2)
     // with orthogonal projection achieves 85%+.
@@ -384,86 +415,16 @@ fn rabitq_train_dim_less_than_64_works() {
 
 #[cfg(feature = "persistence")]
 #[test]
-#[allow(clippy::too_many_lines)]
 fn rabitq_trained_recall_at_10_on_clustered_data() {
     // Full pipeline: train on 500+ vectors, encode, search top-10.
     // RaBitQ is a coarse quantizer (32x compression = 1 bit per dimension).
     // With 128 dimensions and many small clusters, sign bits provide
     // enough resolution for good recall.
-    use rand::{Rng, SeedableRng};
-    let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
-
-    let dim = 128;
-    let n = 1000;
-    let num_clusters = 100;
-    let top_k = 10;
-    let num_queries = 20;
-
-    // Generate many small clusters spread across 128-dimensional space.
-    let mut centers = Vec::new();
-    for _ in 0..num_clusters {
-        let center: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 200.0 - 100.0).collect();
-        centers.push(center);
-    }
-
-    let mut vectors = Vec::with_capacity(n);
-    for i in 0..n {
-        let cluster = i % num_clusters;
-        let v: Vec<f32> = centers[cluster]
-            .iter()
-            .map(|&c| c + (rng.gen::<f32>() - 0.5) * 40.0)
-            .collect();
-        vectors.push(v);
-    }
-
-    // Train with full pipeline
+    let vectors = generate_random_clustered_vectors(1000, 128, 100, 40.0, 12345);
     let index = RaBitQIndex::train(&vectors, 42).unwrap();
-
-    // Encode all
     let encoded: Vec<RaBitQVector> = vectors.iter().map(|v| index.encode(v).unwrap()).collect();
 
-    let mut total_recall = 0.0_f64;
-    for qi in 0..num_queries {
-        let query_idx = qi * (n / num_queries);
-        let query = &vectors[query_idx];
-
-        // True top-k by L2
-        let mut true_dists: Vec<(usize, f32)> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let d: f32 = query
-                    .iter()
-                    .zip(v.iter())
-                    .map(|(a, b)| {
-                        let diff = a - b;
-                        diff * diff
-                    })
-                    .sum::<f32>()
-                    .sqrt();
-                (i, d)
-            })
-            .collect();
-        true_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let true_top: Vec<usize> = true_dists.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        // RaBitQ top-k
-        let rabitq_dists = index.batch_distance(query, &encoded);
-        let mut rabitq_ranked: Vec<(usize, f32)> = rabitq_dists.into_iter().enumerate().collect();
-        rabitq_ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let rabitq_top: Vec<usize> = rabitq_ranked.iter().take(top_k).map(|&(i, _)| i).collect();
-
-        let hits = true_top
-            .iter()
-            .filter(|&&idx| rabitq_top.contains(&idx))
-            .count();
-        #[allow(clippy::cast_precision_loss)]
-        let recall = hits as f64 / top_k as f64;
-        total_recall += recall;
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    let avg_recall = total_recall / num_queries as f64;
+    let avg_recall = rabitq_avg_recall(&vectors, &encoded, &index, 20, 10);
     assert!(
         avg_recall >= 0.85,
         "RaBitQ trained recall@10 = {avg_recall:.3}, expected >= 0.85"

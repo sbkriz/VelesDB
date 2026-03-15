@@ -65,6 +65,37 @@ impl Parser {
         }))
     }
 
+    /// Parses a single sparse entry `index: value` into an `(u32, f32)` pair.
+    fn parse_sparse_entry(entry: pest::iterators::Pair<Rule>) -> Result<(u32, f32), ParseError> {
+        let mut entry_inner = entry.into_inner();
+        let idx = entry_inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected sparse entry index"))?
+            .as_str()
+            .parse::<u32>()
+            .map_err(|_| ParseError::syntax(0, "", "Invalid sparse entry index"))?;
+        let val = entry_inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected sparse entry value"))?
+            .as_str()
+            .parse::<f32>()
+            .map_err(|_| ParseError::syntax(0, "", "Invalid sparse entry value"))?;
+        Ok((idx, val))
+    }
+
+    /// Parses a sparse literal `{12: 0.8, 45: 0.3}` into a `SparseVector`.
+    fn parse_sparse_literal(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<SparseVectorExpr, ParseError> {
+        let mut pairs = Vec::new();
+        for entry in pair.into_inner() {
+            if entry.as_rule() == Rule::sparse_entry {
+                pairs.push(Self::parse_sparse_entry(entry)?);
+            }
+        }
+        Ok(SparseVectorExpr::Literal(SparseVector::new(pairs)))
+    }
+
     /// Parses a sparse value: either a sparse literal `{12: 0.8, 45: 0.3}` or a parameter `$sv`.
     fn parse_sparse_value(
         pair: pest::iterators::Pair<Rule>,
@@ -75,32 +106,7 @@ impl Parser {
             .ok_or_else(|| ParseError::syntax(0, "", "Expected sparse vector expression"))?;
 
         match inner.as_rule() {
-            Rule::sparse_literal => {
-                let mut pairs = Vec::new();
-                for entry in inner.into_inner() {
-                    if entry.as_rule() == Rule::sparse_entry {
-                        let mut entry_inner = entry.into_inner();
-                        let idx = entry_inner
-                            .next()
-                            .ok_or_else(|| {
-                                ParseError::syntax(0, "", "Expected sparse entry index")
-                            })?
-                            .as_str()
-                            .parse::<u32>()
-                            .map_err(|_| ParseError::syntax(0, "", "Invalid sparse entry index"))?;
-                        let val = entry_inner
-                            .next()
-                            .ok_or_else(|| {
-                                ParseError::syntax(0, "", "Expected sparse entry value")
-                            })?
-                            .as_str()
-                            .parse::<f32>()
-                            .map_err(|_| ParseError::syntax(0, "", "Invalid sparse entry value"))?;
-                        pairs.push((idx, val));
-                    }
-                }
-                Ok(SparseVectorExpr::Literal(SparseVector::new(pairs)))
-            }
+            Rule::sparse_literal => Self::parse_sparse_literal(inner),
             Rule::parameter => {
                 let name = inner.as_str().trim_start_matches('$').to_string();
                 Ok(SparseVectorExpr::Parameter(name))
@@ -149,6 +155,28 @@ impl Parser {
         }))
     }
 
+    /// Extracts key-value fusion parameters from a `fusion_params` rule.
+    fn extract_fusion_params(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> std::collections::HashMap<String, f64> {
+        let mut params = std::collections::HashMap::new();
+        for param in pair.into_inner() {
+            if param.as_rule() == Rule::fusion_param_list {
+                for fp in param.into_inner() {
+                    if fp.as_rule() == Rule::fusion_param {
+                        let mut fp_inner = fp.into_inner();
+                        if let (Some(key), Some(val)) = (fp_inner.next(), fp_inner.next()) {
+                            let key_str = key.as_str().to_string();
+                            let val_f64 = val.as_str().parse::<f64>().unwrap_or(0.0);
+                            params.insert(key_str, val_f64);
+                        }
+                    }
+                }
+            }
+        }
+        params
+    }
+
     pub(crate) fn parse_fusion_clause(pair: pest::iterators::Pair<Rule>) -> FusionConfig {
         let mut strategy = "rrf".to_string();
         let mut params = std::collections::HashMap::new();
@@ -162,22 +190,7 @@ impl Parser {
                     );
                 }
                 Rule::fusion_params => {
-                    for param in inner.into_inner() {
-                        if param.as_rule() == Rule::fusion_param_list {
-                            for fp in param.into_inner() {
-                                if fp.as_rule() == Rule::fusion_param {
-                                    let mut fp_inner = fp.into_inner();
-                                    if let (Some(key), Some(val)) =
-                                        (fp_inner.next(), fp_inner.next())
-                                    {
-                                        let key_str = key.as_str().to_string();
-                                        let val_f64 = val.as_str().parse::<f64>().unwrap_or(0.0);
-                                        params.insert(key_str, val_f64);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    params = Self::extract_fusion_params(inner);
                 }
                 _ => {}
             }
