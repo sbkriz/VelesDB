@@ -23,8 +23,9 @@ pub mod search;
 pub mod metrics;
 
 pub use collections::{
-    collection_sanity, create_collection, delete_collection, flush_collection, get_collection,
-    is_empty, list_collections,
+    analyze_collection, collection_sanity, create_collection, delete_collection, flush_collection,
+    get_collection, get_collection_config, get_collection_stats, get_guardrails, is_empty,
+    list_collections, update_guardrails,
 };
 pub use health::health_check;
 pub use indexes::{create_index, delete_index, list_indexes};
@@ -32,7 +33,9 @@ pub use points::{delete_point, get_point, stream_insert, stream_upsert_points, u
 // EPIC-058 US-007: match_query handler for /collections/{name}/match
 pub use match_query::match_query;
 pub use query::{aggregate, explain, query};
-pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
+pub use search::{
+    batch_search, hybrid_search, multi_query_search, search, search_ids, text_search,
+};
 
 // Graph handlers (EPIC-016) - exported via lib.rs
 #[allow(unused_imports)]

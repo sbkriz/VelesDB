@@ -22,6 +22,7 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
     let state = Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
+        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
     });
 
     Router::new()

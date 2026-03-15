@@ -7,7 +7,9 @@ Example:
     >>> from llama_index.core.schema import TextNode
     >>>
     >>> vector_store = VelesDBVectorStore(path="./db")
-    >>> loader = GraphLoader(vector_store)
+    >>>
+    >>> # Native mode — edges written directly to a persistent graph collection
+    >>> loader = GraphLoader(vector_store, graph_collection_name="kg")
     >>>
     >>> # Add nodes and edges
     >>> loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
@@ -33,30 +35,90 @@ def _generate_id(name: str, entity_type: str) -> int:
     return int(hashlib.sha256(hash_input).hexdigest()[:15], 16)
 
 
+def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]:
+    """Open a native graph collection from the vector store's database path.
+
+    Args:
+        vector_store: VelesDBVectorStore instance.
+        collection_name: Name of the graph collection.
+
+    Returns:
+        PyGraphCollection instance, or None if unavailable.
+    """
+    db_path: Optional[str] = None
+    for attr in ("_db_path", "_path", "_data_path"):
+        candidate = getattr(vector_store, attr, None)
+        if candidate is not None:
+            db_path = str(candidate)
+            break
+
+    if db_path is None:
+        logger.debug(
+            "Cannot open native graph collection: vector store has no "
+            "_db_path / _path attribute."
+        )
+        return None
+
+    try:
+        import velesdb  # type: ignore[import]
+        db = velesdb.Database(db_path)
+        graph = db.get_graph_collection(collection_name)
+        if graph is None:
+            logger.debug(
+                "Graph collection '%s' not found at '%s'; "
+                "it will be created on first write.",
+                collection_name,
+                db_path,
+            )
+        return graph
+    except ImportError:
+        logger.debug("velesdb package not installed; native graph unavailable.")
+        return None
+    except Exception as exc:
+        logger.debug("Failed to open native graph collection: %s", exc)
+        return None
+
+
 class GraphLoader:
     """Load entities and relations into VelesDB's Knowledge Graph.
 
     Provides methods to add nodes and edges to a VelesDB collection's
     graph layer, enabling Knowledge Graph construction from LlamaIndex data.
 
+    When ``graph_collection_name`` is provided, edges are written directly to
+    the persistent ``PyGraphCollection`` via the native Python bindings (no REST
+    server needed). Otherwise, the loader falls back to an in-memory graph store.
+
     Args:
         vector_store: VelesDBVectorStore instance.
+        graph_collection_name: Name of the native graph collection to write edges
+            to. If ``None``, an in-memory graph store is used (legacy behaviour).
 
     Example:
-        >>> loader = GraphLoader(vector_store)
+        >>> loader = GraphLoader(vector_store, graph_collection_name="kg")
         >>> loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
         >>> loader.add_edge(id=1, source=1, target=2, label="KNOWS")
         >>> edges = loader.get_edges(label="KNOWS")
     """
 
-    def __init__(self, vector_store: "VelesDBVectorStore") -> None:
+    def __init__(
+        self,
+        vector_store: "VelesDBVectorStore",
+        graph_collection_name: Optional[str] = None,
+    ) -> None:
         """Initialize GraphLoader with a VelesDBVectorStore."""
         self._vector_store = vector_store
         self._default_dimension = 384
         self._edges: List[Dict[str, Any]] = []
 
+        # Prefer native graph collection when a name is provided.
+        self._native_graph: Optional[Any] = None
+        if graph_collection_name is not None:
+            self._native_graph = _open_native_graph(vector_store, graph_collection_name)
+
+        # Legacy in-memory graph store fallback.
         self._graph_store = getattr(vector_store, "_graph_store", None)
-        if self._graph_store is None:
+        if self._graph_store is None and self._native_graph is None:
             try:
                 import velesdb
 
@@ -136,7 +198,14 @@ class GraphLoader:
             "properties": metadata or {},
         }
         self._edges.append(edge)
-        if self._graph_store is not None:
+
+        # Write to persistent native graph collection when available.
+        if self._native_graph is not None:
+            try:
+                self._native_graph.add_edge(edge)
+            except Exception as exc:
+                logger.warning("Failed to write edge %s to native graph: %s", id, exc)
+        elif self._graph_store is not None:
             self._graph_store.add_edge(edge)
 
     def get_edges(

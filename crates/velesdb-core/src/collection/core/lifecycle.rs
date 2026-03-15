@@ -113,6 +113,94 @@ impl Collection {
         Ok(collection)
     }
 
+    /// Creates a new collection with custom HNSW parameters.
+    ///
+    /// This is the lowest-level vector collection constructor, giving full
+    /// control over the HNSW graph topology (M, `ef_construction`) while
+    /// retaining the standard storage pipeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the collection directory
+    /// * `dimension` - Vector dimension
+    /// * `metric` - Distance metric
+    /// * `storage_mode` - Vector storage mode (Full, SQ8, Binary)
+    /// * `hnsw_params` - Custom HNSW index parameters
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_with_hnsw_params(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        hnsw_params: crate::index::hnsw::HnswParams,
+    ) -> Result<Self> {
+        std::fs::create_dir_all(&path)?;
+
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let config = CollectionConfig {
+            name,
+            dimension,
+            metric,
+            point_count: 0,
+            storage_mode,
+            metadata_only: false,
+            graph_schema: None,
+            embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
+        };
+
+        let vector_storage = Arc::new(RwLock::new(
+            MmapStorage::new(&path, dimension).map_err(Error::Io)?,
+        ));
+
+        let payload_storage = Arc::new(RwLock::new(
+            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+        ));
+
+        let index = Arc::new(HnswIndex::with_params(dimension, metric, hnsw_params));
+        let text_index = Arc::new(Bm25Index::new());
+
+        let collection = Self {
+            path,
+            config: Arc::new(RwLock::new(config)),
+            vector_storage,
+            payload_storage,
+            index,
+            text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
+            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
+        };
+
+        collection.save_config()?;
+
+        Ok(collection)
+    }
+
     /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
     ///
     /// # Arguments

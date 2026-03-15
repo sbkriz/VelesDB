@@ -11,8 +11,8 @@ use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use crate::types::{
     mode_to_ef_search, BatchSearchRequest, BatchSearchResponse, ErrorResponse, HybridSearchRequest,
-    MultiQuerySearchRequest, SearchRequest, SearchResponse, SearchResultResponse,
-    TextSearchRequest,
+    IdScoreResult, MultiQuerySearchRequest, SearchIdsResponse, SearchRequest, SearchResponse,
+    SearchResultResponse, TextSearchRequest,
 };
 use crate::AppState;
 
@@ -681,6 +681,77 @@ pub async fn hybrid_search(
                         score: r.score,
                         payload: r.point.payload,
                     })
+                    .collect(),
+            };
+            Json(response).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
+    }
+}
+
+/// Lightweight search returning only IDs and scores (no payload hydration).
+///
+/// More efficient than the standard search endpoint when only point
+/// identifiers and similarity scores are needed (e.g., re-ranking pipelines,
+/// deduplication, or ID-based lookups in an external store).
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/ids",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = SearchRequest,
+    responses(
+        (status = 200, description = "IDs-only search results", body = SearchIdsResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn search_ids(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<SearchRequest>,
+) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+    state.onboarding_metrics.record_search_request();
+
+    let collection = match state.db.get_vector_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let expected_dimension = collection.config().dimension;
+    if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector) {
+        return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+    }
+
+    let search_result = collection.search_ids(&req.vector, req.top_k);
+
+    match search_result {
+        Ok(results) => {
+            if results.is_empty() {
+                state.onboarding_metrics.record_empty_search_results();
+            }
+            let duration_us = start.elapsed().as_micros();
+            #[allow(clippy::cast_possible_truncation)]
+            state
+                .db
+                .notify_query(&name, duration_us.min(u128::from(u64::MAX)) as u64);
+
+            let response = SearchIdsResponse {
+                results: results
+                    .into_iter()
+                    .map(|(id, score)| IdScoreResult { id, score })
                     .collect(),
             };
             Json(response).into_response()
