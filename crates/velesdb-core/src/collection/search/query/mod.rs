@@ -88,11 +88,22 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let left_results = self.execute_query_with_client(query, params, "default")?;
+        // EPIC-040 US-006: For compound queries, execute each operand without the
+        // outer LIMIT so the set operation sees the full result sets.  The final
+        // LIMIT is applied once on the merged output (SQL-standard behaviour).
+        let left_results = if query.compound.is_some() {
+            let mut left_query = query.clone();
+            left_query.select.limit = None;
+            left_query.compound = None;
+            self.execute_query_with_client(&left_query, params, "default")?
+        } else {
+            return self.execute_query_with_client(query, params, "default");
+        };
 
-        // EPIC-040 US-006: Execute compound set operation if present.
+        // compound is guaranteed Some here (non-compound returns above).
         if let Some(ref compound) = query.compound {
-            let right_query = crate::velesql::Query::new_select(*compound.right.clone());
+            let mut right_query = crate::velesql::Query::new_select(*compound.right.clone());
+            right_query.select.limit = None;
             let right_results = self.execute_query_with_client(&right_query, params, "default")?;
             let mut merged = set_operations::apply_set_operation(
                 left_results,
