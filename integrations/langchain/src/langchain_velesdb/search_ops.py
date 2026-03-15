@@ -502,6 +502,11 @@ class SearchOpsMixin:
         if not queries:
             return []
 
+        validate_k(k)
+        validate_batch_size(len(queries))
+        for q in queries:
+            validate_text(q)
+
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         collection = self._get_collection(len(query_embeddings[0]))
         fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
