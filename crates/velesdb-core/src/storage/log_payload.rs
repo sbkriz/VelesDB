@@ -140,35 +140,11 @@ impl LogPayloadStorage {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
         let log_path = path.join("payloads.log");
-        let snapshot_path = path.join("payloads.snapshot");
 
-        // Open WAL for writing (append)
-        let writer_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)?;
-        let wal = io::BufWriter::new(writer_file);
-
-        // Open reader for random access
-        // Create empty file if it doesn't exist
-        if !log_path.exists() {
-            File::create(&log_path)?;
-        }
-        let reader = File::open(&log_path)?;
-        let wal_len = reader.metadata()?.len();
-
-        // Try to load from snapshot, fall back to full WAL replay
+        let wal = Self::open_wal_writer(&log_path)?;
+        let (reader, wal_len) = Self::open_wal_reader(&log_path)?;
         let (index, last_snapshot_wal_pos) =
-            if let Ok((snapshot_index, snapshot_wal_pos)) = Self::load_snapshot(&snapshot_path) {
-                // Replay WAL delta (entries after snapshot)
-                let index =
-                    Self::replay_wal_from(&log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
-                (index, snapshot_wal_pos)
-            } else {
-                // No valid snapshot, full WAL replay
-                let index = Self::replay_wal_from(&log_path, FxHashMap::default(), 0, wal_len)?;
-                (index, 0)
-            };
+            Self::load_or_replay_index(&path, &log_path, wal_len)?;
 
         Ok(Self {
             path,
@@ -179,6 +155,46 @@ impl LogPayloadStorage {
             durability,
             write_offset: RwLock::new(wal_len),
         })
+    }
+
+    /// Opens the WAL file for append-mode writing.
+    fn open_wal_writer(log_path: &Path) -> io::Result<io::BufWriter<File>> {
+        let writer_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)?;
+        Ok(io::BufWriter::new(writer_file))
+    }
+
+    /// Opens the WAL file for random-access reading, creating it if absent.
+    ///
+    /// Returns the reader handle and the current WAL length in bytes.
+    fn open_wal_reader(log_path: &Path) -> io::Result<(File, u64)> {
+        if !log_path.exists() {
+            File::create(log_path)?;
+        }
+        let reader = File::open(log_path)?;
+        let wal_len = reader.metadata()?.len();
+        Ok((reader, wal_len))
+    }
+
+    /// Loads the payload index, trying a snapshot first, falling back to full WAL replay.
+    ///
+    /// Returns `(index, last_snapshot_wal_position)`.
+    fn load_or_replay_index(
+        dir: &Path,
+        log_path: &Path,
+        wal_len: u64,
+    ) -> io::Result<(FxHashMap<u64, u64>, u64)> {
+        let snapshot_path = dir.join("payloads.snapshot");
+        if let Ok((snapshot_index, snapshot_wal_pos)) = Self::load_snapshot(&snapshot_path) {
+            let index =
+                Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
+            Ok((index, snapshot_wal_pos))
+        } else {
+            let index = Self::replay_wal_from(log_path, FxHashMap::default(), 0, wal_len)?;
+            Ok((index, 0))
+        }
     }
 
     /// Applies the configured durability mode to a WAL writer.
