@@ -45,39 +45,65 @@ pub(crate) fn replay_wal_to_index(
     mmap_data: &mut [u8],
     next_offset: &mut usize,
 ) -> io::Result<usize> {
-    if !wal_path.exists() {
+    let Some((mut reader, file_len)) = open_crc_wal(wal_path)? else {
         return Ok(0);
-    }
+    };
 
-    let file_len = File::open(wal_path)?.metadata()?.len();
-    if file_len == 0 {
-        return Ok(0);
-    }
-
-    if !is_crc_framed_wal(wal_path, file_len)? {
-        return Ok(0);
-    }
-
-    let mut reader = BufReader::new(File::open(wal_path)?);
     let vector_size = dimension * std::mem::size_of::<f32>();
-    let mut replayed = 0usize;
-
-    while let Ok(true) = replay_one_entry(
+    let replayed = drain_wal_entries(
         &mut reader,
         file_len,
         index,
         mmap_data,
         next_offset,
         vector_size,
-    ) {
-        replayed += 1;
-    }
+    );
 
     if replayed > 0 {
         truncate_wal(wal_path)?;
     }
 
     Ok(replayed)
+}
+
+/// Opens the WAL file and validates it uses CRC32-framed format.
+///
+/// Returns `None` if the file is missing, empty, or uses the legacy format.
+fn open_crc_wal(wal_path: &Path) -> io::Result<Option<(BufReader<File>, u64)>> {
+    if !wal_path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(wal_path)?;
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(None);
+    }
+
+    if !is_crc_framed_wal(wal_path, file_len)? {
+        return Ok(None);
+    }
+
+    let reader = BufReader::new(File::open(wal_path)?);
+    Ok(Some((reader, file_len)))
+}
+
+/// Replays all valid entries from the WAL, returning the count.
+fn drain_wal_entries(
+    reader: &mut BufReader<File>,
+    file_len: u64,
+    index: &ShardedIndex,
+    mmap_data: &mut [u8],
+    next_offset: &mut usize,
+    vector_size: usize,
+) -> usize {
+    let mut replayed = 0usize;
+    while let Ok(true) = replay_one_entry(
+        reader, file_len, index, mmap_data, next_offset, vector_size,
+    ) {
+        replayed += 1;
+    }
+    replayed
 }
 
 // ---------------------------------------------------------------------------
@@ -182,21 +208,15 @@ fn replay_one_entry(
     }
 }
 
-/// Replays a store entry: validates CRC, writes data to mmap, updates index.
-#[allow(clippy::cast_possible_truncation)]
-fn replay_store(
-    reader: &mut BufReader<File>,
-    index: &ShardedIndex,
-    mmap_data: &mut [u8],
-    next_offset: &mut usize,
-    vector_size: usize,
-) -> io::Result<bool> {
+/// Reads and CRC-validates a store entry from the WAL.
+///
+/// Returns `(id, data)` on success.
+fn read_store_entry(reader: &mut BufReader<File>) -> io::Result<(u64, Vec<u8>)> {
     let mut id_bytes = [0u8; 8];
     let mut len_bytes = [0u8; 4];
     reader.read_exact(&mut id_bytes)?;
     reader.read_exact(&mut len_bytes)?;
 
-    let id = u64::from_le_bytes(id_bytes);
     let data_len = usize::try_from(u32::from_le_bytes(len_bytes))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "data_len overflow"))?;
 
@@ -206,33 +226,68 @@ fn replay_store(
     let mut stored_crc = [0u8; 4];
     reader.read_exact(&mut stored_crc)?;
 
-    // Validate CRC
-    let mut frame = Vec::with_capacity(1 + 8 + 4 + data_len);
+    verify_store_crc(id_bytes, len_bytes, &data, stored_crc)?;
+
+    Ok((u64::from_le_bytes(id_bytes), data))
+}
+
+/// Verifies the CRC32 of a store WAL frame.
+fn verify_store_crc(
+    id_bytes: [u8; 8],
+    len_bytes: [u8; 4],
+    data: &[u8],
+    stored_crc: [u8; 4],
+) -> io::Result<()> {
+    let mut frame = Vec::with_capacity(1 + 8 + 4 + data.len());
     frame.push(1u8);
     frame.extend_from_slice(&id_bytes);
     frame.extend_from_slice(&len_bytes);
-    frame.extend_from_slice(&data);
+    frame.extend_from_slice(data);
 
-    if crc32_hash(&frame) != u32::from_le_bytes(stored_crc) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch"));
+    if crc32_hash(&frame) == u32::from_le_bytes(stored_crc) {
+        Ok(())
+    } else {
+        Err(io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch"))
     }
+}
 
-    // Apply: only if data matches expected vector size
-    if data_len == vector_size {
-        let offset = index.get(id).unwrap_or_else(|| {
-            let off = *next_offset;
-            *next_offset += vector_size;
-            off
-        });
+/// Replays a store entry: validates CRC, writes data to mmap, updates index.
+fn replay_store(
+    reader: &mut BufReader<File>,
+    index: &ShardedIndex,
+    mmap_data: &mut [u8],
+    next_offset: &mut usize,
+    vector_size: usize,
+) -> io::Result<bool> {
+    let (id, data) = read_store_entry(reader)?;
 
-        let end = offset + vector_size;
-        if end <= mmap_data.len() {
-            mmap_data[offset..end].copy_from_slice(&data);
-            index.insert(id, offset);
-        }
+    if data.len() == vector_size {
+        apply_store_to_mmap(id, &data, index, mmap_data, next_offset, vector_size);
     }
 
     Ok(true)
+}
+
+/// Writes vector data into the mmap region and updates the index.
+fn apply_store_to_mmap(
+    id: u64,
+    data: &[u8],
+    index: &ShardedIndex,
+    mmap_data: &mut [u8],
+    next_offset: &mut usize,
+    vector_size: usize,
+) {
+    let offset = index.get(id).unwrap_or_else(|| {
+        let off = *next_offset;
+        *next_offset += vector_size;
+        off
+    });
+
+    let end = offset + vector_size;
+    if end <= mmap_data.len() {
+        mmap_data[offset..end].copy_from_slice(data);
+        index.insert(id, offset);
+    }
 }
 
 /// Replays a delete entry: validates CRC, removes id from index.
