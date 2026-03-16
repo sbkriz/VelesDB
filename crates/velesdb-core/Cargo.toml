@@ -103,11 +103,13 @@ version = "2.7"
 ##   Disable for WASM builds: `velesdb-core = { default-features = false }`
 ## - `gpu`: Enables wgpu-based GPU acceleration for distance calculations.
 ## - `update-check`: Enables HTTP client for automatic version checking.
+## - `openapi`: Enables utoipa::ToSchema derives on api_types DTOs.
 ## - `loom`: Enables loom-based concurrency testing (nightly only).
 ##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
 internal-bench = []
+openapi = ["dep:utoipa"]
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray", "dep:fs2"]
 update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
 loom = ["dep:loom"]
@@ -322,6 +324,11 @@ optional = true
 
 [dependencies.fs2]
 version = "0.4"
+optional = true
+
+# OpenAPI schema derives (optional, gated behind openapi feature)
+[dependencies.utoipa]
+version = "5"
 optional = true
 
 [lints]

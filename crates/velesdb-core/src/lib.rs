@@ -61,6 +61,7 @@
 #[cfg(feature = "persistence")]
 pub mod agent;
 pub mod alloc_guard;
+pub mod api_types;
 #[cfg(test)]
 mod alloc_guard_tests;
 pub mod cache;

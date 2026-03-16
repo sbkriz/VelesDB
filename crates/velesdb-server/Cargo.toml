@@ -21,7 +21,7 @@ name = "velesdb-server"
 path = "src/main.rs"
 
 [dependencies]
-velesdb-core = { workspace = true, default-features = false }
+velesdb-core = { workspace = true, default-features = false, features = ["openapi"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -44,6 +44,7 @@ default = ["velesdb-core/default"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
+openapi = ["velesdb-core/openapi"]
 persistence = ["velesdb-core/persistence"]
 prometheus = []
 update-check = ["velesdb-core/update-check"]

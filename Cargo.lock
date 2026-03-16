@@ -6821,6 +6821,7 @@ dependencies = [
  "tokio-test",
  "toml 0.8.23",
  "tracing",
+ "utoipa",
  "uuid",
  "wgpu",
  "whoami",
