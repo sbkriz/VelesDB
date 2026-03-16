@@ -237,8 +237,7 @@ unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     let end_main = a.as_ptr().add(main_end);
     let end_ptr = a.as_ptr().add(len);
 
-    let (dot, norm_a_sq, norm_b_sq) =
-        cosine_fused_neon_main_loop(a.as_ptr(), b.as_ptr(), end_main);
+    let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_main_loop(a.as_ptr(), b.as_ptr(), end_main);
 
     let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_scalar_tail(
         end_main,
@@ -250,6 +249,26 @@ unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     );
 
     finalize_cosine(dot, norm_a_sq, norm_b_sq)
+}
+
+/// Reduces 4 NEON f32x4 accumulators to a single scalar sum.
+///
+/// SAFETY: All inputs must be valid `float32x4_t` values.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn reduce_4acc_neon(
+    a0: std::arch::aarch64::float32x4_t,
+    a1: std::arch::aarch64::float32x4_t,
+    a2: std::arch::aarch64::float32x4_t,
+    a3: std::arch::aarch64::float32x4_t,
+) -> f32 {
+    use std::arch::aarch64::*;
+    // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations.
+    // - Condition 1: All accumulators hold valid float32x4_t values.
+    // Reason: Reduce 4 accumulators to scalar result.
+    let ab01 = vaddq_f32(a0, a1);
+    let ab23 = vaddq_f32(a2, a3);
+    vaddvq_f32(vaddq_f32(ab01, ab23))
 }
 
 /// Main 16-wide SIMD loop for fused cosine (4-acc ILP).
@@ -268,18 +287,12 @@ unsafe fn cosine_fused_neon_main_loop(
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate 0.0 is valid.
     // Reason: Initialise 12 accumulators (3 products x 4-way ILP).
-    let mut d0 = vdupq_n_f32(0.0);
-    let mut d1 = vdupq_n_f32(0.0);
-    let mut d2 = vdupq_n_f32(0.0);
-    let mut d3 = vdupq_n_f32(0.0);
-    let mut na0 = vdupq_n_f32(0.0);
-    let mut na1 = vdupq_n_f32(0.0);
-    let mut na2 = vdupq_n_f32(0.0);
-    let mut na3 = vdupq_n_f32(0.0);
-    let mut nb0 = vdupq_n_f32(0.0);
-    let mut nb1 = vdupq_n_f32(0.0);
-    let mut nb2 = vdupq_n_f32(0.0);
-    let mut nb3 = vdupq_n_f32(0.0);
+    let (mut d0, mut d1, mut d2, mut d3) =
+        (vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+    let (mut na0, mut na1, mut na2, mut na3) =
+        (vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+    let (mut nb0, mut nb1, mut nb2, mut nb3) =
+        (vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0));
 
     while a_ptr < end_main {
         // SAFETY: Loop condition guarantees 16 elements remain before `end_main`.
@@ -313,22 +326,11 @@ unsafe fn cosine_fused_neon_main_loop(
         b_ptr = b_ptr.add(16);
     }
 
-    // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations.
-    // - Condition 1: All accumulators hold valid float32x4_t values.
-    // Reason: Reduce 4 accumulators per product to scalar results.
-    let d01 = vaddq_f32(d0, d1);
-    let d23 = vaddq_f32(d2, d3);
-    let dot = vaddvq_f32(vaddq_f32(d01, d23));
-
-    let na01 = vaddq_f32(na0, na1);
-    let na23 = vaddq_f32(na2, na3);
-    let norm_a_sq = vaddvq_f32(vaddq_f32(na01, na23));
-
-    let nb01 = vaddq_f32(nb0, nb1);
-    let nb23 = vaddq_f32(nb2, nb3);
-    let norm_b_sq = vaddvq_f32(vaddq_f32(nb01, nb23));
-
-    (dot, norm_a_sq, norm_b_sq)
+    (
+        reduce_4acc_neon(d0, d1, d2, d3),
+        reduce_4acc_neon(na0, na1, na2, na3),
+        reduce_4acc_neon(nb0, nb1, nb2, nb3),
+    )
 }
 
 /// Scalar tail for fused cosine — handles the remaining 0..15 elements.

@@ -11,8 +11,7 @@ use tempfile::TempDir;
 fn test_collection(dim: usize) -> (TempDir, Collection) {
     let dir = TempDir::new().expect("tempdir");
     let path = dir.path().join("test_ingester_coll");
-    let coll =
-        Collection::create(path, dim, DistanceMetric::Cosine).expect("create collection");
+    let coll = Collection::create(path, dim, DistanceMetric::Cosine).expect("create collection");
     (dir, coll)
 }
 
@@ -75,7 +74,10 @@ async fn ingester_try_send_buffer_full_error_display() {
     );
     // Verify Display impl
     let msg = format!("{err}");
-    assert!(msg.contains("full"), "error message should mention 'full': {msg}");
+    assert!(
+        msg.contains("full"),
+        "error message should mention 'full': {msg}"
+    );
 
     ingester.shutdown().await;
 }
@@ -107,7 +109,7 @@ async fn ingester_shutdown_drains_all_pending() {
     let (_dir, coll) = test_collection(4);
     let config = StreamingConfig {
         buffer_size: 100,
-        batch_size: 10_000,      // huge — won't auto-flush by batch
+        batch_size: 10_000,        // huge — won't auto-flush by batch
         flush_interval_ms: 60_000, // huge — won't auto-flush by timer
     };
     let coll_clone = coll.clone();

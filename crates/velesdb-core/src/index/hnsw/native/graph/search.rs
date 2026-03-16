@@ -126,8 +126,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ) -> NodeId {
         self.with_vectors_and_layers_read(|vectors, layers| {
             let dimension = vectors.dimension();
-            let prefetch_dist =
-                crate::simd_native::calculate_prefetch_distance(dimension);
+            let prefetch_dist = crate::simd_native::calculate_prefetch_distance(dimension);
             let mut best = entry;
             // SAFETY: `entry` is a valid node_id from entry_point (always a
             // successfully inserted node).
@@ -160,6 +159,21 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         })
     }
 
+    /// Prefetch neighbor vectors into CPU cache ahead of access.
+    #[inline]
+    fn prefetch_neighbors(
+        neighbors: &[NodeId],
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        start: usize,
+        count: usize,
+    ) {
+        for &neighbor_id in neighbors.iter().skip(start).take(count) {
+            if neighbor_id < vectors.len() {
+                vectors.prefetch(neighbor_id);
+            }
+        }
+    }
+
     /// Scans a neighbor list with software prefetch, updating best node/dist.
     ///
     /// Returns `true` if a closer neighbor was found during the scan.
@@ -175,23 +189,18 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         best: &mut NodeId,
         best_dist: &mut f32,
     ) -> bool {
+        let use_prefetch = dimension >= 384;
+
         // Prefetch the first batch of neighbor vectors into cache.
-        if dimension >= 384 && neighbors.len() > prefetch_dist {
-            for &neighbor_id in neighbors.iter().take(prefetch_dist) {
-                if neighbor_id < vectors.len() {
-                    vectors.prefetch(neighbor_id);
-                }
-            }
+        if use_prefetch && neighbors.len() > prefetch_dist {
+            Self::prefetch_neighbors(neighbors, vectors, 0, prefetch_dist);
         }
 
         let mut improved = false;
         for (i, &neighbor) in neighbors.iter().enumerate() {
             // Prefetch upcoming neighbor vectors while processing the current one.
-            if dimension >= 384 && i + prefetch_dist < neighbors.len() {
-                let prefetch_id = neighbors[i + prefetch_dist];
-                if prefetch_id < vectors.len() {
-                    vectors.prefetch(prefetch_id);
-                }
+            if use_prefetch && i + prefetch_dist < neighbors.len() {
+                Self::prefetch_neighbors(neighbors, vectors, i + prefetch_dist, 1);
             }
 
             // SAFETY: neighbor is a valid node_id from the graph's

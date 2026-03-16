@@ -8,7 +8,8 @@ use crate::column_store::{ColumnStore, ColumnType, ColumnValue};
 /// Helper: creates a column store with `age` (Int), `name` (String), and
 /// pushes `count` rows where age=i and name cycles through the given labels.
 fn store_with_rows(count: usize, labels: &[&str]) -> ColumnStore {
-    let mut store = ColumnStore::with_schema(&[("age", ColumnType::Int), ("name", ColumnType::String)]);
+    let mut store =
+        ColumnStore::with_schema(&[("age", ColumnType::Int), ("name", ColumnType::String)]);
     for i in 0..count {
         let label = labels[i % labels.len()];
         let sid = store.string_table_mut().intern(label);

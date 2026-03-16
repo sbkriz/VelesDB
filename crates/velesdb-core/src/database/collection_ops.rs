@@ -373,8 +373,7 @@ impl Database {
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
         let path = self.data_dir.join(name);
-        let coll =
-            GraphCollection::create(path, name, Some(dimension), metric, schema.clone())?;
+        let coll = GraphCollection::create(path, name, Some(dimension), metric, schema.clone())?;
         self.collections
             .write()
             .insert(name.to_string(), coll.inner.clone());
