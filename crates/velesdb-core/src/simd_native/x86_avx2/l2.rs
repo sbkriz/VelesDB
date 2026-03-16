@@ -17,6 +17,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use crate::simd_native::reduction::hsum_avx256;
 use crate::sum_squared_remainder_unrolled_8;
 
 /// AVX2 squared L2 distance.
@@ -55,13 +56,7 @@ pub(crate) unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
     }
 
     let combined = _mm256_add_ps(sum0, sum1);
-    let hi = _mm256_extractf128_ps(combined, 1);
-    let lo = _mm256_castps256_ps128(combined);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+    let mut result = hsum_avx256(combined);
 
     let base = simd_len * 16;
     let remainder = len - base;
@@ -72,13 +67,7 @@ pub(crate) unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
         let vb = _mm256_loadu_ps(b_ptr.add(base));
         let diff = _mm256_sub_ps(va, vb);
         let tmp_sum = _mm256_fmadd_ps(diff, diff, _mm256_setzero_ps());
-        let hi = _mm256_extractf128_ps(tmp_sum, 1);
-        let lo = _mm256_castps256_ps128(tmp_sum);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sums = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sums, sums);
-        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+        result += hsum_avx256(tmp_sum);
 
         // Handle remaining 0-7 elements
         if remainder > 8 {
@@ -125,13 +114,7 @@ pub(crate) unsafe fn squared_l2_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
         sum = _mm256_fmadd_ps(diff, diff, sum);
     }
 
-    let hi = _mm256_extractf128_ps(sum, 1);
-    let lo = _mm256_castps256_ps128(sum);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+    let mut result = hsum_avx256(sum);
 
     // Handle remainder (max 7 elements)
     let base = simd_len * 8;
@@ -204,13 +187,7 @@ pub(crate) unsafe fn squared_l2_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     let sum = _mm256_add_ps(sum01, sum23);
 
     // Horizontal sum
-    let hi = _mm256_extractf128_ps(sum, 1);
-    let lo = _mm256_castps256_ps128(sum);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+    let mut result = hsum_avx256(sum);
 
     // Handle remainder with scalar
     while a_ptr < end_ptr {

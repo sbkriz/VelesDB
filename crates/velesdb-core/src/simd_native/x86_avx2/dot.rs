@@ -17,6 +17,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use crate::simd_native::reduction::hsum_avx256;
 use crate::sum_remainder_unrolled_8;
 
 /// AVX2 dot product with 4 accumulators for ILP on large vectors.
@@ -74,13 +75,7 @@ pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     let combined = _mm256_add_ps(sum01, sum23);
 
     // Horizontal sum
-    let hi = _mm256_extractf128_ps(combined, 1);
-    let lo = _mm256_castps256_ps128(combined);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+    let mut result = hsum_avx256(combined);
 
     // Handle remainder (max 31 elements) with unrolled tail
     let base = simd_len * 32;
@@ -127,7 +122,7 @@ pub(crate) unsafe fn dot_avx2_remainder(
         let sum1 = _mm256_fmadd_ps(va1, vb1, _mm256_setzero_ps());
 
         sum0 = _mm256_add_ps(sum0, sum1);
-        result += hsum_avx2(sum0);
+        result += hsum_avx256(sum0);
 
         // Handle remaining 0-15 elements
         if remainder > 16 {
@@ -139,7 +134,7 @@ pub(crate) unsafe fn dot_avx2_remainder(
         let va = _mm256_loadu_ps(a_ptr.add(base));
         let vb = _mm256_loadu_ps(b_ptr.add(base));
         let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
-        result += hsum_avx2(tmp);
+        result += hsum_avx256(tmp);
 
         let r = remainder - 8;
         if r > 0 {
@@ -178,7 +173,7 @@ unsafe fn dot_avx2_tail_under16(
         let va = _mm256_loadu_ps(a_ptr.add(base));
         let vb = _mm256_loadu_ps(b_ptr.add(base));
         let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
-        result += hsum_avx2(tmp);
+        result += hsum_avx256(tmp);
 
         if remainder > 8 {
             let rbase = base + 8;
@@ -190,25 +185,6 @@ unsafe fn dot_avx2_tail_under16(
     }
 
     result
-}
-
-/// Horizontal sum of 8 packed f32 values in an AVX2 register.
-///
-/// # Safety
-///
-/// Requires AVX2 support.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-#[inline]
-pub(crate) unsafe fn hsum_avx2(v: std::arch::x86_64::__m256) -> f32 {
-    use std::arch::x86_64::*;
-    let hi = _mm256_extractf128_ps(v, 1);
-    let lo = _mm256_castps256_ps128(v);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
 }
 
 /// AVX2 dot product with single accumulator for small vectors.
@@ -242,13 +218,7 @@ pub(crate) unsafe fn dot_product_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
         sum = _mm256_fmadd_ps(va, vb, sum);
     }
 
-    let hi = _mm256_extractf128_ps(sum, 1);
-    let lo = _mm256_castps256_ps128(sum);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+    let mut result = hsum_avx256(sum);
 
     // Handle remainder (max 7 elements)
     let base = simd_len * 8;
@@ -297,13 +267,7 @@ pub(crate) unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     }
 
     let combined = _mm256_add_ps(sum0, sum1);
-    let hi = _mm256_extractf128_ps(combined, 1);
-    let lo = _mm256_castps256_ps128(combined);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+    let mut result = hsum_avx256(combined);
 
     // Handle remainder (max 15 elements)
     let base = simd_len * 16;
@@ -313,7 +277,7 @@ pub(crate) unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
         let va = _mm256_loadu_ps(a_ptr.add(base));
         let vb = _mm256_loadu_ps(b_ptr.add(base));
         let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
-        result += hsum_avx2(tmp);
+        result += hsum_avx256(tmp);
 
         let r = remainder - 8;
         if r > 0 {

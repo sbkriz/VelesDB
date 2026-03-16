@@ -8,6 +8,7 @@
 //! - `scalar` — Scalar fallback implementations and fast-rsqrt helpers
 //! - `tail_unroll` — Remainder/tail handling macros for SIMD loops
 //! - `prefetch` — CPU cache prefetch utilities
+//! - `reduction` — Shared horizontal sum helpers for SIMD accumulators
 //! - `x86_avx512` — AVX-512F kernel implementations (x86_64 only)
 //! - `x86_avx2` — AVX2+FMA dot product and squared L2 kernels (x86_64 only)
 //! - `x86_avx2_similarity` — AVX2+FMA cosine, Hamming, Jaccard kernels (x86_64 only)
@@ -34,6 +35,7 @@
 // =============================================================================
 
 pub mod prefetch;
+pub(crate) mod reduction;
 pub mod scalar;
 mod tail_unroll;
 

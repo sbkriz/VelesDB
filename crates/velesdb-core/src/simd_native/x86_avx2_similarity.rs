@@ -17,6 +17,8 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use super::reduction::hsum_avx256;
+
 // =============================================================================
 // Cosine Similarity (Fused)
 // =============================================================================
@@ -62,19 +64,9 @@ pub(crate) unsafe fn cosine_fused_avx2_2acc(a: &[f32], b: &[f32]) -> f32 {
     let na_acc = _mm256_add_ps(na0, na1);
     let nb_acc = _mm256_add_ps(nb0, nb1);
 
-    let hs = |v: __m256| {
-        let hi = _mm256_extractf128_ps(v, 1);
-        let lo = _mm256_castps256_ps128(v);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sums = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sums, sums);
-        _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
-    };
-
-    let mut dot = hs(dot_acc);
-    let mut norm_a_sq = hs(na_acc);
-    let mut norm_b_sq = hs(nb_acc);
+    let mut dot = hsum_avx256(dot_acc);
+    let mut norm_a_sq = hsum_avx256(na_acc);
+    let mut norm_b_sq = hsum_avx256(nb_acc);
 
     while a_ptr < end_ptr {
         let x = *a_ptr;
@@ -162,19 +154,9 @@ pub(crate) unsafe fn cosine_fused_avx2(a: &[f32], b: &[f32]) -> f32 {
     let nb23 = _mm256_add_ps(nb2, nb3);
     let nb_acc = _mm256_add_ps(nb01, nb23);
 
-    let hs = |v: __m256| {
-        let hi = _mm256_extractf128_ps(v, 1);
-        let lo = _mm256_castps256_ps128(v);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sums = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sums, sums);
-        _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
-    };
-
-    let mut dot = hs(dot_acc);
-    let mut norm_a_sq = hs(na_acc);
-    let mut norm_b_sq = hs(nb_acc);
+    let mut dot = hsum_avx256(dot_acc);
+    let mut norm_a_sq = hsum_avx256(na_acc);
+    let mut norm_b_sq = hsum_avx256(nb_acc);
 
     while a_ptr < end_ptr {
         let x = *a_ptr;
@@ -314,8 +296,8 @@ pub(crate) unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
     let union23 = _mm256_add_ps(union2, union3);
     let acc_union = _mm256_add_ps(union01, union23);
 
-    let mut inter_sum = hsum256_ps(acc_inter);
-    let mut union_sum = hsum256_ps(acc_union);
+    let mut inter_sum = hsum_avx256(acc_inter);
+    let mut union_sum = hsum_avx256(acc_union);
 
     while a_ptr < end_ptr {
         let x = *a_ptr;
@@ -333,17 +315,3 @@ pub(crate) unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Horizontal sum helper for AVX2 256-bit vector.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-pub(crate) unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
-    use std::arch::x86_64::*;
-    let low = _mm256_castps256_ps128(v);
-    let high = _mm256_extractf128_ps(v, 1);
-    let sum128 = _mm_add_ps(low, high);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let result = _mm_add_ss(sums, shuf2);
-    _mm_cvtss_f32(result)
-}
