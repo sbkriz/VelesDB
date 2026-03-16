@@ -17,6 +17,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use crate::simd_4acc_l2_loop;
 use crate::simd_native::reduction::hsum_avx256;
 use crate::sum_squared_remainder_unrolled_8;
 
@@ -145,56 +146,25 @@ pub(crate) unsafe fn squared_l2_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
 
     let len = a.len();
-    let mut a_ptr = a.as_ptr();
-    let mut b_ptr = b.as_ptr();
-    let end_main = a.as_ptr().add(len / 32 * 32);
-    let end_ptr = a.as_ptr().add(len);
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+    let end_main = a_ptr.add(len / 32 * 32);
+    let end_ptr = a_ptr.add(len);
 
-    let mut acc0 = _mm256_setzero_ps();
-    let mut acc1 = _mm256_setzero_ps();
-    let mut acc2 = _mm256_setzero_ps();
-    let mut acc3 = _mm256_setzero_ps();
+    // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
+    let (combined, mut a_p, mut b_p) = simd_4acc_l2_loop!(
+        a_ptr, b_ptr, end_main,
+        _mm256_setzero_ps(), _mm256_loadu_ps, _mm256_sub_ps, _mm256_fmadd_ps, _mm256_add_ps, 8
+    );
 
-    // Main loop: process 32 elements at a time (4 × 8 lanes)
-    while a_ptr < end_main {
-        let va0 = _mm256_loadu_ps(a_ptr);
-        let vb0 = _mm256_loadu_ps(b_ptr);
-        let diff0 = _mm256_sub_ps(va0, vb0);
-        acc0 = _mm256_fmadd_ps(diff0, diff0, acc0);
-
-        let va1 = _mm256_loadu_ps(a_ptr.add(8));
-        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
-        let diff1 = _mm256_sub_ps(va1, vb1);
-        acc1 = _mm256_fmadd_ps(diff1, diff1, acc1);
-
-        let va2 = _mm256_loadu_ps(a_ptr.add(16));
-        let vb2 = _mm256_loadu_ps(b_ptr.add(16));
-        let diff2 = _mm256_sub_ps(va2, vb2);
-        acc2 = _mm256_fmadd_ps(diff2, diff2, acc2);
-
-        let va3 = _mm256_loadu_ps(a_ptr.add(24));
-        let vb3 = _mm256_loadu_ps(b_ptr.add(24));
-        let diff3 = _mm256_sub_ps(va3, vb3);
-        acc3 = _mm256_fmadd_ps(diff3, diff3, acc3);
-
-        a_ptr = a_ptr.add(32);
-        b_ptr = b_ptr.add(32);
-    }
-
-    // Combine accumulators
-    let sum01 = _mm256_add_ps(acc0, acc1);
-    let sum23 = _mm256_add_ps(acc2, acc3);
-    let sum = _mm256_add_ps(sum01, sum23);
-
-    // Horizontal sum
-    let mut result = hsum_avx256(sum);
+    let mut result = hsum_avx256(combined);
 
     // Handle remainder with scalar
-    while a_ptr < end_ptr {
-        let d = *a_ptr - *b_ptr;
+    while a_p < end_ptr {
+        let d = *a_p - *b_p;
         result += d * d;
-        a_ptr = a_ptr.add(1);
-        b_ptr = b_ptr.add(1);
+        a_p = a_p.add(1);
+        b_p = b_p.add(1);
     }
 
     result

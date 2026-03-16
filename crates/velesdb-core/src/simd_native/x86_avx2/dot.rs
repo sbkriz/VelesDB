@@ -17,6 +17,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use crate::simd_4acc_dot_loop;
 use crate::simd_native::reduction::hsum_avx256;
 use crate::sum_remainder_unrolled_8;
 
@@ -35,50 +36,24 @@ use crate::sum_remainder_unrolled_8;
 pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
     // - `_mm256_loadu_ps` handles unaligned loads safely
-    // - Pointer arithmetic stays within bounds: offset = i * 32 where i < simd_len = len / 32
+    // - Pointer arithmetic stays within bounds: end_main = len / 32 * 32 ≤ len
     use std::arch::x86_64::*;
 
     let len = a.len();
-    let simd_len = len / 32; // Process 32 per iteration (4×8)
-
-    let mut sum0 = _mm256_setzero_ps();
-    let mut sum1 = _mm256_setzero_ps();
-    let mut sum2 = _mm256_setzero_ps();
-    let mut sum3 = _mm256_setzero_ps();
-
     let a_ptr = a.as_ptr();
     let b_ptr = b.as_ptr();
+    let end_main = a_ptr.add(len / 32 * 32);
 
-    for i in 0..simd_len {
-        let offset = i * 32;
+    // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
+    let (combined, _, _) = simd_4acc_dot_loop!(
+        a_ptr, b_ptr, end_main,
+        _mm256_setzero_ps(), _mm256_loadu_ps, _mm256_fmadd_ps, _mm256_add_ps, 8
+    );
 
-        let va0 = _mm256_loadu_ps(a_ptr.add(offset));
-        let vb0 = _mm256_loadu_ps(b_ptr.add(offset));
-        sum0 = _mm256_fmadd_ps(va0, vb0, sum0);
-
-        let va1 = _mm256_loadu_ps(a_ptr.add(offset + 8));
-        let vb1 = _mm256_loadu_ps(b_ptr.add(offset + 8));
-        sum1 = _mm256_fmadd_ps(va1, vb1, sum1);
-
-        let va2 = _mm256_loadu_ps(a_ptr.add(offset + 16));
-        let vb2 = _mm256_loadu_ps(b_ptr.add(offset + 16));
-        sum2 = _mm256_fmadd_ps(va2, vb2, sum2);
-
-        let va3 = _mm256_loadu_ps(a_ptr.add(offset + 24));
-        let vb3 = _mm256_loadu_ps(b_ptr.add(offset + 24));
-        sum3 = _mm256_fmadd_ps(va3, vb3, sum3);
-    }
-
-    // Combine 4 accumulators into 1
-    let sum01 = _mm256_add_ps(sum0, sum1);
-    let sum23 = _mm256_add_ps(sum2, sum3);
-    let combined = _mm256_add_ps(sum01, sum23);
-
-    // Horizontal sum
     let mut result = hsum_avx256(combined);
 
     // Handle remainder (max 31 elements) with unrolled tail
-    let base = simd_len * 32;
+    let base = len / 32 * 32;
     let remainder = len - base;
     result += dot_avx2_remainder(a, b, a_ptr, b_ptr, base, remainder);
 

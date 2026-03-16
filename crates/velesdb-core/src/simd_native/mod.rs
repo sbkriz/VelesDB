@@ -45,6 +45,12 @@ pub(crate) use tail_unroll::sum_remainder_unrolled_8;
 #[allow(unused_imports)]
 pub(crate) use tail_unroll::sum_squared_remainder_unrolled_8;
 
+// Re-export 4-accumulator loop macros from reduction for crate-wide use
+#[allow(unused_imports)]
+pub(crate) use reduction::simd_4acc_dot_loop;
+#[allow(unused_imports)]
+pub(crate) use reduction::simd_4acc_l2_loop;
+
 // Re-export public API from scalar
 pub use scalar::{cosine_similarity_fast, fast_rsqrt};
 
