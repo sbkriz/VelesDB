@@ -1,0 +1,70 @@
+---
+# =============================================================================
+# VelesDB — Codacy Repository Configuration
+# =============================================================================
+#
+# This file configures Codacy static analysis exclusions to eliminate
+# known false positives while preserving all legitimate quality checks.
+#
+# Policy: Every exclusion must have a documented rationale.
+# Review this file when adding new modules that use unsafe code.
+#
+# Maintainer: Tech Lead
+# Last reviewed: 2026-03-16
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global exclusions — files excluded from ALL Codacy tools
+# ---------------------------------------------------------------------------
+# Rationale: Test files, benchmarks, and generated code follow different
+# quality standards (complexity, line count, unsafe usage in test harnesses).
+# Test quality is enforced by CI (`cargo test`) not static analysis.
+exclude_paths:
+  # Test files (Rust naming convention: *_tests.rs)
+  - "crates/**/src/**/*_tests.rs"
+  # Integration test directories
+  - "crates/**/tests/**"
+  # Benchmark harnesses (criterion)
+  - "crates/**/benches/**"
+  # Generated code (pest parser, build scripts)
+  - "crates/**/build.rs"
+  # Conformance test data
+  - "conformance/**"
+  # Demo/example apps (not production code)
+  - "demos/**"
+  # Documentation assets
+  - "docs/**"
+  # Scripts (CI, tooling — validated by shellcheck separately)
+  - "scripts/**"
+  # SDK tests
+  - "sdks/**/tests/**"
+  - "sdks/**/__tests__/**"
+
+# ---------------------------------------------------------------------------
+# Tool-specific exclusions
+# ---------------------------------------------------------------------------
+# Codacy's generic "unsafe detected" rule does not understand Rust's safety
+# model. Our CI already enforces // SAFETY: comments on every unsafe block
+# via scripts/verify_unsafe_safety_template.py + docs/SOUNDNESS.md audit.
+#
+# These exclusions prevent false positives on files where unsafe is
+# architecturally required and fully audited.
+engines:
+  semgrep:
+    exclude_paths:
+      # SIMD intrinsics — unsafe is mandatory for _mm256_*, vld1q_f32, etc.
+      # All blocks have // SAFETY: comments verified by CI.
+      - "crates/velesdb-core/src/simd_native/**"
+      # HNSW graph hot paths — get_unchecked for bounds-check elimination
+      # Invariants documented in docs/SOUNDNESS.md §2.
+      - "crates/velesdb-core/src/index/hnsw/native/graph/**"
+      # Aligned memory allocation (ContiguousVectors, AllocGuard)
+      # RAII-guarded, audited in docs/SOUNDNESS.md §1.
+      - "crates/velesdb-core/src/perf_optimizations.rs"
+      # Memory-mapped I/O (mmap, file-backed storage)
+      # Platform-specific, audited in docs/SOUNDNESS.md §3.
+      - "crates/velesdb-core/src/storage/mmap/**"
+      # FFI bindings (PyO3, mobile, WASM)
+      - "crates/velesdb-python/**"
+      - "crates/velesdb-mobile/**"
+      - "crates/velesdb-wasm/**"
