@@ -179,7 +179,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         Returns:
             Training status message.
         """
-        return self._collection.train_pq(m=m, k=k, opq=opq)
+        return self._db.train_pq(self.collection_name, m=m, k=k, opq=opq)
 
 
 # ---------------------------------------------------------------------------

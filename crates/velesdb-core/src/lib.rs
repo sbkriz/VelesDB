@@ -19,7 +19,6 @@
 //! use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 //! use serde_json::json;
 //!
-//! #[allow(deprecated)]
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Create a new database
 //!     let db = Database::open("./data")?;
@@ -28,7 +27,7 @@
 //!     db.create_collection("documents", 768, DistanceMetric::Cosine)?;
 //!     // Or with quantization: DistanceMetric::Hamming + StorageMode::Binary
 //!
-//!     let collection = db.get_collection("documents").ok_or("Collection not found")?;
+//!     let collection = db.get_vector_collection("documents").ok_or("Collection not found")?;
 //!
 //!     // Insert vectors (upsert takes ownership)
 //!     collection.upsert(vec![

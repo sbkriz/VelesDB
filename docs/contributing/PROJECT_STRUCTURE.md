@@ -1,164 +1,164 @@
-# VelesDB-Core - Structure du Projet
+# VelesDB-Core - Project Structure
 
-## Vue d'ensemble
+## Overview
 
-VelesDB-Core est un **workspace Cargo** contenant plusieurs crates. C'est le moteur open-source de la base de données vectorielle.
+VelesDB-Core is a **Cargo workspace** containing eight crates. It is the open-source engine for the VelesDB vector database combining Vector + Graph + ColumnStore in a single engine.
 
 ```
 velesdb-core/
 │
-├── Cargo.toml                 # Workspace principal
-├── Cargo.lock                 # Lock des versions
+├── Cargo.toml                 # Workspace root
+├── Cargo.lock                 # Dependency lockfile
 │
-├── rust-toolchain.toml        # Version Rust (stable)
-├── rustfmt.toml               # Config formatage
-├── clippy.toml                # Config linter
-├── deny.toml                  # Audit sécurité deps
-├── Makefile.toml              # Tasks cargo-make
+├── rust-toolchain.toml        # Rust version (stable)
+├── rustfmt.toml               # Formatting config
+├── clippy.toml                # Linter config
+├── deny.toml                  # Dependency security audit
+├── Makefile.toml              # cargo-make tasks
 │
 ├── .cargo/
-│   └── config.toml            # Aliases cargo
+│   └── config.toml            # Cargo aliases
 │
 ├── .githooks/
-│   └── pre-commit             # Hook pré-commit
-│
-├── .windsurf/
-│   └── workflows/             # Workflows AI assistants
-│       ├── rust-feature.md
-│       ├── rust-debug.md
-│       └── ...
+│   └── pre-commit             # Pre-commit hook
 │
 ├── crates/
-│   ├── velesdb-core/          # Lib principale (moteur vectoriel)
+│   ├── velesdb-core/          # Core engine (vector, graph, storage, VelesQL)
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── collection/    # Gestion collections
-│   │   │   ├── index/         # HNSW index
-│   │   │   ├── storage/       # Persistence
-│   │   │   ├── velesql/       # Query language parser
-│   │   │   └── simd/          # SIMD optimizations
-│   │   └── benches/
+│   │   │   ├── collection/    # Typed collections (Vector, Graph, Metadata) + legacy
+│   │   │   ├── index/         # HNSW, BM25, Trigram, Secondary indexes
+│   │   │   ├── storage/       # mmap, WAL, sharded vectors, compaction
+│   │   │   ├── velesql/       # VelesQL parser (pest), planner, executor, cache
+│   │   │   ├── simd_native/   # AVX-512, AVX2, NEON distance kernels
+│   │   │   ├── simd_dispatch.rs # Runtime SIMD path selection
+│   │   │   ├── column_store/  # Typed column storage for metadata
+│   │   │   ├── quantization/  # SQ8 (4x) and Binary (32x) compression
+│   │   │   ├── fusion/        # RRF score fusion for hybrid search
+│   │   │   ├── agent/         # Agent Memory Patterns SDK
+│   │   │   ├── observer.rs    # DatabaseObserver trait (premium hooks)
+│   │   │   └── guardrails/    # Allocation guards, memory limits
+│   │   ├── benches/           # Criterion benchmarks
+│   │   └── tests/             # Integration tests
 │   │
-│   ├── velesdb-server/        # API REST (Axum)
+│   ├── velesdb-server/        # Axum REST API server (22+ endpoints)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │
-│   ├── velesdb-cli/           # CLI / REPL VelesQL
+│   ├── velesdb-cli/           # Interactive REPL for VelesQL
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       └── main.rs
 │   │
-│   └── velesdb-python/        # Python bindings (PyO3)
+│   ├── velesdb-python/        # Python bindings (PyO3 + NumPy)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │
+│   ├── velesdb-wasm/          # Browser-side vector search (no persistence)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │
+│   ├── velesdb-mobile/        # iOS/Android bindings (UniFFI)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │
+│   ├── velesdb-migrate/       # Schema and data migration tooling
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │
+│   └── tauri-plugin-velesdb/  # Tauri desktop integration
 │       ├── Cargo.toml
-│       ├── src/
-│       │   └── lib.rs
-│       └── tests/
-│           └── test_velesdb.py
+│       └── src/
+│
+├── conformance/               # VelesQL cross-ecosystem conformance cases
 │
 ├── integrations/
 │   └── langchain-velesdb/     # LangChain VectorStore
-│       ├── pyproject.toml
-│       ├── README.md
-│       ├── src/langchain_velesdb/
-│       │   ├── __init__.py
-│       │   └── vectorstore.py
-│       └── tests/
 │
-├── docs/
-│   ├── PROJECT_STRUCTURE.md   # Ce fichier
-│   ├── CODING_RULES.md        # Règles de développement
-│   ├── TDD_RULES.md           # Test-Driven Development
-│   ├── api-reference.md
-│   └── getting-started.md
+├── docs/                      # Documentation
 │
-├── scripts/
-│   └── release.sh             # Script de release
+├── scripts/                   # CI, release, and validation scripts
 │
-└── examples/
-    └── python_example.py
+└── examples/                  # Example applications
 ```
 
 ---
 
-## Fichiers de configuration
-
-### `Cargo.toml` (racine)
-
-Définit le **workspace** et les dépendances communes :
-
-```toml
-[workspace]
-resolver = "2"
-members = ["crates/velesdb-core", "crates/velesdb-server"]
-
-[workspace.package]
-version = "0.1.0"
-edition = "2021"
-# ...
-
-[workspace.dependencies]
-tokio = { version = "1.42", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-# ...
-```
-
-### `crates/*/Cargo.toml`
-
-Chaque crate **hérite** du workspace :
-
-```toml
-[package]
-name = "velesdb-core"
-version.workspace = true      # ← hérite de workspace.package.version
-edition.workspace = true
-
-[dependencies]
-tokio = { workspace = true }  # ← hérite de workspace.dependencies
-```
-
----
-
-## Crates
+## Workspace Crates
 
 ### `velesdb-core`
-Moteur vectoriel principal. Contient :
-- **HNSW Index** : Recherche approximative des plus proches voisins
-- **SIMD** : Calculs de distance optimisés (AVX2/SSE)
-- **VelesQL** : Parser du langage de requête SQL-like
-- **Storage** : Persistence avec WAL
+
+Core engine. Contains:
+- **HNSW Index**: Native implementation (1.2x faster than hnsw_rs) with AVX-512, AVX2, and NEON SIMD acceleration via runtime feature detection
+- **Typed Collections**: `VectorCollection`, `GraphCollection`, `MetadataCollection` (plus legacy `Collection` for backward compatibility)
+- **VelesQL**: SQL-like query language with vector and graph extensions (pest-based parser)
+- **Storage**: Memory-mapped files, WAL, sharded vectors, compaction
+- **Quantization**: SQ8 (4x) and Binary (32x) memory compression
+- **Agent Memory**: Semantic, episodic, and procedural memory patterns for AI agents
 
 ### `velesdb-server`
-Serveur REST API (Axum). Expose :
-- Endpoints CRUD collections/points
-- Endpoint `/search` et `/search/batch`
-- Endpoint `/query` pour VelesQL
+
+Axum-based REST API server with 22+ endpoints. Exposes:
+- CRUD endpoints for collections and points
+- `/search`, `/search/batch`, `/search/hybrid` endpoints
+- `/query` endpoint for VelesQL execution
+- Optional OpenAPI documentation
 
 ### `velesdb-cli`
-Interface ligne de commande :
-- `repl` : Mode interactif VelesQL
-- `query` : Exécution requête unique
-- `info` : Informations sur une base
+
+Command-line interface with:
+- `repl`: Interactive VelesQL shell
+- `query`: Single query execution
+- `info`: Database information
 
 ### `velesdb-python`
-Bindings Python via PyO3 :
-- `velesdb.Database` / `velesdb.Collection`
-- Support NumPy arrays (float32, float64)
-- Tests pytest complets
+
+Python bindings via PyO3:
+- `Database`, `Collection`, `GraphCollection`, `AgentMemory` classes
+- NumPy array support (float32, float64)
+- Comprehensive pytest suite
+
+### `velesdb-wasm`
+
+Browser-side vector search. Must be built without the `persistence` feature:
+```bash
+cargo build -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
+```
+
+### `velesdb-mobile`
+
+iOS and Android bindings via UniFFI:
+- Swift bindings for iOS
+- Kotlin bindings for Android
+
+### `velesdb-migrate`
+
+Schema and data migration tooling for version upgrades (e.g., bincode-to-postcard migration in v1.5).
+
+### `tauri-plugin-velesdb`
+
+Tauri desktop integration plugin for building local-first desktop applications with embedded vector search.
 
 ---
 
-## Integrations
+## Feature Flags
 
-### `langchain-velesdb`
-Package Python pour LangChain :
-- `VelesDBVectorStore` compatible LangChain
-- Méthodes : `add_texts`, `similarity_search`, `as_retriever`
-- Installation : `pip install langchain-velesdb`
+| Flag | Purpose | Default |
+|------|---------|---------|
+| `persistence` | mmap, WAL, rayon, tokio | Yes |
+| `gpu` | wgpu-based GPU acceleration | No |
+| `update-check` | HTTP version checking | No |
+| `loom` | Concurrency testing (nightly) | No |
+
+The `persistence` feature must be disabled for WASM targets.
+
+---
+
+## Configuration Files
 
 ### `rust-toolchain.toml`
 
-Fixe la version de Rust pour tous les développeurs :
+Pins the Rust toolchain version for all developers:
 
 ```toml
 [toolchain]
@@ -168,78 +168,36 @@ components = ["rustfmt", "clippy"]
 
 ### `.cargo/config.toml`
 
-Définit des **aliases** pour simplifier les commandes :
-
-```toml
-[alias]
-lint = "clippy --all-targets --all-features -- -D warnings"
-test-all = "test --all-features"
-```
-
-Usage : `cargo lint`, `cargo test-all`
-
-### `Makefile.toml`
-
-Tasks pour **cargo-make** :
-
-```bash
-cargo make check    # fmt + clippy + test
-cargo make ci       # fmt + clippy + test + audit
-cargo make fmt      # formate le code
-```
+Defines cargo aliases for common commands. Note: the `target-cpu=native` line must stay commented out to preserve CI compatibility.
 
 ### `.githooks/pre-commit`
 
-Exécuté automatiquement avant chaque `git commit` :
-- Vérifie le formatage
-- Lance clippy
-- Lance les tests
-- Détecte les secrets
+Runs automatically before each `git commit`:
+- Checks formatting
+- Runs clippy
+- Runs tests
+- Detects secrets
 
-**Activation** : `git config core.hooksPath .githooks`
-
----
-
-## Workflow de développement
-
-```bash
-# 1. Cloner
-git clone https://github.com/cyberlife-coder/velesdb.git
-cd velesdb
-
-# 2. Setup (une seule fois)
-rustup update stable
-cargo install cargo-make cargo-audit cargo-deny
-git config core.hooksPath .githooks
-
-# 3. Développer
-cargo check              # Vérifier la compilation
-cargo make check         # fmt + clippy + test
-cargo make ci            # CI complète locale
-
-# 4. Commit (hook s'exécute automatiquement)
-git add .
-git commit -m "feat: add feature X"
-```
+Activate with: `git config core.hooksPath .githooks`
 
 ---
 
-## Relation avec VelesDB-Premium
+## Relationship with VelesDB-Premium
 
 ```
 ┌─────────────────────┐
-│   velesdb-premium   │  (repo privé)
-│  Features payantes  │
+│   velesdb-premium   │  (private repo)
+│   Premium features  │
 └─────────┬───────────┘
-          │ dépend via git
+          │ depends via git
           ▼
 ┌─────────────────────┐
-│    velesdb-core     │  (ce repo)
-│  Moteur open-source │
+│    velesdb-core     │  (this repo)
+│   Open-source core  │
 └─────────────────────┘
 ```
 
-Premium importe Core ainsi :
+Premium imports Core as a workspace dependency:
 
 ```toml
 [workspace.dependencies]

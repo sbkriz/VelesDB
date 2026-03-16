@@ -147,25 +147,226 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 // Cosine Similarity
 // =============================================================================
 
-/// ARM NEON cosine similarity — fused: dot(a,b) / (‖a‖ × ‖b‖).
+/// ARM NEON cosine similarity — fused single-pass kernel.
 ///
-/// Uses the 4-accumulator dot-product kernel for vectors ≥ 64 elements.
-/// Falls back to the 1-accumulator kernel for smaller vectors.
+/// Computes `dot(a,b)`, `norm(a)^2`, and `norm(b)^2` simultaneously in one
+/// pass over the data, using 3 independent NEON accumulators. For vectors
+/// with >= 64 elements, delegates to [`cosine_fused_neon_4acc`] which uses
+/// 12 accumulators (3 products x 4-way ILP).
+///
+/// This replaces the prior 3-pass approach (`dot_product_neon` called 3x).
 #[cfg(target_arch = "aarch64")]
 #[inline]
 pub(crate) fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
-    let dot = dot_product_neon(a, b);
-    let norm_a_sq = dot_product_neon(a, a);
-    let norm_b_sq = dot_product_neon(b, b);
+    if a.len() >= 64 {
+        // SAFETY: `cosine_fused_neon_4acc` requires NEON (guaranteed on aarch64)
+        // and len >= 64 (checked above).
+        // Reason: Delegate to the 4-accumulator ILP variant for large vectors.
+        return unsafe { cosine_fused_neon_4acc(a, b) };
+    }
+    // SAFETY: `cosine_fused_neon_1acc` requires NEON (guaranteed on aarch64).
+    // Reason: Single-accumulator variant for small/medium vectors.
+    unsafe { cosine_fused_neon_1acc(a, b) }
+}
 
-    if norm_a_sq == 0.0 || norm_b_sq == 0.0 {
-        return 0.0;
+/// Single-accumulator fused cosine for vectors with < 64 elements.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+
+    let len = a.len();
+    let simd_len = len / 4;
+
+    // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
+    // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: Immediate value 0.0 is valid for the instruction.
+    // Reason: Initialise three SIMD accumulators (dot, norm_a, norm_b).
+    let mut dot_acc = vdupq_n_f32(0.0);
+    let mut na_acc = vdupq_n_f32(0.0);
+    let mut nb_acc = vdupq_n_f32(0.0);
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    for i in 0..simd_len {
+        let offset = i * 4;
+        // SAFETY: `vld1q_f32`/`vfmaq_f32` are non-faulting NEON operations.
+        // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, pointers within bounds.
+        // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
+        // Reason: Single-pass accumulation of dot, norm_a_sq, norm_b_sq.
+        let va = vld1q_f32(a_ptr.add(offset));
+        let vb = vld1q_f32(b_ptr.add(offset));
+        dot_acc = vfmaq_f32(dot_acc, va, vb);
+        na_acc = vfmaq_f32(na_acc, va, va);
+        nb_acc = vfmaq_f32(nb_acc, vb, vb);
     }
 
+    // SAFETY: `vaddvq_f32` reduces a 128-bit register to scalar on aarch64.
+    // - Condition 1: All accumulators are valid float32x4_t values.
+    // Reason: Horizontal reduction of the three accumulators.
+    let mut dot = vaddvq_f32(dot_acc);
+    let mut norm_a_sq = vaddvq_f32(na_acc);
+    let mut norm_b_sq = vaddvq_f32(nb_acc);
+
+    let base = simd_len * 4;
+    for i in base..len {
+        let x = a[i];
+        let y = b[i];
+        dot += x * y;
+        norm_a_sq += x * x;
+        norm_b_sq += y * y;
+    }
+
+    finalize_cosine(dot, norm_a_sq, norm_b_sq)
+}
+
+/// Four-accumulator fused cosine for vectors with >= 64 elements.
+///
+/// Uses 12 NEON registers (3 products x 4-way ILP) and processes 16
+/// elements per iteration, following the pattern from `cosine_fused_avx2_2acc`.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len();
+    let main_end = len / 16 * 16;
+    // SAFETY: `add` on a raw pointer derived from a valid slice.
+    // - Condition 1: `main_end <= len`, so pointer stays within the allocation.
+    // - Condition 2: `add(len)` yields one-past-end, valid for comparison.
+    // Reason: Establish loop bounds for 16-wide main body and scalar tail.
+    let end_main = a.as_ptr().add(main_end);
+    let end_ptr = a.as_ptr().add(len);
+
+    let (dot, norm_a_sq, norm_b_sq) =
+        cosine_fused_neon_main_loop(a.as_ptr(), b.as_ptr(), end_main);
+
+    let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_scalar_tail(
+        end_main,
+        b.as_ptr().add(main_end),
+        end_ptr,
+        dot,
+        norm_a_sq,
+        norm_b_sq,
+    );
+
+    finalize_cosine(dot, norm_a_sq, norm_b_sq)
+}
+
+/// Main 16-wide SIMD loop for fused cosine (4-acc ILP).
+///
+/// Returns `(dot, norm_a_sq, norm_b_sq)` accumulated over full 16-element blocks.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn cosine_fused_neon_main_loop(
+    mut a_ptr: *const f32,
+    mut b_ptr: *const f32,
+    end_main: *const f32,
+) -> (f32, f32, f32) {
+    use std::arch::aarch64::*;
+
+    // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
+    // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: Immediate 0.0 is valid.
+    // Reason: Initialise 12 accumulators (3 products x 4-way ILP).
+    let mut d0 = vdupq_n_f32(0.0);
+    let mut d1 = vdupq_n_f32(0.0);
+    let mut d2 = vdupq_n_f32(0.0);
+    let mut d3 = vdupq_n_f32(0.0);
+    let mut na0 = vdupq_n_f32(0.0);
+    let mut na1 = vdupq_n_f32(0.0);
+    let mut na2 = vdupq_n_f32(0.0);
+    let mut na3 = vdupq_n_f32(0.0);
+    let mut nb0 = vdupq_n_f32(0.0);
+    let mut nb1 = vdupq_n_f32(0.0);
+    let mut nb2 = vdupq_n_f32(0.0);
+    let mut nb3 = vdupq_n_f32(0.0);
+
+    while a_ptr < end_main {
+        // SAFETY: Loop condition guarantees 16 elements remain before `end_main`.
+        // - Condition 1: `vld1q_f32` supports unaligned loads on ARM64.
+        // Reason: 16-wide single-pass accumulation with 4-way ILP.
+        let va0 = vld1q_f32(a_ptr);
+        let vb0 = vld1q_f32(b_ptr);
+        d0 = vfmaq_f32(d0, va0, vb0);
+        na0 = vfmaq_f32(na0, va0, va0);
+        nb0 = vfmaq_f32(nb0, vb0, vb0);
+
+        let va1 = vld1q_f32(a_ptr.add(4));
+        let vb1 = vld1q_f32(b_ptr.add(4));
+        d1 = vfmaq_f32(d1, va1, vb1);
+        na1 = vfmaq_f32(na1, va1, va1);
+        nb1 = vfmaq_f32(nb1, vb1, vb1);
+
+        let va2 = vld1q_f32(a_ptr.add(8));
+        let vb2 = vld1q_f32(b_ptr.add(8));
+        d2 = vfmaq_f32(d2, va2, vb2);
+        na2 = vfmaq_f32(na2, va2, va2);
+        nb2 = vfmaq_f32(nb2, vb2, vb2);
+
+        let va3 = vld1q_f32(a_ptr.add(12));
+        let vb3 = vld1q_f32(b_ptr.add(12));
+        d3 = vfmaq_f32(d3, va3, vb3);
+        na3 = vfmaq_f32(na3, va3, va3);
+        nb3 = vfmaq_f32(nb3, vb3, vb3);
+
+        a_ptr = a_ptr.add(16);
+        b_ptr = b_ptr.add(16);
+    }
+
+    // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations.
+    // - Condition 1: All accumulators hold valid float32x4_t values.
+    // Reason: Reduce 4 accumulators per product to scalar results.
+    let d01 = vaddq_f32(d0, d1);
+    let d23 = vaddq_f32(d2, d3);
+    let dot = vaddvq_f32(vaddq_f32(d01, d23));
+
+    let na01 = vaddq_f32(na0, na1);
+    let na23 = vaddq_f32(na2, na3);
+    let norm_a_sq = vaddvq_f32(vaddq_f32(na01, na23));
+
+    let nb01 = vaddq_f32(nb0, nb1);
+    let nb23 = vaddq_f32(nb2, nb3);
+    let norm_b_sq = vaddvq_f32(vaddq_f32(nb01, nb23));
+
+    (dot, norm_a_sq, norm_b_sq)
+}
+
+/// Scalar tail for fused cosine — handles the remaining 0..15 elements.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn cosine_fused_neon_scalar_tail(
+    mut a_ptr: *const f32,
+    mut b_ptr: *const f32,
+    end_ptr: *const f32,
+    mut dot: f32,
+    mut norm_a_sq: f32,
+    mut norm_b_sq: f32,
+) -> (f32, f32, f32) {
+    while a_ptr < end_ptr {
+        // SAFETY: Loop condition guarantees both pointers are within slice bounds.
+        // - Condition 1: `b_ptr` advances in step with `a_ptr`.
+        // Reason: Handle remaining elements the 16-wide loop did not cover.
+        let x = *a_ptr;
+        let y = *b_ptr;
+        dot += x * y;
+        norm_a_sq += x * x;
+        norm_b_sq += y * y;
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+    (dot, norm_a_sq, norm_b_sq)
+}
+
+/// Finalize cosine from dot product and squared norms.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn finalize_cosine(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
     let norm_a = norm_a_sq.sqrt();
     let norm_b = norm_b_sq.sqrt();
-
-    dot / (norm_a * norm_b)
+    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
 // =============================================================================

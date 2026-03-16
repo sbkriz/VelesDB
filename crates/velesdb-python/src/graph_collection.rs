@@ -238,7 +238,7 @@ impl PyGraphCollection {
             pyo3::exceptions::PyValueError::new_err("Failed to convert payload to JSON")
         })?;
         self.inner
-            .store_node_payload(node_id, &value)
+            .upsert_node_payload(node_id, &value)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to store payload: {e}")))
     }
 

@@ -15,3 +15,8 @@ mod ingester;
 pub use delta::merge_with_delta;
 #[cfg(feature = "persistence")]
 pub use ingester::{BackpressureError, StreamIngester, StreamingConfig};
+
+#[cfg(all(test, feature = "persistence"))]
+mod delta_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod ingester_tests;

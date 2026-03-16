@@ -72,7 +72,7 @@ fn setup_graph(name: &str) -> (std::path::PathBuf, TempDir) {
     for i in 1u64..=3 {
         let edge = GraphEdge::new(i, i * 10, i * 10 + 1, "LINKS").unwrap();
         col.add_edge(edge).unwrap();
-        col.store_node_payload(
+        col.upsert_node_payload(
             i * 10,
             &serde_json::json!({"name": format!("node_{}", i * 10)}),
         )

@@ -45,13 +45,13 @@ The MSI installer provides the easiest installation experience with:
 
 ```powershell
 # Install with PATH modification (default)
-msiexec /i velesdb-0.6.0-x86_64.msi /quiet ADDTOPATH=1
+msiexec /i velesdb-1.5.1-x86_64.msi /quiet ADDTOPATH=1
 
 # Install without PATH modification
-msiexec /i velesdb-0.6.0-x86_64.msi /quiet ADDTOPATH=0
+msiexec /i velesdb-1.5.1-x86_64.msi /quiet ADDTOPATH=0
 
 # Install to custom directory
-msiexec /i velesdb-0.6.0-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
+msiexec /i velesdb-1.5.1-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
 ```
 
 #### Uninstall
@@ -59,7 +59,7 @@ msiexec /i velesdb-0.6.0-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
 Via **Control Panel > Programs > Uninstall**, or:
 
 ```powershell
-msiexec /x velesdb-0.6.0-x86_64.msi /quiet
+msiexec /x velesdb-1.5.1-x86_64.msi /quiet
 ```
 
 ### Portable ZIP
@@ -68,7 +68,7 @@ For portable installations without admin rights:
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v0.6.0/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
+Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v1.5.1/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
 Expand-Archive velesdb.zip -DestinationPath C:\VelesDB
 
 # Add to PATH (optional, current session only)
@@ -85,10 +85,10 @@ $env:PATH += ";C:\VelesDB"
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v0.6.0/velesdb-0.6.0-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.5.1/velesdb-1.5.1-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-0.6.0-amd64.deb
+sudo dpkg -i velesdb-1.5.1-amd64.deb
 
 # Verify
 velesdb --version
@@ -110,7 +110,7 @@ sudo dpkg -r velesdb
 
 ```bash
 # Download and extract
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v0.6.0/velesdb-linux-x86_64.tar.gz
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.5.1/velesdb-linux-x86_64.tar.gz
 tar -xzf velesdb-linux-x86_64.tar.gz -C /opt/velesdb
 
 # Add to PATH
@@ -160,7 +160,7 @@ results = collection.search(vector=query_vector, top_k=10)
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "0.3"
+velesdb-core = "1.5"
 ```
 
 ### As CLI Tools
@@ -231,7 +231,7 @@ import init, { VectorStore } from '@wiscale/velesdb-wasm';
 
 await init();
 const store = new VectorStore(768, 'cosine');
-store.insert(1, new Float32Array([...]));
+store.insert(1n, new Float32Array([...]));
 const results = store.search(new Float32Array([...]), 10);
 ```
 
@@ -335,13 +335,14 @@ Options:
 VelesDB persists all data to disk automatically:
 
 ```
-<data-dir>/
-├── collections/           # Collection metadata
-├── <collection-name>/
-│   ├── index.hnsw        # HNSW vector index
-│   ├── storage.bin       # Vector data
-│   ├── payloads.bin      # Metadata/payloads
-│   └── wal.bin           # Write-Ahead Log
+<data_dir>/<collection_name>/
+├── config.json       # Collection config (dimension, metric, HNSW params)
+├── vectors.bin       # mmap-backed vector data
+├── vectors.idx       # ID → offset index
+├── vectors.wal       # Vector WAL
+├── payloads.log      # Append-only payload WAL
+├── payloads.snapshot # Optional snapshot
+└── hnsw.bin          # HNSW graph index
 ```
 
 **Data is persistent by default.** Restart the server and your data will be there.
@@ -391,7 +392,7 @@ docker run -v velesdb_data:/data ghcr.io/cyberlife-coder/velesdb:latest
 ## 📚 Next Steps
 
 - **[Quick Start](../README.md#-your-first-vector-search)** - Your first vector search
-- **[VelesQL Guide](VELESQL_SPEC.md)** - SQL-like query language
-- **[API Reference](API_REFERENCE.md)** - REST API documentation
-- **[Benchmarks](BENCHMARKS.md)** - Performance metrics
+- **[VelesQL Guide](../VELESQL_SPEC.md)** - SQL-like query language
+- **[API Reference](../reference/api-reference.md)** - REST API documentation
+- **[Benchmarks](../BENCHMARKS.md)** - Performance metrics
 - **[Examples](../examples/)** - Sample applications including Tauri RAG app

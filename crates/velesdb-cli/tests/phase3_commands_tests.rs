@@ -908,9 +908,9 @@ fn setup_graph_collection(name: &str) -> (std::path::PathBuf, tempfile::TempDir)
     let col = db.get_graph_collection(name).unwrap();
     let edge = velesdb_core::GraphEdge::new(1, 10, 20, "KNOWS").unwrap();
     col.add_edge(edge).unwrap();
-    col.store_node_payload(10, &serde_json::json!({"name": "Alice"}))
+    col.upsert_node_payload(10, &serde_json::json!({"name": "Alice"}))
         .unwrap();
-    col.store_node_payload(20, &serde_json::json!({"name": "Bob"}))
+    col.upsert_node_payload(20, &serde_json::json!({"name": "Bob"}))
         .unwrap();
     drop(db);
     (db_path, temp_dir)

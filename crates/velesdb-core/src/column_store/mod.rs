@@ -32,9 +32,13 @@ mod batch;
 #[cfg(test)]
 mod batch_tests;
 mod filter;
+#[cfg(test)]
+mod filter_tests;
 mod string_table;
 mod types;
 mod vacuum;
+#[cfg(test)]
+mod vacuum_tests;
 
 use roaring::RoaringBitmap;
 use rustc_hash::FxHashMap;

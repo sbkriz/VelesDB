@@ -15,7 +15,7 @@ use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, Traversa
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::Result;
-use crate::point::SearchResult;
+use crate::point::{Point, SearchResult};
 
 /// A graph collection storing typed relationships between nodes.
 ///
@@ -178,6 +178,43 @@ impl GraphCollection {
         self.inner.all_ids()
     }
 
+    /// Returns the number of nodes (points) stored in this collection.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Returns `true` if the collection contains no nodes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Retrieves nodes by IDs, returning `None` for missing entries.
+    #[must_use]
+    pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
+        self.inner.get(ids)
+    }
+
+    /// Deletes nodes by IDs.
+    ///
+    /// Missing IDs are silently ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn delete(&self, ids: &[u64]) -> Result<()> {
+        self.inner.delete(ids)
+    }
+
+    /// Removes an edge from the graph by ID.
+    ///
+    /// Returns `true` if the edge existed and was removed, `false` otherwise.
+    #[must_use]
+    pub fn remove_edge(&self, edge_id: u64) -> bool {
+        self.inner.remove_edge(edge_id)
+    }
+
     /// Performs BFS traversal from a source node.
     ///
     /// # Examples
@@ -208,13 +245,23 @@ impl GraphCollection {
     // Payload / node properties
     // -------------------------------------------------------------------------
 
-    /// Stores node payload (properties).
+    /// Inserts or updates node payload (properties).
     ///
     /// # Errors
     ///
     /// Returns an error if storage fails.
-    pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
+    pub fn upsert_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
         self.inner.store_node_payload(node_id, payload)
+    }
+
+    /// Inserts or updates node payload (properties).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails.
+    #[deprecated(since = "1.6.0", note = "Use upsert_node_payload() instead")]
+    pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
+        self.upsert_node_payload(node_id, payload)
     }
 
     /// Retrieves node payload.
@@ -240,11 +287,23 @@ impl GraphCollection {
         self.inner.search_by_embedding(query, k)
     }
 
+    /// Alias for [`search_by_embedding`](Self::search_by_embedding).
+    ///
+    /// Provided for API parity with [`VectorCollection::search`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::VectorNotAllowed` if this collection has no embeddings,
+    /// or `Error::DimensionMismatch` if the query dimension is wrong.
+    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        self.search_by_embedding(query, k)
+    }
+
     // -------------------------------------------------------------------------
     // VelesQL
     // -------------------------------------------------------------------------
 
-    /// Executes a `VelesQL` query.
+    /// Executes a parsed `VelesQL` query.
     ///
     /// # Errors
     ///
@@ -255,6 +314,25 @@ impl GraphCollection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         self.inner.execute_query(query, params)
+    }
+
+    /// Executes a raw VelesQL string, parsing it before execution.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the SQL string cannot be parsed.
+    /// - Returns an error if query execution fails.
+    pub fn execute_query_str(
+        &self,
+        sql: &str,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let query = self
+            .inner
+            .query_cache
+            .parse(sql)
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        self.inner.execute_query(&query, params)
     }
 }
 
@@ -278,9 +356,9 @@ mod tests {
         .unwrap();
 
         // Store payloads on two nodes
-        col.store_node_payload(10, &serde_json::json!({"name": "Alice"}))
+        col.upsert_node_payload(10, &serde_json::json!({"name": "Alice"}))
             .unwrap();
-        col.store_node_payload(20, &serde_json::json!({"name": "Bob"}))
+        col.upsert_node_payload(20, &serde_json::json!({"name": "Bob"}))
             .unwrap();
 
         let ids = col.all_node_ids();

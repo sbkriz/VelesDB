@@ -214,8 +214,8 @@ Response:
 
 - Read the [API Reference](reference/api-reference.md) for complete endpoint documentation
 - Read the [VelesQL Specification](VELESQL_SPEC.md) for query language reference
-- Learn about [Configuration](CONFIGURATION.md) options
-- Explore [Architecture](ARCHITECTURE.md) to understand VelesDB internals
+- Learn about [Configuration](guides/CONFIGURATION.md) options
+- Explore [Architecture](reference/ARCHITECTURE.md) to understand VelesDB internals
 - Check out [Examples](../examples/) for real-world use cases
 - Follow the [Tauri RAG Tutorial](tutorials/tauri-rag-app/) to build a desktop AI app
 

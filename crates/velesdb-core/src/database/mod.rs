@@ -30,6 +30,8 @@ mod collection_ops_tests;
 mod database_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod stats_tests;
 
 /// Database instance managing collections and storage.
 ///

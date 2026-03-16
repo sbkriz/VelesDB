@@ -11,6 +11,8 @@
 mod context;
 mod limits;
 mod resilience;
+#[cfg(test)]
+mod resilience_tests;
 
 pub use context::QueryContext;
 pub use limits::{
