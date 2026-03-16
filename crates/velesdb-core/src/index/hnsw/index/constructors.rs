@@ -277,7 +277,7 @@ impl HnswIndex {
     ///
     /// Returns an error if the write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::result::Result<(), std::io::Error> {
-        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta, HnswVectorsData};
+        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta};
 
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
@@ -297,21 +297,7 @@ impl HnswIndex {
             },
         )?;
 
-        if self.enable_vector_storage {
-            // Save vectors for brute-force fallback and reranking after reload.
-            persistence::save_vectors(
-                path,
-                &HnswVectorsData {
-                    vectors: self.vectors.collect_for_parallel(),
-                },
-            )?;
-        } else {
-            // Avoid stale vectors from previous runs in fast-insert snapshots.
-            let vectors_path = path.join("native_vectors.bin");
-            if vectors_path.exists() {
-                std::fs::remove_file(vectors_path)?;
-            }
-        }
+        self.save_or_cleanup_vectors(path)?;
 
         // Save metadata
         persistence::save_meta(
@@ -323,6 +309,30 @@ impl HnswIndex {
             },
         )?;
 
+        Ok(())
+    }
+
+    /// Persists vectors to disk or removes stale vector files.
+    ///
+    /// When vector storage is enabled, saves the current vectors for brute-force
+    /// fallback and reranking after reload. When disabled, removes any leftover
+    /// vector file from previous runs to avoid stale data.
+    fn save_or_cleanup_vectors(&self, path: &Path) -> std::result::Result<(), std::io::Error> {
+        use crate::index::hnsw::persistence::{self, HnswVectorsData};
+
+        if self.enable_vector_storage {
+            persistence::save_vectors(
+                path,
+                &HnswVectorsData {
+                    vectors: self.vectors.collect_for_parallel(),
+                },
+            )?;
+        } else {
+            let vectors_path = path.join("native_vectors.bin");
+            if vectors_path.exists() {
+                std::fs::remove_file(vectors_path)?;
+            }
+        }
         Ok(())
     }
 

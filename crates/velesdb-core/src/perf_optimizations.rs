@@ -379,10 +379,7 @@ impl ContiguousVectors {
     /// 5. State is updated atomically
     ///
     /// If panic occurs during copy, the guard ensures new buffer is freed.
-    #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
     fn resize(&mut self, new_capacity: usize) -> crate::error::Result<()> {
-        use crate::alloc_guard::AllocGuard;
-
         if new_capacity <= self.capacity {
             return Ok(());
         }
@@ -390,8 +387,37 @@ impl ContiguousVectors {
         let old_layout = Self::layout(self.dimension, self.capacity)?;
         let new_layout = Self::layout(self.dimension, new_capacity)?;
 
-        // Step 1: Allocate new buffer with RAII guard (PERF-002)
-        // If panic occurs before into_raw(), memory is automatically freed
+        let new_data = Self::alloc_and_copy(new_layout, self.data, self.count, self.dimension)?;
+
+        // Deallocate old buffer
+        // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant)
+        // - Condition 1: old_layout matches the allocation parameters.
+        // - Condition 2: Pointer is non-null per NonNull invariant.
+        // Reason: Free old buffer after data migration to new buffer.
+        unsafe {
+            dealloc(self.data.as_ptr().cast::<u8>(), old_layout);
+        }
+
+        // Update state (all-or-nothing)
+        self.data = new_data;
+        self.capacity = new_capacity;
+        Ok(())
+    }
+
+    /// Allocates a new buffer and copies existing data into it.
+    ///
+    /// Uses `AllocGuard` for panic-safety: if copy panics, the guard drops
+    /// and frees the new buffer automatically.
+    #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
+    fn alloc_and_copy(
+        new_layout: Layout,
+        src: NonNull<f32>,
+        count: usize,
+        dimension: usize,
+    ) -> crate::error::Result<NonNull<f32>> {
+        use crate::alloc_guard::AllocGuard;
+
+        // Allocate new buffer with RAII guard (PERF-002)
         let guard = AllocGuard::new(new_layout).ok_or_else(|| {
             crate::error::Error::AllocationFailed(format!(
                 "Failed to allocate {} bytes for ContiguousVectors resize",
@@ -404,37 +430,23 @@ impl ContiguousVectors {
             crate::error::Error::AllocationFailed("AllocGuard returned null pointer".to_string())
         })?;
 
-        // Step 2: Copy existing data to new buffer
-        // If this panics, guard drops and frees new_data automatically
-        let copy_count = self.count;
-        if copy_count > 0 {
-            let copy_size = copy_count * self.dimension;
+        // Copy existing data to new buffer
+        if count > 0 {
+            let copy_size = count * dimension;
             // SAFETY: Both pointers are valid (NonNull), non-overlapping, and properly aligned
-            // - Condition 1: Source pointer (self.data) is valid and properly aligned.
+            // - Condition 1: Source pointer (src) is valid and properly aligned.
             // - Condition 2: Destination pointer (new_data) is valid and properly aligned.
             // - Condition 3: Pointers are non-overlapping (old and new allocations are distinct).
             // Reason: Migrate data to newly allocated buffer during resize.
             unsafe {
-                ptr::copy_nonoverlapping(self.data.as_ptr(), new_data.as_ptr(), copy_size);
+                ptr::copy_nonoverlapping(src.as_ptr(), new_data.as_ptr(), copy_size);
             }
         }
 
-        // Step 3: Transfer ownership - guard won't free on drop anymore
+        // Transfer ownership - guard won't free on drop anymore
         let _ = guard.into_raw();
 
-        // Step 4: Deallocate old buffer
-        // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant)
-        // - Condition 1: old_layout matches the allocation parameters.
-        // - Condition 2: Pointer is non-null per NonNull invariant.
-        // Reason: Free old buffer after data migration to new buffer.
-        unsafe {
-            dealloc(self.data.as_ptr().cast::<u8>(), old_layout);
-        }
-
-        // Step 5: Update state (all-or-nothing)
-        self.data = new_data;
-        self.capacity = new_capacity;
-        Ok(())
+        Ok(new_data)
     }
 
     /// Computes dot product with another vector using SIMD.
