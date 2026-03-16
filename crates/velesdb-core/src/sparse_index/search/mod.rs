@@ -7,13 +7,12 @@
 
 #![allow(clippy::cast_precision_loss)]
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-
-use rustc_hash::FxHashMap;
+mod scoring;
+mod strategy;
 
 use super::inverted_index::SparseInvertedIndex;
-use super::types::{PostingEntry, ScoredDoc, SparseVector};
+use super::types::{ScoredDoc, SparseVector};
+use strategy::{linear_scan_search, maxscore_search};
 
 /// When total posting list length exceeds this fraction of
 /// `doc_count * num_query_terms`, the linear scan fallback is used.
@@ -42,8 +41,6 @@ pub fn sparse_search(
     }
 
     // Decide search strategy based on coverage heuristic.
-    // Use `posting_count` (no Vec allocation) rather than materialising
-    // `get_all_postings` and immediately discarding the result.
     let doc_count = index.doc_count();
     let mut total_postings: usize = 0;
     for &term_id in &query.indices {
@@ -57,10 +54,7 @@ pub fn sparse_search(
     // `query_weight.abs() * max_doc_weight`, which is incorrect when query
     // weights are negative and document weights are also negative (the inner
     // product can be positive but the bound treats it as zero-or-negative
-    // contribution). Rather than tracking dual min/max doc weights per term
-    // (which would require index schema changes), we fall back to linear scan
-    // for any query containing negative weights. In practice, SPLADE and
-    // BM25-derived sparse vectors are non-negative, so this path is rare.
+    // contribution). Fall back to linear scan for any query with negative weights.
     let has_negative_weight = query.values.iter().any(|&w| w < 0.0);
     if use_linear || has_negative_weight {
         linear_scan_search(index, query, k)
@@ -108,271 +102,6 @@ pub fn sparse_search_filtered(
     filtered
 }
 
-/// Collects posting lists for each query term, along with query weight and
-/// the global max document weight for that term.
-struct TermPostings {
-    query_weight: f32,
-    max_doc_weight: f32,
-    postings: Vec<PostingEntry>,
-}
-
-/// Prepared term data with precomputed upper-bound prefix sums for `MaxScore`.
-struct PreparedTerms {
-    terms: Vec<TermPostings>,
-    /// `upper_bound[i]` = cumulative max contribution of terms `0..=i`.
-    upper_bound: Vec<f32>,
-}
-
-/// Collects posting lists for each query term, sorts by max contribution
-/// ascending, and computes upper-bound prefix sums.
-///
-/// Returns `None` when no query term has any postings.
-fn prepare_term_data(index: &SparseInvertedIndex, query: &SparseVector) -> Option<PreparedTerms> {
-    let mut terms: Vec<TermPostings> = Vec::with_capacity(query.nnz());
-    for (&term_id, &qw) in query.indices.iter().zip(query.values.iter()) {
-        let postings = index.get_all_postings(term_id);
-        if postings.is_empty() {
-            continue;
-        }
-        let max_dw = index.get_global_max_weight(term_id);
-        terms.push(TermPostings {
-            query_weight: qw,
-            max_doc_weight: max_dw,
-            postings,
-        });
-    }
-
-    if terms.is_empty() {
-        return None;
-    }
-
-    // Sort by max_contribution ascending (least contributing first)
-    terms.sort_by(|a, b| {
-        let ca = a.query_weight.abs() * a.max_doc_weight;
-        let cb = b.query_weight.abs() * b.max_doc_weight;
-        ca.total_cmp(&cb)
-    });
-
-    // Compute prefix sums of max contributions (upper_bound[i] = sum of 0..=i)
-    let n = terms.len();
-    let mut upper_bound = vec![0.0_f32; n];
-    upper_bound[0] = terms[0].query_weight.abs() * terms[0].max_doc_weight;
-    for i in 1..n {
-        upper_bound[i] = upper_bound[i - 1] + terms[i].query_weight.abs() * terms[i].max_doc_weight;
-    }
-
-    Some(PreparedTerms { terms, upper_bound })
-}
-
-/// Scores a single document by combining essential term contributions (at
-/// cursor positions matching `doc_id`) and non-essential term contributions
-/// (via binary search).
-fn score_document(
-    term_data: &[TermPostings],
-    cursors: &mut [usize],
-    split: usize,
-    doc_id: u64,
-) -> f32 {
-    let mut score = 0.0_f32;
-
-    // Essential terms: advance cursors that match doc_id
-    for i in split..term_data.len() {
-        if cursors[i] < term_data[i].postings.len()
-            && term_data[i].postings[cursors[i]].doc_id == doc_id
-        {
-            score += term_data[i].query_weight * term_data[i].postings[cursors[i]].weight;
-            cursors[i] += 1;
-        }
-    }
-
-    // Non-essential terms: binary search for doc_id
-    for td in &term_data[..split] {
-        if let Ok(pos) = td.postings.binary_search_by_key(&doc_id, |e| e.doc_id) {
-            score += td.query_weight * td.postings[pos].weight;
-        }
-    }
-
-    score
-}
-
-/// Finds the smallest `doc_id` among essential posting lists (from `split..n_terms`).
-fn find_min_essential_doc_id(
-    term_data: &[TermPostings],
-    cursors: &[usize],
-    split: usize,
-) -> Option<u64> {
-    let mut min_doc_id: Option<u64> = None;
-    for i in split..term_data.len() {
-        if cursors[i] < term_data[i].postings.len() {
-            let did = term_data[i].postings[cursors[i]].doc_id;
-            min_doc_id = Some(min_doc_id.map_or(did, |m: u64| m.min(did)));
-        }
-    }
-    min_doc_id
-}
-
-/// `MaxScore` DAAT search over the inverted index.
-fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) -> Vec<ScoredDoc> {
-    let Some(prepared) = prepare_term_data(index, query) else {
-        return Vec::new();
-    };
-    let PreparedTerms {
-        terms: term_data,
-        upper_bound,
-    } = prepared;
-
-    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
-    let mut threshold: f32 = 0.0;
-    let mut split = find_split(&upper_bound, threshold);
-    let mut cursors: Vec<usize> = vec![0; term_data.len()];
-
-    loop {
-        let Some(doc_id) = find_min_essential_doc_id(&term_data, &cursors, split) else {
-            break;
-        };
-
-        let score = score_document(&term_data, &mut cursors, split, doc_id);
-
-        if heap.len() < k || score > threshold {
-            heap.push(Reverse(ScoredDoc { score, doc_id }));
-            if heap.len() > k {
-                heap.pop();
-            }
-            if heap.len() == k {
-                threshold = heap.peek().map_or(0.0, |Reverse(s)| s.score);
-                split = find_split(&upper_bound, threshold);
-            }
-        }
-    }
-
-    extract_sorted_results(heap)
-}
-
-/// Finds the split index: smallest i where `upper_bound[i] >= threshold`.
-/// Returns `upper_bound.len()` if no such index exists (all terms are non-essential).
-fn find_split(upper_bound: &[f32], threshold: f32) -> usize {
-    for (i, &ub) in upper_bound.iter().enumerate() {
-        if ub >= threshold {
-            return i;
-        }
-    }
-    upper_bound.len()
-}
-
-/// Linear scan fallback for high-coverage queries.
-fn linear_scan_search(
-    index: &SparseInvertedIndex,
-    query: &SparseVector,
-    k: usize,
-) -> Vec<ScoredDoc> {
-    // Collect all posting lists and find max doc_id
-    let mut term_postings: Vec<(f32, Vec<PostingEntry>)> = Vec::with_capacity(query.nnz());
-    let mut max_doc_id: u64 = 0;
-
-    for (&term_id, &qw) in query.indices.iter().zip(query.values.iter()) {
-        let postings = index.get_all_postings(term_id);
-        if postings.is_empty() {
-            continue;
-        }
-        if let Some(last) = postings.last() {
-            max_doc_id = max_doc_id.max(last.doc_id);
-        }
-        term_postings.push((qw, postings));
-    }
-
-    if term_postings.is_empty() {
-        return Vec::new();
-    }
-
-    // Choose accumulator strategy based on max_doc_id and ID-space density.
-    // Density check: use dense only when the ID space is reasonably compact
-    // (max_doc_id < doc_count * 4). Without this, a single document with
-    // doc_id = 999_999 in a 10-doc index would allocate ~4 MB unnecessarily.
-    // Allocation: (max_doc_id + 1) * 4 bytes. With MAX_DENSE_ACCUMULATOR = 1_000_000,
-    // maximum allocation is ~4 MB. The density check ensures this path is only used
-    // when the ID space is reasonably compact.
-    let doc_count = index.doc_count();
-    let use_dense = max_doc_id <= MAX_DENSE_ACCUMULATOR
-        && (doc_count == 0 || max_doc_id < doc_count.saturating_mul(4));
-    if use_dense {
-        linear_scan_dense(k, max_doc_id, &term_postings)
-    } else {
-        linear_scan_hashmap(k, &term_postings)
-    }
-}
-
-/// Dense accumulator variant for linear scan (small doc ID space).
-fn linear_scan_dense(
-    k: usize,
-    max_doc_id: u64,
-    term_postings: &[(f32, Vec<PostingEntry>)],
-) -> Vec<ScoredDoc> {
-    #[allow(clippy::cast_possible_truncation)]
-    let size = (max_doc_id + 1) as usize;
-    let mut scores = vec![0.0_f32; size];
-    let mut touched: Vec<u64> = Vec::new();
-
-    for (qw, postings) in term_postings {
-        for entry in postings {
-            #[allow(clippy::cast_possible_truncation)]
-            let idx = entry.doc_id as usize;
-            if scores[idx] == 0.0 {
-                touched.push(entry.doc_id);
-            }
-            scores[idx] += qw * entry.weight;
-        }
-    }
-
-    // Extract top-k from touched doc_ids
-    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
-    for &doc_id in &touched {
-        #[allow(clippy::cast_possible_truncation)]
-        let score = scores[doc_id as usize];
-        if heap.len() < k {
-            heap.push(Reverse(ScoredDoc { score, doc_id }));
-        } else if let Some(Reverse(min)) = heap.peek() {
-            if score > min.score {
-                heap.pop();
-                heap.push(Reverse(ScoredDoc { score, doc_id }));
-            }
-        }
-    }
-
-    extract_sorted_results(heap)
-}
-
-/// Hash map accumulator variant for linear scan (large doc ID space).
-fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> Vec<ScoredDoc> {
-    let mut scores: FxHashMap<u64, f32> = FxHashMap::default();
-
-    for (qw, postings) in term_postings {
-        for entry in postings {
-            *scores.entry(entry.doc_id).or_insert(0.0) += qw * entry.weight;
-        }
-    }
-
-    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
-    for (&doc_id, &score) in &scores {
-        if heap.len() < k {
-            heap.push(Reverse(ScoredDoc { score, doc_id }));
-        } else if let Some(Reverse(min)) = heap.peek() {
-            if score > min.score {
-                heap.pop();
-                heap.push(Reverse(ScoredDoc { score, doc_id }));
-            }
-        }
-    }
-
-    extract_sorted_results(heap)
-}
-
-/// Extract results from a min-heap and sort descending by score.
-fn extract_sorted_results(heap: BinaryHeap<Reverse<ScoredDoc>>) -> Vec<ScoredDoc> {
-    let mut results: Vec<ScoredDoc> = heap.into_iter().map(|Reverse(s)| s).collect();
-    results.sort_by(|a, b| b.cmp(a)); // descending
-    results
-}
-
 /// Brute-force inner product search for testing correctness.
 ///
 /// Computes exact inner product for every document by iterating all
@@ -383,13 +112,13 @@ pub(crate) fn brute_force_search(
     query: &SparseVector,
     k: usize,
 ) -> Vec<ScoredDoc> {
+    use rustc_hash::FxHashMap;
+
     if k == 0 || query.is_empty() || index.doc_count() == 0 {
         return Vec::new();
     }
 
-    // Accumulate scores for all documents
     let mut scores: FxHashMap<u64, f32> = FxHashMap::default();
-
     for (&term_id, &qw) in query.indices.iter().zip(query.values.iter()) {
         let postings = index.get_all_postings(term_id);
         for entry in &postings {
@@ -397,7 +126,6 @@ pub(crate) fn brute_force_search(
         }
     }
 
-    // Sort all scored docs and take top-k
     let mut all_docs: Vec<ScoredDoc> = scores
         .into_iter()
         .map(|(doc_id, score)| ScoredDoc { score, doc_id })
@@ -410,6 +138,8 @@ pub(crate) fn brute_force_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::inverted_index::SparseInvertedIndex;
+    use super::super::types::SparseVector;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
@@ -461,21 +191,13 @@ mod tests {
     #[test]
     fn test_sparse_search_basic_3_docs() {
         let index = SparseInvertedIndex::new();
-        // doc 0: terms 1=1.0, 2=2.0
         index.insert(0, &make_vector(vec![(1, 1.0), (2, 2.0)]));
-        // doc 1: terms 1=3.0
         index.insert(1, &make_vector(vec![(1, 3.0)]));
-        // doc 2: terms 2=1.0, 3=1.0
         index.insert(2, &make_vector(vec![(2, 1.0), (3, 1.0)]));
 
-        // query: terms 1=1.0, 2=1.0
-        // doc 0: 1*1 + 2*1 = 3.0
-        // doc 1: 3*1 = 3.0
-        // doc 2: 1*1 = 1.0
         let query = make_vector(vec![(1, 1.0), (2, 1.0)]);
         let results = sparse_search(&index, &query, 2);
         assert_eq!(results.len(), 2);
-        // Top-2 should be docs 0 and 1 (both score 3.0), doc 2 score 1.0
         let ids: Vec<u64> = results.iter().map(|r| r.doc_id).collect();
         assert!(ids.contains(&0));
         assert!(ids.contains(&1));
@@ -490,7 +212,6 @@ mod tests {
         let query = make_vector(vec![(1, 1.0)]);
         let results = sparse_search(&index, &query, 10);
         assert_eq!(results.len(), 2);
-        // Higher score first
         assert_eq!(results[0].doc_id, 1);
         assert_eq!(results[1].doc_id, 0);
     }
@@ -524,10 +245,7 @@ mod tests {
     #[test]
     fn test_sparse_search_raw_inner_product() {
         let index = SparseInvertedIndex::new();
-        // doc 0: term 1=2.0, term 2=3.0
         index.insert(0, &make_vector(vec![(1, 2.0), (2, 3.0)]));
-        // query: term 1=1.5, term 2=0.5
-        // expected: 2.0*1.5 + 3.0*0.5 = 4.5
         let query = make_vector(vec![(1, 1.5), (2, 0.5)]);
         let results = sparse_search(&index, &query, 1);
         assert_eq!(results.len(), 1);
@@ -564,20 +282,14 @@ mod tests {
 
     #[test]
     fn test_linear_scan_fallback_correctness() {
-        // Create index where query terms cover >30% of docs
-        // to force linear scan. Use terms shared by all docs.
         let index = SparseInvertedIndex::new();
         for i in 0..100_u64 {
-            // All docs share terms 1 and 2
             index.insert(i, &make_vector(vec![(1, 1.0), (2, 0.5)]));
         }
 
-        // Query on shared terms => total_postings = 200, doc_count=100, query_nnz=2
-        // threshold = 0.3 * 100 * 2 = 60. total_postings=200 > 60 => linear scan
         let query = make_vector(vec![(1, 1.0), (2, 1.0)]);
         let results = sparse_search(&index, &query, 5);
 
-        // All docs have same score: 1*1 + 0.5*1 = 1.5
         assert_eq!(results.len(), 5);
         for r in &results {
             assert!((r.score - 1.5).abs() < 1e-5, "score={}", r.score);
@@ -588,31 +300,22 @@ mod tests {
 
     #[test]
     fn test_maxscore_5_terms_partitioning() {
-        // 5-term query with varying contributions, verify correct results
         let index = SparseInvertedIndex::new();
-        // doc 0: all 5 terms with different weights
         index.insert(
             0,
             &make_vector(vec![(1, 0.1), (2, 0.2), (3, 0.5), (4, 1.0), (5, 2.0)]),
         );
-        // doc 1: only high-value terms
         index.insert(1, &make_vector(vec![(4, 3.0), (5, 4.0)]));
-        // doc 2: only low-value terms
         index.insert(2, &make_vector(vec![(1, 5.0), (2, 3.0)]));
 
         let query = make_vector(vec![(1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0), (5, 1.0)]);
         let results = sparse_search(&index, &query, 3);
 
-        // doc 0: 0.1+0.2+0.5+1.0+2.0 = 3.8
-        // doc 1: 3.0+4.0 = 7.0
-        // doc 2: 5.0+3.0 = 8.0
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].doc_id, 2); // 8.0
         assert_eq!(results[1].doc_id, 1); // 7.0
         assert_eq!(results[2].doc_id, 0); // 3.8
     }
-
-    // --- Negative weight correctness ---
 
     // --- Filtered sparse search tests ---
 
@@ -624,8 +327,6 @@ mod tests {
         }
 
         let query = make_vector(vec![(1, 1.0)]);
-
-        // Filter: only even doc IDs
         let filter = |id: u64| id % 2 == 0;
         let results = sparse_search_filtered(&index, &query, 5, Some(&filter));
 
@@ -643,7 +344,6 @@ mod tests {
         }
 
         let query = make_vector(vec![(1, 1.0)]);
-
         let unfiltered = sparse_search(&index, &query, 5);
         let filtered_none = sparse_search_filtered(&index, &query, 5, None);
 
@@ -654,28 +354,15 @@ mod tests {
         }
     }
 
-    /// Verify that `MaxScore` produces the same top-k as brute-force when
-    /// document vectors contain negative weights (e.g. SPLADE with negatives).
     #[test]
     fn test_maxscore_negative_weights() {
         let index = SparseInvertedIndex::new();
-        // doc 0: mixed positive and negative weights
         index.insert(0, &make_vector(vec![(1, 2.0), (2, -1.0), (3, 0.5)]));
-        // doc 1: all positive
         index.insert(1, &make_vector(vec![(1, 1.0), (2, 3.0)]));
-        // doc 2: benefits from negative query term
         index.insert(2, &make_vector(vec![(2, -2.0), (3, 4.0)]));
-        // doc 3: single negative + positive
         index.insert(3, &make_vector(vec![(1, -0.5), (3, 1.0)]));
 
-        // query: term 1 positive, term 2 negative, term 3 positive
         let query = make_vector(vec![(1, 1.0), (2, -1.0), (3, 1.0)]);
-
-        // Expected inner products:
-        // doc 0: 2*1 + (-1)*(-1) + 0.5*1 = 3.5
-        // doc 1: 1*1 + 3*(-1) = -2.0
-        // doc 2: (-2)*(-1) + 4*1 = 6.0
-        // doc 3: (-0.5)*1 + 1*1 = 0.5
 
         let bf = brute_force_search(&index, &query, 4);
         let ms = sparse_search(&index, &query, 4);
@@ -687,7 +374,6 @@ mod tests {
             "MaxScore must match brute-force with mixed-sign weights"
         );
 
-        // Spot-check top result
         assert_eq!(ms[0].doc_id, 2, "doc 2 should score highest (6.0)");
         assert!((ms[0].score - 6.0).abs() < 1e-5, "score={}", ms[0].score);
     }
