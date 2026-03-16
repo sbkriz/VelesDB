@@ -58,6 +58,8 @@ mod traversal;
 mod traversal_tests;
 
 #[cfg(test)]
+mod clustered_index_tests;
+#[cfg(test)]
 mod edge_concurrent_tests;
 #[cfg(test)]
 mod edge_tests;

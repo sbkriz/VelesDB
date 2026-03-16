@@ -251,7 +251,7 @@ pip install target/wheels/velesdb-*.whl
 
 ### What Python version is required?
 
-Python 3.8 or later. NumPy is supported for vector input but not required.
+Python 3.9 or later. NumPy is supported for vector input but not required.
 
 ### What classes are available?
 

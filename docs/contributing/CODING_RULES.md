@@ -1,52 +1,68 @@
-# VelesDB-Core - Règles de Développement
+# VelesDB-Core - Development Rules
 
-## 🎯 Objectif du Projet
+## Project Goal
 
-VelesDB-Core est le **moteur de base de données vectorielles** open-source. Il fournit l'API publique et les fonctionnalités fondamentales consommées par VelesDB-Premium.
+VelesDB-Core is the **open-source vector database engine**. It provides the public API and core functionality consumed by VelesDB-Premium.
 
 ---
 
-## 📐 Architecture
+## Architecture
 
-### Structure des Crates
+### Crate Structure
 
 ```
 velesdb-core/
 ├── crates/
-│   ├── velesdb-core/      # Moteur principal (storage, indexing, search)
-│   └── velesdb-server/    # API REST/gRPC
+│   ├── velesdb-core/          # Core engine (storage, indexing, search)
+│   ├── velesdb-server/        # Axum REST API server
+│   ├── velesdb-cli/           # CLI / VelesQL REPL
+│   ├── velesdb-python/        # Python bindings (PyO3)
+│   ├── velesdb-wasm/          # Browser WASM (no persistence)
+│   ├── velesdb-mobile/        # iOS/Android (UniFFI)
+│   ├── velesdb-migrate/       # Migration tooling
+│   └── tauri-plugin-velesdb/  # Tauri plugin
 ```
 
-### Principes Architecturaux
+### Architectural Principles
 
-- **Séparation des responsabilités** : Chaque module a une responsabilité unique
-- **API stable** : Le Core est une dépendance versionnée du Premium
-- **Zero-copy** : Privilégier `&[u8]`, `Bytes`, `memmap2` pour les performances
-- **Async-first** : Utiliser `tokio` pour toutes les I/O
+- **Separation of concerns**: Each module has a single responsibility
+- **Stable API**: Core is a versioned dependency of Premium
+- **Zero-copy**: Prefer `&[u8]`, `Bytes`, `memmap2` for performance
+- **Concurrency**: Use `parking_lot::RwLock` throughout (not `std::sync::RwLock`)
+- **Error handling**: Use `thiserror` for typed errors. Do not use `anyhow` in library crates.
 
 ---
 
-## 🧪 Test-Driven Development (TDD)
+## Test-Driven Development (TDD)
 
-### Workflow Obligatoire
+### Required Workflow
 
-1. **Rouge** : Écrire le test qui échoue
-2. **Vert** : Écrire le code minimal pour passer le test
-3. **Bleu** : Refactoriser sans casser les tests
+1. **Red**: Write a failing test
+2. **Green**: Write the minimum code to pass the test
+3. **Blue**: Refactor without breaking tests
 
-### Couverture Minimale
+### Minimum Coverage
 
-- **Objectif** : > 80% de couverture de code
-- **Outil** : `cargo tarpaulin`
+- **Target**: > 80% code coverage
+- **Tool**: `cargo tarpaulin`
 
-### Types de Tests
+### Test Execution
+
+Tests must run single-threaded to avoid file system races between test fixtures:
+
+```bash
+cargo test --workspace --features persistence,gpu,update-check \
+  --exclude velesdb-python -- --test-threads=1
+```
+
+### Test Types
 
 ```rust
-// Test unitaire (dans le même fichier)
+// Unit test (in the same file)
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_feature_basic() {
         // Arrange
@@ -55,13 +71,13 @@ mod tests {
     }
 }
 
-// Test d'intégration (dans tests/)
+// Integration test (in tests/)
 #[tokio::test]
 async fn test_integration_scenario() {
     // ...
 }
 
-// Benchmark (dans benches/)
+// Benchmark (in benches/)
 fn benchmark_search(c: &mut Criterion) {
     // ...
 }
@@ -69,9 +85,9 @@ fn benchmark_search(c: &mut Criterion) {
 
 ---
 
-## 🔧 Standards de Code
+## Code Standards
 
-### Formatage
+### Formatting
 
 ```bash
 cargo fmt --all -- --check
@@ -79,13 +95,16 @@ cargo fmt --all -- --check
 
 ### Linting
 
+Use explicit features -- never `--all-features`:
+
 ```bash
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
+  --exclude velesdb-python -- -D warnings -D clippy::pedantic
 ```
 
-### Conventions de Nommage
+### Naming Conventions
 
-| Type | Convention | Exemple |
+| Type | Convention | Example |
 |------|------------|---------|
 | Structs | PascalCase | `VectorIndex` |
 | Traits | PascalCase | `Searchable` |
@@ -93,59 +112,72 @@ cargo clippy --all-targets --all-features -- -D warnings
 | Constants | SCREAMING_SNAKE | `MAX_DIMENSIONS` |
 | Modules | snake_case | `vector_storage` |
 
-### Règles Spécifiques
+### Code Quality Limits
 
-- **Pas de `unwrap()`** en production (sauf après validation)
-- **Gestion d'erreurs** avec `thiserror` et `anyhow`
-- **Documentation** obligatoire sur l'API publique (`///`)
-- **Fichiers < 500 lignes** : diviser si nécessaire
+| Metric | Limit | Scope |
+|--------|-------|-------|
+| Function NLOC | 50 | Per function/method |
+| File NLOC | 500 | Per source file |
+| Cyclomatic complexity | 8 | Per function/method |
+
+### Specific Rules
+
+- **No `unwrap()`** in production code (only after validation)
+- **Error handling** with `thiserror` only (not `anyhow`)
+- **Documentation** required on all public API items (`///`)
+- **Unsafe code** must include a `// SAFETY:` comment explaining the invariant
+- **TODO comments** must follow the format `// TODO(EPIC-XXX): ...` or `// TODO(US-XXX): ...` -- bare `TODO`/`FIXME`/`HACK` are rejected by CI
+- **Numeric casts**: Use `try_from` for `u64`-to-`usize` casts, never `as usize` (clippy::pedantic)
 
 ---
 
-## 🔒 Sécurité
+## Security
 
-### Audit Automatique
+### Automated Audit
 
 ```bash
 cargo audit
 cargo deny check
 ```
 
-### Règles
+### Rules
 
-- Pas de `unsafe` sans justification documentée
-- Valider toutes les entrées utilisateur
-- Pas de secrets dans le code
+- No `unsafe` without a documented `// SAFETY:` comment
+- Validate all user input
+- No secrets in code
 
 ---
 
-## 🚀 Performance
+## Performance
 
 ### Benchmarks
 
+Run benchmarks with explicit features:
+
 ```bash
-cargo bench --all-features
+cargo bench -p velesdb-core --bench simd_benchmark -- --noplot
 ```
 
-### Principes
+### Principles
 
-- **Mesurer avant d'optimiser**
-- Utiliser `criterion` pour les benchmarks
-- Profiler avec `cargo flamegraph`
+- **Measure before optimizing**
+- Use `criterion` for benchmarks
+- Profile with `cargo flamegraph`
+- Performance regression baseline is at `benchmarks/baseline.json`
 
 ---
 
-## 📦 Release
+## Release
 
-### Versioning Sémantique
+### Semantic Versioning
 
-| Type | Quand |
-|------|-------|
-| MAJOR | Changement d'API incompatible |
-| MINOR | Nouvelle fonctionnalité compatible |
-| PATCH | Correction de bug |
+| Type | When |
+|------|------|
+| MAJOR | Breaking API or on-disk format change |
+| MINOR | New backward-compatible feature |
+| PATCH | Bug fix |
 
-### Commande
+### Command
 
 ```bash
 ./scripts/release.sh patch|minor|major
@@ -153,10 +185,10 @@ cargo bench --all-features
 
 ---
 
-## ✅ Checklist Pre-commit
+## Pre-commit Checklist
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --all-features`
-- [ ] Documentation à jour
-- [ ] Pas de secrets dans le code
+- [ ] `cargo clippy --workspace --all-targets --features persistence,gpu,update-check --exclude velesdb-python -- -D warnings -D clippy::pedantic`
+- [ ] `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1`
+- [ ] Documentation up to date
+- [ ] No secrets in code

@@ -98,6 +98,12 @@ impl HnswIndex {
         // If parallel_insert fails, we avoid orphaned vectors in sidecar storage.
         if let Err(e) = self.inner.read().parallel_insert(&refs_for_hnsw) {
             tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
+            // Roll back all registered mappings to avoid phantom entries
+            for (idx, _) in &to_insert {
+                if let Some(id) = self.mappings.get_id(*idx) {
+                    self.mappings.remove(id);
+                }
+            }
             return 0;
         }
 
@@ -131,6 +137,10 @@ impl HnswIndex {
         for (idx, vec) in &to_insert {
             if let Err(e) = self.inner.write().insert((vec.as_slice(), *idx)) {
                 tracing::error!("insert_batch_sequential: insert failed: {e}");
+                // Roll back the mapping registered by prepare_batch_insert
+                if let Some(id) = self.mappings.get_id(*idx) {
+                    self.mappings.remove(id);
+                }
                 continue;
             }
             if self.enable_vector_storage {

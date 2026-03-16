@@ -8,8 +8,7 @@ Demonstrates the "Seed + Expand" pattern for Graph-enhanced RAG:
 3. Combined context for LLM generation
 
 Requirements:
-    pip install langchain-velesdb langchain-openai httpx
-    # Start VelesDB server: velesdb-server --port 8080
+    pip install velesdb langchain-core langchain-openai httpx
 
 Usage:
     export OPENAI_API_KEY=your-key
@@ -17,6 +16,8 @@ Usage:
 """
 
 import os
+import sys
+from pathlib import Path
 from typing import List
 
 import httpx
@@ -26,8 +27,66 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-# VelesDB LangChain integration
-from langchain_velesdb import VelesDBVectorStore, GraphRetriever
+# VelesDB LangChain integration — use the local example implementation.
+# For production, install: pip install langchain-velesdb
+sys.path.insert(0, str(Path(__file__).parent.parent / "langchain"))
+from hybrid_search import VelesDBVectorStore  # noqa: E402
+
+
+class GraphRetriever:
+    """Graph-enhanced retriever that expands seed results via VelesDB graph API."""
+
+    def __init__(
+        self,
+        vector_store: VelesDBVectorStore,
+        server_url: str,
+        seed_k: int = 2,
+        expand_k: int = 5,
+        max_depth: int = 2,
+    ) -> None:
+        self._vector_store = vector_store
+        self._server_url = server_url.rstrip("/")
+        self._seed_k = seed_k
+        self._expand_k = expand_k
+        self._max_depth = max_depth
+
+    def invoke(self, query: str) -> List[Document]:
+        """Retrieve seed documents by vector search then expand via graph traversal."""
+        seed_docs = self._vector_store.similarity_search(query, k=self._seed_k)
+        expanded: List[Document] = list(seed_docs)
+        seen_texts = {d.page_content for d in seed_docs}
+
+        for doc in seed_docs:
+            doc_id = doc.metadata.get("id")
+            if doc_id is None:
+                continue
+            try:
+                response = httpx.post(
+                    f"{self._server_url}/api/graph/traverse",
+                    json={
+                        "start_node": int(doc_id),
+                        "max_depth": self._max_depth,
+                        "limit": self._expand_k,
+                    },
+                    timeout=5.0,
+                )
+                response.raise_for_status()
+                neighbor_ids = response.json().get("node_ids", [])
+                for neighbor_id in neighbor_ids:
+                    neighbor_docs = self._vector_store.similarity_search(
+                        str(neighbor_id), k=1
+                    )
+                    for neighbor_doc in neighbor_docs:
+                        if neighbor_doc.page_content not in seen_texts:
+                            seen_texts.add(neighbor_doc.page_content)
+                            neighbor_doc.metadata["graph_depth"] = 1
+                            expanded.append(neighbor_doc)
+            except httpx.HTTPError:
+                # Graph expansion is best-effort; fall back gracefully.
+                pass
+
+        return expanded[: self._expand_k]
+
 
 VELESDB_SERVER = "http://localhost:8080"
 
@@ -50,9 +109,9 @@ def add_graph_edge(collection: str, edge_id: int, source: int, target: int, labe
 
 def create_sample_knowledge_base() -> VelesDBVectorStore:
     """Create a sample knowledge base with documents and relations."""
-    
+
     embeddings = OpenAIEmbeddings()
-    
+
     # Initialize VelesDB with local storage
     vectorstore = VelesDBVectorStore.from_texts(
         texts=[
@@ -76,8 +135,9 @@ def create_sample_knowledge_base() -> VelesDBVectorStore:
             {"id": 7, "topic": "VectorDB", "category": "infrastructure"},
             {"id": 8, "topic": "VelesDB", "category": "infrastructure"},
         ],
-        path="./graphrag_demo",
+        db_path="./graphrag_demo",
         collection_name="knowledge_base",
+        dimension=1536,
     )
     
     # Add graph edges via HTTP API (concept relationships)

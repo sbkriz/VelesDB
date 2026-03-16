@@ -91,6 +91,15 @@ impl Database {
             .insert(name.to_string(), coll.inner.clone());
         self.vector_colls.write().insert(name.to_string(), coll);
 
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Vector {
+                dimension,
+                metric,
+                storage_mode,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+
         // Bump schema version (CACHE-01 DDL invalidation).
         self.schema_version
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -340,6 +349,45 @@ impl Database {
         }
 
         // Bump schema version (CACHE-01 DDL invalidation).
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Creates a new graph collection with node embeddings.
+    ///
+    /// Unlike [`create_graph_collection`](Self::create_graph_collection), this
+    /// variant configures a vector dimension and distance metric so that nodes
+    /// can store embeddings and support similarity search.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_graph_collection_with_embeddings(
+        &self,
+        name: &str,
+        schema: crate::collection::GraphSchema,
+        dimension: usize,
+        metric: DistanceMetric,
+    ) -> Result<()> {
+        self.ensure_collection_name_available(name)?;
+        let path = self.data_dir.join(name);
+        let coll = GraphCollection::create(path, name, Some(dimension), metric, schema.clone())?;
+        self.collections
+            .write()
+            .insert(name.to_string(), coll.inner.clone());
+        self.graph_colls.write().insert(name.to_string(), coll);
+
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Graph {
+                dimension: Some(dimension),
+                metric,
+                schema,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+
         self.schema_version
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 

@@ -293,10 +293,9 @@ impl NativeHnswIndex {
     /// Returns an error if allocation or insertion fails.
     pub fn insert(&self, id: u64, vector: &[f32]) -> crate::error::Result<()> {
         // Register ID and get internal index (or get existing)
-        let internal_idx = self
-            .mappings
-            .register(id)
-            .or_else(|| self.mappings.get_idx(id));
+        // Track whether we newly registered this ID (vs. re-inserting an existing one)
+        let newly_registered = self.mappings.register(id);
+        let internal_idx = newly_registered.or_else(|| self.mappings.get_idx(id));
         let Some(internal_idx) = internal_idx else {
             debug_assert!(
                 false,
@@ -304,7 +303,14 @@ impl NativeHnswIndex {
             );
             return Ok(());
         };
-        self.inner.read().insert((vector, internal_idx))?;
+
+        // If graph insertion fails, roll back the mapping to avoid orphaned entries
+        if let Err(e) = self.inner.read().insert((vector, internal_idx)) {
+            if newly_registered.is_some() {
+                self.mappings.remove(id);
+            }
+            return Err(e);
+        }
 
         if self.enable_vector_storage {
             self.vectors.insert(internal_idx, vector);
@@ -321,13 +327,17 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if any insertion fails.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
+        // Track newly registered IDs so we can roll back on failure
+        let mut newly_registered_ids: Vec<u64> = Vec::new();
+
         let data: Vec<(Vec<f32>, usize)> = items
             .iter()
             .filter_map(|(id, vec)| {
-                let idx = self
-                    .mappings
-                    .register(*id)
-                    .or_else(|| self.mappings.get_idx(*id));
+                let is_new = self.mappings.register(*id);
+                if is_new.is_some() {
+                    newly_registered_ids.push(*id);
+                }
+                let idx = is_new.or_else(|| self.mappings.get_idx(*id));
                 let Some(idx) = idx else {
                     debug_assert!(
                         false,
@@ -340,7 +350,14 @@ impl NativeHnswIndex {
             .collect();
 
         let refs: Vec<(&Vec<f32>, usize)> = data.iter().map(|(v, i)| (v, *i)).collect();
-        self.inner.read().parallel_insert(&refs)?;
+
+        // If parallel_insert fails, roll back all newly registered mappings
+        if let Err(e) = self.inner.read().parallel_insert(&refs) {
+            for id in &newly_registered_ids {
+                self.mappings.remove(*id);
+            }
+            return Err(e);
+        }
 
         if self.enable_vector_storage {
             for (vec, idx) in data {

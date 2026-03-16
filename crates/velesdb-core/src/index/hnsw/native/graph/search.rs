@@ -115,6 +115,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// F-04 optimization: acquires both vectors and layers read locks once
     /// before the greedy descent loop, avoiding repeated lock cycles per hop.
+    ///
+    /// Includes software prefetch hints for upcoming neighbor vectors to
+    /// reduce memory latency in upper HNSW layers (mirrors `search_layer`).
     pub(in crate::index::hnsw::native::graph) fn search_layer_single(
         &self,
         query: &[f32],
@@ -122,6 +125,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         layer: usize,
     ) -> NodeId {
         self.with_vectors_and_layers_read(|vectors, layers| {
+            let dimension = vectors.dimension();
+            let prefetch_dist = crate::simd_native::calculate_prefetch_distance(dimension);
             let mut best = entry;
             // SAFETY: `entry` is a valid node_id from entry_point (always a
             // successfully inserted node).
@@ -133,23 +138,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             loop {
                 let improved = layers[layer]
                     .with_neighbors(best, |neighbors| {
-                        let mut improved = false;
-
-                        for &neighbor in neighbors {
-                            // SAFETY: neighbor is a valid node_id from the graph's
-                            // neighbor list, only containing IDs of inserted nodes.
-                            // - Condition 1: neighbor < vectors.len().
-                            // Reason: Inner loop of greedy descent — bounds check eliminated.
-                            let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
-                            let dist = self.distance.distance(query, neighbor_vec);
-                            if dist < best_dist {
-                                best = neighbor;
-                                best_dist = dist;
-                                improved = true;
-                            }
-                        }
-
-                        improved
+                        self.greedy_scan_with_prefetch(
+                            query,
+                            neighbors,
+                            vectors,
+                            dimension,
+                            prefetch_dist,
+                            &mut best,
+                            &mut best_dist,
+                        )
                     })
                     .unwrap_or(false);
 
@@ -160,6 +157,66 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             best
         })
+    }
+
+    /// Prefetch neighbor vectors into CPU cache ahead of access.
+    #[inline]
+    fn prefetch_neighbors(
+        neighbors: &[NodeId],
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        start: usize,
+        count: usize,
+    ) {
+        for &neighbor_id in neighbors.iter().skip(start).take(count) {
+            if neighbor_id < vectors.len() {
+                vectors.prefetch(neighbor_id);
+            }
+        }
+    }
+
+    /// Scans a neighbor list with software prefetch, updating best node/dist.
+    ///
+    /// Returns `true` if a closer neighbor was found during the scan.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn greedy_scan_with_prefetch(
+        &self,
+        query: &[f32],
+        neighbors: &[NodeId],
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        dimension: usize,
+        prefetch_dist: usize,
+        best: &mut NodeId,
+        best_dist: &mut f32,
+    ) -> bool {
+        let use_prefetch = dimension >= 384;
+
+        // Prefetch the first batch of neighbor vectors into cache.
+        if use_prefetch && neighbors.len() > prefetch_dist {
+            Self::prefetch_neighbors(neighbors, vectors, 0, prefetch_dist);
+        }
+
+        let mut improved = false;
+        for (i, &neighbor) in neighbors.iter().enumerate() {
+            // Prefetch upcoming neighbor vectors while processing the current one.
+            if use_prefetch && i + prefetch_dist < neighbors.len() {
+                Self::prefetch_neighbors(neighbors, vectors, i + prefetch_dist, 1);
+            }
+
+            // SAFETY: neighbor is a valid node_id from the graph's
+            // neighbor list, only containing IDs of inserted nodes.
+            // - Condition 1: neighbor < vectors.len().
+            // Reason: Inner loop of greedy descent — bounds check eliminated.
+            let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
+            let dist = self.distance.distance(query, neighbor_vec);
+            if dist < *best_dist {
+                *best = neighbor;
+                *best_dist = dist;
+                improved = true;
+            }
+        }
+
+        improved
     }
 
     /// Search a single layer with ef candidates.

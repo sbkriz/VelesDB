@@ -31,6 +31,8 @@ mod vector_bytes_tests;
 #[cfg(test)]
 mod compaction_tests;
 #[cfg(test)]
+mod guard_tests;
+#[cfg(test)]
 mod histogram_tests;
 #[cfg(test)]
 mod log_payload_tests;

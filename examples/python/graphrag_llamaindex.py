@@ -9,7 +9,8 @@ Demonstrates Graph-enhanced RAG using LlamaIndex's query engine:
 4. Generate answers with expanded context
 
 Requirements:
-    pip install llama-index-vector-stores-velesdb llama-index-llms-openai requests
+    pip install velesdb llama-index-core llama-index-llms-openai
+    pip install llama-index-embeddings-openai requests
 
 Usage:
     # Start VelesDB server first: velesdb-server --port 8080
@@ -18,6 +19,8 @@ Usage:
 """
 
 import os
+import sys
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -28,9 +31,10 @@ from llama_index.core.schema import TextNode, NodeRelationship, RelatedNodeInfo
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
-# VelesDB LlamaIndex vector store integration
-# Install: pip install llama-index-vector-stores-velesdb
-from llama_index.vector_stores.velesdb import VelesDBVectorStore
+# VelesDB LlamaIndex vector store integration — use the local example implementation.
+# For production, install: pip install llama-index-vector-stores-velesdb
+sys.path.insert(0, str(Path(__file__).parent.parent / "llamaindex"))
+from hybrid_search import VelesDBVectorStore  # noqa: E402
 
 
 class VelesDBGraphLoader:

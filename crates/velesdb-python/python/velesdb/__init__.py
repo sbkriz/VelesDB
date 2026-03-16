@@ -10,11 +10,17 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 from velesdb.velesdb import (  # type: ignore[attr-defined]
+    AgentMemory,
     Collection as _RawCollection,
     Database as _RawDatabase,
     FusionStrategy,
     GraphStore as _RawGraphStore,
     ParsedStatement,
+    PyEpisodicMemory,
+    PyGraphCollection,
+    PyGraphSchema,
+    PyProceduralMemory,
+    PySemanticMemory,
     SearchResult,
     StreamingConfig,
     TraversalResult,
@@ -158,11 +164,20 @@ class Collection:
 
     def search(
         self,
-        vector: Iterable[float],
+        vector: Optional[Iterable[float]] = None,
         top_k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        sparse_vector: Optional[Any] = None,
+        sparse_index_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        results = self._inner.search(list(vector), top_k)
+        kwargs: Dict[str, Any] = {"top_k": top_k}
+        if vector is not None:
+            kwargs["vector"] = list(vector)
+        if sparse_vector is not None:
+            kwargs["sparse_vector"] = sparse_vector
+        if sparse_index_name is not None:
+            kwargs["sparse_index_name"] = sparse_index_name
+        results = self._inner.search(**kwargs)
         if not filter:
             return results
         return [r for r in results if _matches_filter(r.get("payload"), filter)]
@@ -220,6 +235,20 @@ class Database:
         if col is None:
             return None
         return Collection(col)
+
+    def get_or_create_collection(
+        self,
+        name: str,
+        dimension: int,
+        metric: str = "cosine",
+        storage_mode: str = "full",
+    ) -> Collection:
+        existing = self.get_collection(name)
+        if existing is not None:
+            return existing
+        return self.create_collection(
+            name, dimension=dimension, metric=metric, storage_mode=storage_mode
+        )
 
     def create_metadata_collection(self, name: str) -> Collection:
         col = self._inner.create_metadata_collection(name)
@@ -285,5 +314,11 @@ __all__ = [
     "ParsedStatement",
     "VelesQLSyntaxError",
     "VelesQLParameterError",
+    "AgentMemory",
+    "PySemanticMemory",
+    "PyEpisodicMemory",
+    "PyProceduralMemory",
+    "PyGraphCollection",
+    "PyGraphSchema",
     "__version__",
 ]

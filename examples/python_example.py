@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """
-VelesDB Python Example
+VelesDB Python REST Example (Legacy)
 
-This example demonstrates how to use VelesDB with Python and the requests library.
-For production use, consider using the official VelesDB Python SDK (Premium).
+DEPRECATED: This file demonstrates the VelesDB HTTP REST API using the requests
+library. For new projects, use the native Python SDK instead:
+
+    pip install velesdb
+
+    import velesdb
+    db = velesdb.Database("./my_data")
+    col = db.get_or_create_collection("docs", dimension=768)
+    col.upsert([{"id": 1, "vector": [...], "payload": {"title": "Doc"}}])
+    results = col.search([...], top_k=10)
+
+See examples/langchain/hybrid_search.py and examples/llamaindex/hybrid_search.py
+for production-ready integration examples.
+
+This REST client is still useful when connecting to a remote VelesDB server
+from an environment where the native extension cannot be compiled.
 """
 
 import logging
