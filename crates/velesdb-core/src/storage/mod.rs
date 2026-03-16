@@ -19,6 +19,7 @@ mod guard;
 mod histogram;
 mod log_payload;
 pub mod metrics;
+pub(crate) mod snapshot;
 mod mmap;
 mod sharded_index;
 #[cfg(test)]

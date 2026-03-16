@@ -3,77 +3,20 @@
 //! Stores payloads in an append-only log file with an in-memory index.
 //! Supports periodic snapshots for fast cold-start recovery.
 //!
-//! # Snapshot System (P0 Optimization)
-//!
-//! Without snapshots, cold start requires replaying the entire WAL (O(N)).
-//! With snapshots, we load the index directly and only replay the delta.
-//!
-//! ## Files
-//!
-//! - `payloads.log` - Append-only WAL (Write-Ahead Log)
-//! - `payloads.snapshot` - Binary snapshot of the index
-//!
-//! ## Snapshot Format
-//!
-//! ```text
-//! [Magic: "VSNP" 4 bytes]
-//! [Version: 1 byte]
-//! [WAL position: 8 bytes]
-//! [Entry count: 8 bytes]
-//! [Entries: (id: u64, offset: u64) × N]
-//! [CRC32: 4 bytes]
-//! ```
+//! Snapshot format and I/O are handled by the [`super::snapshot`] module.
 
+use super::snapshot;
 use super::traits::PayloadStorage;
+
+// Re-export snapshot items for backward compatibility with existing imports
+#[allow(unused_imports)] // SNAPSHOT_MAGIC/VERSION used only in test modules
+pub(crate) use snapshot::{crc32_hash, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
 
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-
-/// Snapshot file magic bytes.
-pub(crate) const SNAPSHOT_MAGIC: &[u8; 4] = b"VSNP";
-
-/// Current snapshot format version.
-pub(crate) const SNAPSHOT_VERSION: u8 = 1;
-
-/// Default threshold for automatic snapshot creation (10 MB of WAL since last snapshot).
-const DEFAULT_SNAPSHOT_THRESHOLD: u64 = 10 * 1024 * 1024;
-
-/// Simple CRC32 implementation (IEEE 802.3 polynomial).
-///
-/// Used for snapshot integrity validation.
-#[inline]
-#[allow(clippy::cast_possible_truncation)] // Table index always 0-255
-pub(crate) fn crc32_hash(data: &[u8]) -> u32 {
-    const CRC32_TABLE: [u32; 256] = {
-        let mut table = [0u32; 256];
-        let mut i = 0;
-        while i < 256 {
-            let mut crc = i as u32;
-            let mut j = 0;
-            while j < 8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ 0xEDB8_8320;
-                } else {
-                    crc >>= 1;
-                }
-                j += 1;
-            }
-            table[i] = crc;
-            i += 1;
-        }
-        table
-    };
-
-    let mut crc = 0xFFFF_FFFF_u32;
-    for &byte in data {
-        let idx = ((crc ^ u32::from(byte)) & 0xFF) as usize;
-        crc = (crc >> 8) ^ CRC32_TABLE[idx];
-    }
-    !crc
-}
 
 /// Controls how payload WAL writes are synced to disk.
 ///
@@ -187,7 +130,7 @@ impl LogPayloadStorage {
         wal_len: u64,
     ) -> io::Result<(FxHashMap<u64, u64>, u64)> {
         let snapshot_path = dir.join("payloads.snapshot");
-        if let Ok((snapshot_index, snapshot_wal_pos)) = Self::load_snapshot(&snapshot_path) {
+        if let Ok((snapshot_index, snapshot_wal_pos)) = snapshot::load_snapshot(&snapshot_path) {
             let index =
                 Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
             Ok((index, snapshot_wal_pos))
@@ -271,105 +214,6 @@ impl LogPayloadStorage {
         Ok(index)
     }
 
-    /// Loads index from snapshot file.
-    ///
-    /// Returns (index, `wal_position`) if successful.
-    fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, u64>, u64)> {
-        if !snapshot_path.exists() {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "No snapshot"));
-        }
-
-        let data = std::fs::read(snapshot_path)?;
-
-        // Validate minimum size: magic(4) + version(1) + wal_pos(8) + count(8) + crc(4) = 25
-        if data.len() < 25 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Snapshot too small",
-            ));
-        }
-
-        // Validate magic
-        if &data[0..4] != SNAPSHOT_MAGIC {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid magic"));
-        }
-
-        // Validate version
-        if data[4] != SNAPSHOT_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Unsupported version",
-            ));
-        }
-
-        // Read WAL position
-        let wal_pos = u64::from_le_bytes(
-            data[5..13]
-                .try_into()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid WAL position"))?,
-        );
-
-        // Read entry count
-        let entry_count_u64 = u64::from_le_bytes(
-            data[13..21]
-                .try_into()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid entry count"))?,
-        );
-
-        // P1 Audit: Validate entry_count BEFORE conversion to prevent DoS via huge values
-        // Max reasonable entry count: data.len() / 16 (minimum entry size)
-        // This check prevents both overflow and OOM attacks
-        let max_possible_entries = data.len().saturating_sub(25) / 16; // header(21) + crc(4) = 25
-        if entry_count_u64 > max_possible_entries as u64 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Entry count exceeds data size",
-            ));
-        }
-
-        #[allow(clippy::cast_possible_truncation)] // Validated above
-        let entry_count = entry_count_u64 as usize;
-
-        // Validate size: header(21) + entries(entry_count * 16) + crc(4)
-        // Safe: entry_count is validated to not cause overflow
-        let expected_size = 21 + entry_count * 16 + 4;
-        if data.len() != expected_size {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Size mismatch"));
-        }
-
-        // Validate CRC
-        let stored_crc = u32::from_le_bytes(
-            data[data.len() - 4..]
-                .try_into()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid CRC"))?,
-        );
-        let computed_crc = crc32_hash(&data[..data.len() - 4]);
-        if stored_crc != computed_crc {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch"));
-        }
-
-        // Read entries
-        let mut index = FxHashMap::default();
-        index.reserve(entry_count);
-
-        let entries_start = 21;
-        for i in 0..entry_count {
-            let offset = entries_start + i * 16;
-            let id = u64::from_le_bytes(
-                data[offset..offset + 8]
-                    .try_into()
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid entry ID"))?,
-            );
-            let wal_offset =
-                u64::from_le_bytes(data[offset + 8..offset + 16].try_into().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "Invalid entry offset")
-                })?);
-            index.insert(id, wal_offset);
-        }
-
-        Ok((index, wal_pos))
-    }
-
     /// Creates a snapshot of the current index state.
     ///
     /// The snapshot captures:
@@ -388,45 +232,11 @@ impl LogPayloadStorage {
             wal.get_ref().sync_all()?;
         }
 
-        let snapshot_path = self.path.join("payloads.snapshot");
         let index = self.index.read();
-
-        // Use tracked offset — accurate and avoids an extra metadata syscall
         let wal_pos = *self.write_offset.read();
 
-        // Calculate buffer size
-        let entry_count = index.len();
-        let buf_size = 21 + entry_count * 16 + 4; // header + entries + crc
-        let mut buf = Vec::with_capacity(buf_size);
+        snapshot::create_snapshot_file(&self.path, &index, wal_pos)?;
 
-        // Write header
-        buf.extend_from_slice(SNAPSHOT_MAGIC);
-        buf.push(SNAPSHOT_VERSION);
-        buf.extend_from_slice(&wal_pos.to_le_bytes());
-        buf.extend_from_slice(&(entry_count as u64).to_le_bytes());
-
-        // Write entries
-        for (&id, &offset) in index.iter() {
-            buf.extend_from_slice(&id.to_le_bytes());
-            buf.extend_from_slice(&offset.to_le_bytes());
-        }
-
-        // Compute and append CRC
-        let crc = crc32_hash(&buf);
-        buf.extend_from_slice(&crc.to_le_bytes());
-
-        // Write atomically via temp file + fsync + rename
-        let temp_path = self.path.join("payloads.snapshot.tmp");
-        {
-            let file = File::create(&temp_path)?;
-            let mut writer = io::BufWriter::new(file);
-            writer.write_all(&buf)?;
-            writer.flush()?;
-            writer.get_ref().sync_all()?;
-        }
-        std::fs::rename(&temp_path, &snapshot_path)?;
-
-        // Update last snapshot position
         *self.last_snapshot_wal_pos.write() = wal_pos;
 
         Ok(())
@@ -434,14 +244,14 @@ impl LogPayloadStorage {
 
     /// Returns whether a new snapshot should be created.
     ///
-    /// Heuristic: Returns true if WAL has grown by more than `DEFAULT_SNAPSHOT_THRESHOLD`
+    /// Heuristic: Returns true if WAL has grown by more than the default threshold
     /// bytes since the last snapshot.
     #[must_use]
     pub fn should_create_snapshot(&self) -> bool {
-        let last_pos = *self.last_snapshot_wal_pos.read();
-        let current_pos = *self.write_offset.read();
-
-        current_pos.saturating_sub(last_pos) >= DEFAULT_SNAPSHOT_THRESHOLD
+        snapshot::should_create_snapshot(
+            *self.last_snapshot_wal_pos.read(),
+            *self.write_offset.read(),
+        )
     }
 }
 
