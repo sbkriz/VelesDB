@@ -58,7 +58,7 @@ impl Default for ServerConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
-            data_dir: "./data".to_string(),
+            data_dir: "./velesdb_data".to_string(),
             api_keys: Vec::new(),
             tls_cert: None,
             tls_key: None,
@@ -240,7 +240,7 @@ mod tests {
         let cfg = ServerConfig::default();
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8080);
-        assert_eq!(cfg.data_dir, "./data");
+        assert_eq!(cfg.data_dir, "./velesdb_data");
         assert!(cfg.api_keys.is_empty());
         assert!(cfg.tls_cert.is_none());
         assert!(cfg.tls_key.is_none());
@@ -299,7 +299,7 @@ port = 9090
         assert_eq!(cfg.host, "10.0.0.1");
         assert_eq!(cfg.port, 3000);
         // TOML didn't set data_dir, so default applies
-        assert_eq!(cfg.data_dir, "./data");
+        assert_eq!(cfg.data_dir, "./velesdb_data");
     }
 
     #[test]
@@ -314,7 +314,7 @@ port = 4000
 
         assert_eq!(cfg.port, 4000);
         assert_eq!(cfg.host, "127.0.0.1"); // default
-        assert_eq!(cfg.data_dir, "./data"); // default
+        assert_eq!(cfg.data_dir, "./velesdb_data"); // default
     }
 
     #[test]
