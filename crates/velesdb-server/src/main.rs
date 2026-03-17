@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -20,13 +21,14 @@ use velesdb_core::Database;
 #[cfg(feature = "swagger-ui")]
 use velesdb_server::ApiDoc;
 use velesdb_server::{
-    add_edge, aggregate, analyze_collection, batch_search, collection_sanity, create_collection,
-    create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
-    get_collection, get_collection_config, get_collection_stats, get_edges, get_guardrails,
-    get_node_degree, get_point, health_check, hybrid_search, is_empty, list_collections,
-    list_indexes, match_query, multi_query_search, query, search, search_ids, stream_insert,
-    stream_traverse, stream_upsert_points, text_search, traverse_graph, update_guardrails,
-    upsert_points, AppState, OnboardingMetrics,
+    add_edge, aggregate, analyze_collection, batch_search, collection_sanity,
+    config::{parse_api_keys_env, CliOverrides, ServerConfig},
+    create_collection, create_index, delete_collection, delete_index, delete_point, explain,
+    flush_collection, get_collection, get_collection_config, get_collection_stats, get_edges,
+    get_guardrails, get_node_degree, get_point, health_check, hybrid_search, is_empty,
+    list_collections, list_indexes, match_query, multi_query_search, query, search, search_ids,
+    stream_insert, stream_traverse, stream_upsert_points, text_search, traverse_graph,
+    update_guardrails, upsert_points, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -34,17 +36,29 @@ use velesdb_server::{
 #[command(name = "velesdb-server")]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Path to velesdb.toml configuration file
+    #[arg(short, long, env = "VELESDB_CONFIG")]
+    config: Option<PathBuf>,
+
     /// Data directory for persistent storage
-    #[arg(short, long, default_value = "./data", env = "VELESDB_DATA_DIR")]
-    data_dir: String,
+    #[arg(short, long, env = "VELESDB_DATA_DIR")]
+    data_dir: Option<String>,
 
     /// Host address to bind to
-    #[arg(long, default_value = "127.0.0.1", env = "VELESDB_HOST")]
-    host: String,
+    #[arg(long, env = "VELESDB_HOST")]
+    host: Option<String>,
 
     /// Port to listen on
-    #[arg(short, long, default_value = "8080", env = "VELESDB_PORT")]
-    port: u16,
+    #[arg(short, long, env = "VELESDB_PORT")]
+    port: Option<u16>,
+
+    /// TLS certificate file (PEM)
+    #[arg(long, env = "VELESDB_TLS_CERT")]
+    tls_cert: Option<String>,
+
+    /// TLS private key file (PEM)
+    #[arg(long, env = "VELESDB_TLS_KEY")]
+    tls_key: Option<String>,
 }
 
 fn configure_tracing() {
@@ -56,9 +70,21 @@ fn configure_tracing() {
         .try_init();
 }
 
-fn log_startup(args: &Args) {
+fn log_startup(cfg: &ServerConfig) {
     tracing::info!("Starting VelesDB server...");
-    tracing::info!("Data directory: {}", args.data_dir);
+    tracing::info!("Data directory: {}", cfg.data_dir);
+    tracing::info!("Bind address: {}:{}", cfg.host, cfg.port);
+    if cfg.auth_enabled() {
+        tracing::info!(
+            "API key authentication enabled ({} key(s))",
+            cfg.api_keys.len()
+        );
+    } else {
+        tracing::info!("API key authentication disabled (local dev mode)");
+    }
+    if cfg.tls_enabled() {
+        tracing::info!("TLS enabled");
+    }
 }
 
 fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
@@ -170,15 +196,31 @@ async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn build_cli_overrides(args: Args) -> CliOverrides {
+    CliOverrides {
+        config_path: args.config,
+        host: args.host,
+        port: args.port,
+        data_dir: args.data_dir,
+        api_keys: parse_api_keys_env(),
+        tls_cert: args.tls_cert,
+        tls_key: args.tls_key,
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     configure_tracing();
 
     let args = Args::parse();
-    log_startup(&args);
+    let cli = build_cli_overrides(args);
+    let cfg = ServerConfig::load(cli)?;
+    cfg.validate()?;
 
-    let state = init_app_state(&args.data_dir)?;
+    log_startup(&cfg);
+
+    let state = init_app_state(&cfg.data_dir)?;
     let app = build_router(state);
 
-    serve(&args.host, args.port, app).await
+    serve(&cfg.host, cfg.port, app).await
 }

@@ -24,6 +24,7 @@
 //! - Swagger UI: `GET /swagger-ui`
 //! - OpenAPI JSON: `GET /api-docs/openapi.json`
 
+pub mod config;
 mod handlers;
 mod types;
 
