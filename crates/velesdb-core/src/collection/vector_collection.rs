@@ -223,7 +223,7 @@ impl VectorCollection {
     /// let points = coll.get(&[1, 2, 3]);
     /// for (id, maybe_point) in [1, 2, 3].iter().zip(&points) {
     ///     if let Some(p) = maybe_point {
-    ///         println!("Found point {id} with payload {:?}", p.metadata);
+    ///         println!("Found point {id} with payload {:?}", p.payload);
     ///     }
     /// }
     /// # Ok::<(), velesdb_core::Error>(())
@@ -273,7 +273,7 @@ impl VectorCollection {
     /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
     /// let results = coll.search(&vec![0.1; 128], 10)?;
     /// for r in &results {
-    ///     println!("id={} score={}", r.id, r.score);
+    ///     println!("id={} score={}", r.point.id, r.score);
     /// }
     /// # Ok::<(), velesdb_core::Error>(())
     /// ```

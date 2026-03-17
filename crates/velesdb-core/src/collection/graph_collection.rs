@@ -226,7 +226,7 @@ impl GraphCollection {
     /// let config = TraversalConfig { max_depth: 3, ..TraversalConfig::default() };
     /// let results = coll.traverse_bfs(100, &config);
     /// for r in &results {
-    ///     println!("node={} depth={}", r.node_id, r.depth);
+    ///     println!("node={} depth={}", r.target_id, r.depth);
     /// }
     /// # Ok::<(), velesdb_core::Error>(())
     /// ```

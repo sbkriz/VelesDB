@@ -148,16 +148,24 @@ fn test_create_accepts_min_dimension() {
     assert!(result.is_ok(), "dimension 1 should be accepted");
 }
 
-/// Maximum valid dimension (65,536) must be accepted.
+/// Maximum valid dimension (65,536) must pass validation.
+///
+/// Note: we test `validate_dimension` directly rather than `Collection::create`
+/// because allocating a full HNSW index at dim=65536 may exceed CI runner memory.
 #[test]
 fn test_create_accepts_max_dimension() {
-    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
-    let result = Collection::create(
-        PathBuf::from(temp_dir.path()),
-        65_536,
-        DistanceMetric::Cosine,
+    use crate::validation::validate_dimension;
+
+    assert!(
+        validate_dimension(65_536).is_ok(),
+        "dimension 65_536 should pass validation"
     );
-    assert!(result.is_ok(), "dimension 65_536 should be accepted");
+
+    // Also verify the boundary: 65_537 must be rejected.
+    assert!(
+        validate_dimension(65_537).is_err(),
+        "dimension 65_537 should be rejected"
+    );
 }
 
 /// `create_with_hnsw_params` must also validate dimension.
