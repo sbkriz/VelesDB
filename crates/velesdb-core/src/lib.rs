@@ -116,6 +116,7 @@ mod point_tests;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
+pub mod scored_result;
 pub mod simd_dispatch;
 #[cfg(test)]
 mod simd_dispatch_tests;
@@ -187,6 +188,7 @@ pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use perf_optimizations::pad_to_simd_width;
 pub use point::{Point, SearchResult};
+pub use scored_result::ScoredResult;
 pub use validation::{
     validate_dimension, validate_dimension_match, MAX_DIMENSION, MIN_DIMENSION,
 };

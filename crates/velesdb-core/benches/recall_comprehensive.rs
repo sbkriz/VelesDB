@@ -122,7 +122,7 @@ fn bench_comprehensive(c: &mut Criterion) {
                 let elapsed = start.elapsed().as_secs_f64() * 1000.0; // ms
                 latencies.push(elapsed);
 
-                let result_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+                let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
                 total_recall += recall_at_k(ground_truth, &result_ids);
             }
 

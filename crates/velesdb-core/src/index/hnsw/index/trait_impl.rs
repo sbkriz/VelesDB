@@ -4,6 +4,7 @@ use super::HnswIndex;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::params::SearchQuality;
 use crate::index::VectorIndex;
+use crate::scored_result::ScoredResult;
 
 impl VectorIndex for HnswIndex {
     #[inline]
@@ -40,7 +41,7 @@ impl VectorIndex for HnswIndex {
         }
     }
 
-    fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         // Perf: Use Balanced quality for best latency/recall tradeoff
         // ef_search=128 provides ~95% recall with minimal latency
         self.search_with_quality(query, k, SearchQuality::Balanced)

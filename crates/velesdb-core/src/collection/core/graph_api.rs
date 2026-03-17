@@ -463,9 +463,9 @@ impl Collection {
         let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
             let vector_storage = self.vector_storage.read();
             ids.into_iter()
-                .map(|(id, score)| {
-                    let vec = vector_storage.retrieve(id).ok().flatten();
-                    (id, score, vec)
+                .map(|sr| {
+                    let vec = vector_storage.retrieve(sr.id).ok().flatten();
+                    (sr.id, sr.score, vec)
                 })
                 .collect()
         };

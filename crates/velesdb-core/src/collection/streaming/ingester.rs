@@ -573,7 +573,7 @@ mod tests {
         let results = coll_clone
             .search_ids(&query, 10)
             .expect("search_ids should succeed");
-        let found_ids: std::collections::HashSet<u64> = results.iter().map(|(id, _)| *id).collect();
+        let found_ids: std::collections::HashSet<u64> = results.iter().map(|sr| sr.id).collect();
 
         // All 10 points should be found (5 HNSW + 5 delta)
         for id in 1..=10 {

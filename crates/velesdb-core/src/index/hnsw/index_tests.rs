@@ -109,8 +109,8 @@ fn test_vacuum_preserves_search_results() {
     let results_after = index.search(&query, 5);
     assert_eq!(results_after.len(), 5);
     // Results should include vectors 25-49 (the remaining ones)
-    for (id, _) in &results_after {
-        assert!(*id >= 25 && *id < 50);
+    for sr in &results_after {
+        assert!(sr.id >= 25 && sr.id < 50);
     }
 }
 
@@ -278,7 +278,7 @@ fn test_hnsw_search_returns_k_nearest() {
         results.len()
     );
     // First result should be exact match (id=1) - verify it's in top results
-    let top_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+    let top_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
     assert!(top_ids.contains(&1), "Exact match should be in top results");
 }
 
@@ -338,7 +338,7 @@ fn test_hnsw_euclidean_metric() {
 
     // Assert - at least get some results, first should be closest
     assert!(!results.is_empty(), "Should return results");
-    assert_eq!(results[0].0, 1, "Closest should be exact match");
+    assert_eq!(results[0].id, 1, "Closest should be exact match");
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn test_hnsw_dot_product_metric() {
 
     // Assert - at least get some results, first should have highest dot product
     assert!(!results.is_empty(), "Should return results");
-    assert_eq!(results[0].0, 1, "Highest dot product should be first");
+    assert_eq!(results[0].id, 1, "Highest dot product should be first");
 }
 
 #[test]
@@ -401,10 +401,10 @@ fn test_hnsw_duplicate_insert_is_skipped() {
     // Verify the ORIGINAL vector is still there (not updated)
     let results = index.search(&[1.0, 0.0, 0.0], 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, 1);
+    assert_eq!(results[0].id, 1);
     // Score should be ~1.0 (exact match with original vector)
     assert!(
-        results[0].1 > 0.99,
+        results[0].score > 0.99,
         "Original vector should still be indexed"
     );
 }
@@ -462,7 +462,7 @@ fn test_hnsw_persistence() {
     // Verify search works on loaded index
     let results = loaded_index.search(&[1.0, 0.0, 0.0], 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, 1);
+    assert_eq!(results[0].id, 1);
 }
 
 #[test]
@@ -552,7 +552,7 @@ fn test_hnsw_insert_batch_parallel() {
     assert_eq!(results.len(), 3);
     // ID 1 should be in the top results (exact match)
     // Note: Due to parallel insertion, graph structure may vary
-    let result_ids: Vec<u64> = results.iter().map(|r| r.0).collect();
+    let result_ids: Vec<u64> = results.iter().map(|r| r.id).collect();
     assert!(result_ids.contains(&1), "ID 1 should be in top 3 results");
 }
 
@@ -604,7 +604,7 @@ fn test_hnsw_insert_batch_sequential() {
     // Verify search works
     let results = index.search(&[1.0, 0.0, 0.0], 3);
     assert_eq!(results.len(), 3);
-    let result_ids: Vec<u64> = results.iter().map(|r| r.0).collect();
+    let result_ids: Vec<u64> = results.iter().map(|r| r.id).collect();
     assert!(result_ids.contains(&1), "ID 1 should be in top 3 results");
 }
 
@@ -716,7 +716,7 @@ fn test_search_with_rerank_improves_ranking() {
     let results = index.search_with_rerank(&base, 3, 3);
 
     // Assert - ID 1 should be closest (highest similarity)
-    assert_eq!(results[0].0, 1, "Most similar vector should be first");
+    assert_eq!(results[0].id, 1, "Most similar vector should be first");
 }
 
 #[test]
@@ -759,14 +759,14 @@ fn test_search_with_rerank_uses_simd_distances() {
     // Assert - results should have valid distances (SIMD computed)
     // Note: HNSW may return fewer results if graph not fully connected
     assert!(!results.is_empty(), "Should return at least one result");
-    for (_, dist) in &results {
-        assert!(*dist >= -1.0 && *dist <= 1.0, "Cosine should be in [-1, 1]");
+    for sr in &results {
+        assert!(sr.score >= -1.0 && sr.score <= 1.0, "Cosine should be in [-1, 1]");
     }
 
     // Results should be sorted by similarity (descending for cosine)
     for i in 1..results.len() {
         assert!(
-            results[i - 1].1 >= results[i].1,
+            results[i - 1].score >= results[i].score,
             "Results should be sorted by similarity descending"
         );
     }
@@ -784,11 +784,11 @@ fn test_search_with_rerank_euclidean_metric() {
     let results = index.search_with_rerank(&[0.0, 0.0, 0.0], 3, 3);
 
     // Assert - ID 1 should be closest (smallest distance)
-    assert_eq!(results[0].0, 1, "Origin should be closest to itself");
+    assert_eq!(results[0].id, 1, "Origin should be closest to itself");
     // For euclidean, smaller is better - results sorted ascending
     for i in 1..results.len() {
         assert!(
-            results[i - 1].1 <= results[i].1,
+            results[i - 1].score <= results[i].score,
             "Euclidean results should be sorted ascending"
         );
     }
@@ -961,7 +961,7 @@ fn test_search_quality_balanced() {
     // HNSW may return fewer results for very small indices
     assert!(!results.is_empty(), "Should return at least one result");
     assert_eq!(
-        results[0].0, 1,
+        results[0].id, 1,
         "Balanced search should find exact match first"
     );
 }
@@ -1014,7 +1014,7 @@ fn test_hnsw_search_with_rerank_dot_product() {
     // HNSW may return fewer results for very small indices
     assert!(!results.is_empty(), "Should return at least one result");
     // For dot product, ID 1 should have highest score
-    assert_eq!(results[0].0, 1, "Highest dot product should be first");
+    assert_eq!(results[0].id, 1, "Highest dot product should be first");
 }
 
 #[test]
@@ -1130,7 +1130,7 @@ fn test_search_batch_parallel_consistency() {
     let batch_results = index.search_batch_parallel(&query_refs, 5, SearchQuality::Balanced);
 
     // Individual searches for comparison
-    let individual_results: Vec<Vec<(u64, f32)>> = queries
+    let individual_results: Vec<Vec<crate::scored_result::ScoredResult>> = queries
         .iter()
         .map(|q| index.search_with_quality(q, 5, SearchQuality::Balanced))
         .collect();
@@ -1221,21 +1221,21 @@ fn test_recall_quality_minimum_threshold() {
     let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.001).sin()).collect();
 
     // Compute ground truth with brute force
-    let mut distances: Vec<(u64, f32)> = dataset
+    let mut distances: Vec<crate::scored_result::ScoredResult> = dataset
         .iter()
         .enumerate()
         .map(|(idx, vec)| {
             let sim = crate::simd_native::cosine_similarity_native(&query, vec);
             #[allow(clippy::cast_possible_truncation)]
-            (idx as u64, sim)
+            crate::scored_result::ScoredResult::new(idx as u64, sim)
         })
         .collect();
-    distances.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let ground_truth: Vec<u64> = distances.iter().take(k).map(|(id, _)| *id).collect();
+    distances.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let ground_truth: Vec<u64> = distances.iter().take(k).map(|sr| sr.id).collect();
 
     // HNSW search
     let results = index.search_with_quality(&query, k, SearchQuality::Accurate);
-    let result_ids: std::collections::HashSet<u64> = results.iter().map(|(id, _)| *id).collect();
+    let result_ids: std::collections::HashSet<u64> = results.iter().map(|sr| sr.id).collect();
     let gt_set: std::collections::HashSet<u64> = ground_truth.iter().copied().collect();
 
     let recall = result_ids.intersection(&gt_set).count() as f64 / k as f64;
@@ -1359,8 +1359,8 @@ fn test_brute_force_buffered_same_results_as_original() {
 
     assert_eq!(original.len(), buffered.len());
     for (orig, buf) in original.iter().zip(buffered.iter()) {
-        assert_eq!(orig.0, buf.0, "IDs should match");
-        assert!((orig.1 - buf.1).abs() < 1e-6, "Distances should match");
+        assert_eq!(orig.id, buf.id, "IDs should match");
+        assert!((orig.score - buf.score).abs() < 1e-6, "Distances should match");
     }
 }
 
@@ -1753,9 +1753,9 @@ fn test_search_brute_force_gpu_returns_same_results_as_cpu() {
 
         // Verify same IDs returned (order may differ slightly due to floating point)
         let cpu_ids: std::collections::HashSet<u64> =
-            cpu_results.iter().map(|(id, _)| *id).collect();
+            cpu_results.iter().map(|sr| sr.id).collect();
         let gpu_ids: std::collections::HashSet<u64> =
-            gpu_results.iter().map(|(id, _)| *id).collect();
+            gpu_results.iter().map(|sr| sr.id).collect();
 
         let overlap = cpu_ids.intersection(&gpu_ids).count();
         assert!(
@@ -1884,7 +1884,7 @@ mod proptest_tests {
 
             // First result should be id=0 (exact match at origin)
             if !results.is_empty() {
-                prop_assert_eq!(results[0].0, 0, "Closest should be id=0 (at origin)");
+                prop_assert_eq!(results[0].id, 0, "Closest should be id=0 (at origin)");
             }
         }
 

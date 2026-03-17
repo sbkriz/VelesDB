@@ -137,6 +137,18 @@ impl DistanceMetric {
             results.sort_by(|a, b| a.1.total_cmp(&b.1));
         }
     }
+
+    /// Sorts scored results by the distance metric semantics.
+    ///
+    /// Same as [`sort_results`](Self::sort_results) but operates on
+    /// [`ScoredResult`](crate::scored_result::ScoredResult) slices.
+    pub fn sort_scored_results(&self, results: &mut [crate::scored_result::ScoredResult]) {
+        if self.higher_is_better() {
+            results.sort_by(|a, b| b.score.total_cmp(&a.score));
+        } else {
+            results.sort_by(|a, b| a.score.total_cmp(&b.score));
+        }
+    }
 }
 
 impl FromStr for DistanceMetric {

@@ -2,6 +2,7 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
+use crate::scored_result::ScoredResult;
 use rayon::prelude::*;
 
 impl HnswIndex {
@@ -179,7 +180,7 @@ impl HnswIndex {
         queries: &[&[f32]],
         k: usize,
         quality: SearchQuality,
-    ) -> Vec<Vec<(u64, f32)>> {
+    ) -> Vec<Vec<ScoredResult>> {
         // Validate all query dimensions first
         for (i, query) in queries.iter().enumerate() {
             assert_eq!(
@@ -200,12 +201,12 @@ impl HnswIndex {
                 let inner = self.inner.read();
 
                 let neighbours = inner.search(query, k, ef_search);
-                let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
+                let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
 
                 for n in &neighbours {
                     if let Some(id) = self.mappings.get_id(n.d_id) {
                         let score = inner.transform_score(n.distance);
-                        results.push((id, score));
+                        results.push(ScoredResult::new(id, score));
                     }
                 }
 
@@ -238,24 +239,24 @@ impl HnswIndex {
     ///
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
-    pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
         // EPIC-A.2: Use collect_for_parallel for rayon par_iter support
         let vectors_snapshot = self.vectors.collect_for_parallel();
 
         // Compute distances in parallel using rayon
-        let mut results: Vec<(u64, f32)> = vectors_snapshot
+        let mut results: Vec<ScoredResult> = vectors_snapshot
             .par_iter()
             .filter_map(|(idx, vec)| {
                 let id = self.mappings.get_id(*idx)?;
                 let score = self.compute_distance(query, vec);
-                Some((id, score))
+                Some(ScoredResult::new(id, score))
             })
             .collect();
 
         // Sort by distance (metric-dependent ordering)
-        self.metric.sort_results(&mut results);
+        self.metric.sort_scored_results(&mut results);
 
         results.truncate(k);
         results

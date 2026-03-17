@@ -332,14 +332,14 @@ impl VectorCollection {
         self.inner.search_with_filter(query, k, filter)
     }
 
-    /// Returns `(id, score)` pairs without payload hydration.
+    /// Returns [`ScoredResult`] pairs without payload hydration.
     ///
     /// Faster than [`search`](Self::search) when only IDs and scores are needed.
     ///
     /// # Errors
     ///
     /// - Returns an error if the query dimension does not match the collection.
-    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
+    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<crate::scored_result::ScoredResult>> {
         self.inner.search_ids(query, k)
     }
 

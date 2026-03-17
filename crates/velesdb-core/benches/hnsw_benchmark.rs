@@ -297,7 +297,7 @@ fn bench_recall_validation(c: &mut Criterion) {
                     for query in &queries {
                         // HNSW search
                         let hnsw_results: Vec<u64> =
-                            index.search(query, k).iter().map(|(id, _)| *id).collect();
+                            index.search(query, k).iter().map(|sr| sr.id).collect();
 
                         // Brute-force ground truth
                         let mut distances: Vec<(u64, f32)> = vectors

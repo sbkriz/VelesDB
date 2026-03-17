@@ -158,9 +158,9 @@ impl Collection {
 
         // Add vector scores with RRF
         #[allow(clippy::cast_precision_loss)]
-        for (rank, (id, _)) in vector_results.iter().enumerate() {
+        for (rank, sr) in vector_results.iter().enumerate() {
             let rrf_score = weight / (rank as f32 + 60.0);
-            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+            *fused_scores.entry(sr.id).or_insert(0.0) += rrf_score;
         }
 
         // Add text scores with RRF
@@ -262,9 +262,9 @@ impl Collection {
         let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
 
         #[allow(clippy::cast_precision_loss)]
-        for (rank, (id, _)) in vector_results.iter().enumerate() {
+        for (rank, sr) in vector_results.iter().enumerate() {
             let rrf_score = weight / (rank as f32 + 60.0);
-            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+            *fused_scores.entry(sr.id).or_insert(0.0) += rrf_score;
         }
 
         #[allow(clippy::cast_precision_loss)]

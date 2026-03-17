@@ -66,8 +66,8 @@ impl Collection {
             let query_results = self.merge_delta(query_results, query, candidates_k, metric);
             let mut filtered_results: Vec<SearchResult> = query_results
                 .into_iter()
-                .filter_map(|(id, score)| {
-                    let payload = payload_storage.retrieve(id).ok().flatten();
+                .filter_map(|sr| {
+                    let payload = payload_storage.retrieve(sr.id).ok().flatten();
 
                     // Apply filter if present
                     if let Some(ref filter) = filter_opt {
@@ -80,15 +80,15 @@ impl Collection {
                         }
                     }
 
-                    let vector = vector_storage.retrieve(id).ok().flatten()?;
+                    let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
                     Some(SearchResult {
                         point: Point {
-                            id,
+                            id: sr.id,
                             vector,
                             payload,
                             sparse_vectors: None,
                         },
-                        score,
+                        score: sr.score,
                     })
                 })
                 .collect();
@@ -180,22 +180,22 @@ impl Collection {
         let results: Vec<Vec<SearchResult>> = index_results
             .into_iter()
             .zip(queries)
-            .map(|(query_results, query): (Vec<(u64, f32)>, &&[f32])| {
+            .map(|(query_results, query)| {
                 // Merge with delta buffer per query
                 let query_results = self.merge_delta(query_results, query, k, metric);
                 query_results
                     .into_iter()
-                    .filter_map(|(id, score)| {
-                        let vector = vector_storage.retrieve(id).ok().flatten()?;
-                        let payload = payload_storage.retrieve(id).ok().flatten();
+                    .filter_map(|sr| {
+                        let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
+                        let payload = payload_storage.retrieve(sr.id).ok().flatten();
                         Some(SearchResult {
                             point: Point {
-                                id,
+                                id: sr.id,
                                 vector,
                                 payload,
                                 sparse_vectors: None,
                             },
-                            score,
+                            score: sr.score,
                         })
                     })
                     .collect()
@@ -280,11 +280,15 @@ impl Collection {
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
 
         // Merge with delta buffer per query before fusion (C-2: was bypassed).
+        // Convert to tuples for fusion strategy compatibility.
         let batch_results: Vec<Vec<(u64, f32)>> = batch_results
             .into_iter()
             .zip(vectors)
             .map(|(query_results, query)| {
                 self.merge_delta(query_results, query, overfetch_k, metric)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
             })
             .collect();
 
@@ -402,11 +406,15 @@ impl Collection {
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
 
         // Merge with delta buffer per query before fusion (C-2: was bypassed).
+        // Convert to tuples for fusion strategy compatibility.
         let batch_results: Vec<Vec<(u64, f32)>> = batch_results
             .into_iter()
             .zip(vectors)
             .map(|(query_results, query)| {
                 self.merge_delta(query_results, query, overfetch_k, metric)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
             })
             .collect();
 

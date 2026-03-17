@@ -37,7 +37,7 @@ fn test_native_index_insert_search() {
 
     assert!(!results.is_empty());
     assert!(results.len() <= 5);
-    assert_eq!(results[0].0, 0);
+    assert_eq!(results[0].id, 0);
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn test_native_index_vector_index_trait() {
 
     let results = <NativeHnswIndex as VectorIndex>::search(&index, &vec![0.1; 32], 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, 1);
+    assert_eq!(results[0].id, 1);
 }
 
 #[test]
@@ -146,9 +146,9 @@ fn test_native_index_brute_force_search() {
     let results = index.brute_force_search_parallel(&query, 5);
 
     assert_eq!(results.len(), 5);
-    assert_eq!(results[0].0, 0);
+    assert_eq!(results[0].id, 0);
     for i in 1..results.len() {
-        assert!(results[i].1 >= results[i - 1].1, "Results not sorted");
+        assert!(results[i].score >= results[i - 1].score, "Results not sorted");
     }
 }
 

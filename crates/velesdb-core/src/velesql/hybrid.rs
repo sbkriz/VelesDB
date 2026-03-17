@@ -16,22 +16,8 @@
 
 use std::collections::HashMap;
 
-/// A search result with ID and score.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScoredResult {
-    /// Unique identifier of the result.
-    pub id: u64,
-    /// Score (higher is better).
-    pub score: f32,
-}
-
-impl ScoredResult {
-    /// Creates a new scored result.
-    #[must_use]
-    pub fn new(id: u64, score: f32) -> Self {
-        Self { id, score }
-    }
-}
+// Re-export the canonical ScoredResult from the crate root.
+pub use crate::scored_result::ScoredResult;
 
 /// Fusion strategy for combining search results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -283,7 +269,7 @@ pub fn intersect_results(
     let filtered_vector: Vec<ScoredResult> = vector_results
         .iter()
         .filter(|r| graph_ids.contains(&r.id))
-        .cloned()
+        .copied()
         .collect();
 
     let vector_ids: std::collections::HashSet<u64> = vector_results.iter().map(|r| r.id).collect();
@@ -291,7 +277,7 @@ pub fn intersect_results(
     let filtered_graph: Vec<ScoredResult> = graph_results
         .iter()
         .filter(|r| vector_ids.contains(&r.id))
-        .cloned()
+        .copied()
         .collect();
 
     (filtered_vector, filtered_graph)

@@ -7,6 +7,7 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
+use crate::scored_result::ScoredResult;
 
 impl HnswIndex {
     /// Performs brute-force SIMD search for guaranteed 100% recall.
@@ -23,7 +24,7 @@ impl HnswIndex {
     ///
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
-    pub fn search_brute_force(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    pub fn search_brute_force(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
         // If vector storage is disabled, return empty (can't do brute-force)
@@ -33,11 +34,11 @@ impl HnswIndex {
             let ef_search = SearchQuality::Accurate.ef_search(k);
             let neighbours = inner.search(query, k, ef_search);
 
-            let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
+            let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
             for n in &neighbours {
                 if let Some(id) = self.mappings.get_id(n.d_id) {
                     let score = inner.transform_score(n.distance);
-                    results.push((id, score));
+                    results.push(ScoredResult::new(id, score));
                 }
             }
             return results;
@@ -47,7 +48,7 @@ impl HnswIndex {
         let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
         let vectors_snapshot: Vec<(usize, Vec<f32>)> = self.vectors.collect_for_parallel();
 
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(vectors_snapshot.len());
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(vectors_snapshot.len());
 
         for (i, (idx, v)) in vectors_snapshot.iter().enumerate() {
             // Prefetch upcoming vectors
@@ -57,12 +58,12 @@ impl HnswIndex {
 
             if let Some(id) = self.mappings.get_id(*idx) {
                 let score = self.compute_distance(query, v);
-                results.push((id, score));
+                results.push(ScoredResult::new(id, score));
             }
         }
 
         // Sort by distance (metric-dependent ordering)
-        self.metric.sort_results(&mut results);
+        self.metric.sort_scored_results(&mut results);
 
         results.truncate(k);
         results
@@ -76,7 +77,7 @@ impl HnswIndex {
     ///
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
-    pub fn search_brute_force_gpu(&self, query: &[f32], k: usize) -> Option<Vec<(u64, f32)>> {
+    pub fn search_brute_force_gpu(&self, query: &[f32], k: usize) -> Option<Vec<ScoredResult>> {
         self.validate_dimension(query, "Query");
 
         #[cfg(feature = "gpu")]
@@ -116,10 +117,14 @@ impl HnswIndex {
             };
 
             // Combine IDs with similarities
-            let mut results: Vec<(u64, f32)> = id_map.into_iter().zip(similarities).collect();
+            let mut results: Vec<ScoredResult> = id_map
+                .into_iter()
+                .zip(similarities)
+                .map(|(id, score)| ScoredResult::new(id, score))
+                .collect();
 
             // Sort by similarity (descending for cosine)
-            self.metric.sort_results(&mut results);
+            self.metric.sort_scored_results(&mut results);
 
             results.truncate(k);
             Some(results)
@@ -146,7 +151,7 @@ impl HnswIndex {
     ///
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
-    pub fn search_brute_force_buffered(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    pub fn search_brute_force_buffered(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         // Currently identical to search_brute_force - buffer reuse is internal optimization
         self.search_brute_force(query, k)
     }

@@ -194,8 +194,8 @@ fn test_collection_search_ids_fast() {
     // Fast search returns (id, score) tuples
     let results = collection.search_ids(&[1.0, 0.0, 0.0], 2).unwrap();
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].0, 1); // Best match
-    assert!(results[0].1 > results[1].1); // Scores are sorted
+    assert_eq!(results[0].id, 1); // Best match
+    assert!(results[0].score > results[1].score); // Scores are sorted
 }
 
 #[test]
