@@ -9,7 +9,7 @@
 # Policy: Every exclusion must have a documented rationale.
 # Review this file when adding new modules that use unsafe code.
 #
-# Maintainer: Tech Lead
+# Maintainer: Julien L.
 # Last reviewed: 2026-03-16
 # =============================================================================
 
