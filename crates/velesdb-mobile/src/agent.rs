@@ -77,7 +77,11 @@ impl VelesSemanticMemory {
     }
 
     /// Queries semantic memory by similarity search.
-    pub fn query(&self, embedding: Vec<f32>, top_k: u32) -> Result<Vec<SemanticResult>, VelesError> {
+    pub fn query(
+        &self,
+        embedding: Vec<f32>,
+        top_k: u32,
+    ) -> Result<Vec<SemanticResult>, VelesError> {
         let results = self.collection.search(embedding, top_k)?;
 
         let contents = self.contents.read();
