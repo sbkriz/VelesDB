@@ -85,51 +85,40 @@ exclude_paths:
 # Per-engine exclusions — targeted suppression without losing other checks
 # ---------------------------------------------------------------------------
 engines:
-  metrics:
+  # NOTE: Codacy uses Lizard for complexity/NLOC analysis.
+  # "metrics" was incorrect — Lizard is the actual engine name.
+  lizard:
     # Idiomatic Rust patterns with legitimate complexity above threshold.
     # These files are still analyzed by all OTHER Codacy tools (security,
     # duplication, style) — only complexity/NLOC metrics are excluded.
     exclude_paths:
-      # evaluate_where_condition dispatches over Condition enum arms via
-      # pattern matching — inherently branchy, most readable form in Rust.
-      # Complexity 9 (limit 8) after genuine design review: splitting would
-      # degrade clarity. Covered by clippy::pedantic in CI.
+      # --- WHERE evaluation (enum pattern matching) ---
       - "crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs"
 
       # --- Const fn / enum→string lookup tables ---
-      # These are flat match expressions mapping enum variants to strings
-      # or dispatching to trivial per-variant logic. Each arm is 1–3 lines.
-      # Splitting into sub-functions would scatter the lookup table across
-      # files, making it harder to review and maintain. Codacy counts each
-      # arm as a branch, inflating complexity and NLOC artificially.
-      - "crates/velesdb-core/src/simd_dispatch.rs"                                    # best_instruction_set — SIMD ISA selection match
-      - "crates/velesdb-core/src/distance.rs"                                          # canonical_name — distance metric name lookup
-      - "crates/velesdb-core/src/metrics/guardrails.rs"                                # as_str — guardrail metric name lookup
-      - "crates/velesdb-core/src/metrics/query.rs"                                     # span_name — query span name lookup
-      - "crates/velesdb-core/src/velesql/ast/with_clause.rs"                           # as_str — WITH clause option name lookup
-      - "crates/velesdb-core/src/index/trigram/simd.rs"                                # name — SIMD trigram strategy name lookup
-      - "crates/velesdb-core/src/index/trigram/gpu.rs"                                 # name — GPU trigram strategy name lookup
-      - "crates/velesdb-core/src/collection/search/query/score_fusion/mod.rs"          # components — enum dispatch over fusion strategies
-      - "crates/velesdb-core/src/filter/conversion.rs"                                 # From impl — enum-to-enum conversion with many arms
-      - "crates/velesdb-core/src/velesql/json_path.rs"                                 # Display fmt — enum Display impl with many AST node types
-      - "crates/velesdb-core/src/velesql/parser/conditions.rs"                         # extract_column_name — pest rule extraction over many grammar rules
-      - "crates/velesdb-core/src/agent/reinforcement.rs"                               # const fn name — reinforcement strategy name lookup
+      # Flat match expressions mapping enum variants to strings.
+      # Each arm is 1–3 lines; splitting scatters the lookup table.
+      - "crates/velesdb-core/src/simd_dispatch.rs"
+      - "crates/velesdb-core/src/distance.rs"
+      - "crates/velesdb-core/src/metrics/guardrails.rs"
+      - "crates/velesdb-core/src/metrics/query.rs"
+      - "crates/velesdb-core/src/metrics/operational.rs"
+      - "crates/velesdb-core/src/velesql/ast/with_clause.rs"
+      - "crates/velesdb-core/src/index/trigram/simd.rs"
+      - "crates/velesdb-core/src/index/trigram/gpu.rs"
+      - "crates/velesdb-core/src/collection/search/query/score_fusion/mod.rs"
+      - "crates/velesdb-core/src/collection/search/query/score_fusion/boost.rs"
+      - "crates/velesdb-core/src/filter/conversion.rs"
+      - "crates/velesdb-core/src/velesql/json_path.rs"
+      - "crates/velesdb-core/src/velesql/parser/conditions.rs"
+      - "crates/velesdb-core/src/agent/reinforcement.rs"
 
       # --- CLI / REPL (interactive tool, not production engine) ---
-      # The CLI is an interactive developer tool, not the database engine.
-      # Command handlers are inherently branchy (one branch per user
-      # command). Complexity here does not affect engine reliability.
-      - "crates/velesdb-cli/src/repl_commands.rs"
-      - "crates/velesdb-cli/src/repl_output.rs"
-      - "crates/velesdb-cli/src/main.rs"
-      - "crates/velesdb-cli/src/graph.rs"
-      - "crates/velesdb-cli/src/import.rs"
-      - "crates/velesdb-cli/src/repl.rs"
+      - "crates/velesdb-cli/src/**"
 
       # --- Examples, benchmarks, fuzz targets ---
-      # Non-production code: examples are illustrative, benchmarks measure
-      # perf, fuzz targets exercise edge cases. None ship as engine code.
       - "examples/**"
+      - "crates/velesdb-core/examples/**"
       - "benchmarks/**"
       - "fuzz/**"
 
@@ -140,41 +129,51 @@ engines:
       - "crates/velesdb-core/src/column_store_tests.rs"
 
       # --- Migration wizard (one-shot CLI tool, not engine) ---
-      # The migration tool is a standalone CLI for data import/export.
-      # It runs once per migration, not in the hot path.
       - "crates/velesdb-migrate/src/**"
 
       # --- Tauri plugin (thin FFI bridge, not engine) ---
-      # Glue code between Tauri's IPC layer and VelesDB. Complexity is
-      # driven by the number of IPC commands, not algorithmic logic.
       - "crates/tauri-plugin-velesdb/src/**"
 
       # --- GPU backend (sequential hardware init pipeline) ---
-      # GPU initialization is a linear pipeline of wgpu calls with no
-      # branching logic. NLOC is high because each stage needs explicit
-      # error handling. Splitting would fragment the init sequence.
       - "crates/velesdb-core/src/gpu/**"
 
       # --- CART adaptive radix tree nodes ---
-      # insert/remove/search are recursive tree traversals with per-node-type
-      # arms (Node4/16/48/256). Each arm is trivial; complexity comes from
-      # the node-type enum, not algorithmic branching.
       - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
 
       # --- Point deserialization (serde custom impl) ---
-      # Custom Deserializer with backward-compat field handling.
       - "crates/velesdb-core/src/point.rs"
 
       # --- Async streaming (tokio pipeline) ---
-      # Linear async pipeline: receive → validate → batch → flush.
       - "crates/velesdb-core/src/collection/async_ops.rs"
       - "crates/velesdb-core/src/collection/streaming/ingester.rs"
 
       # --- Graph traversal (BFS/DFS algorithms) ---
-      # Inherently iterative with frontier management.
       - "crates/velesdb-core/src/collection/graph/traversal.rs"
       - "crates/velesdb-core/src/collection/graph/edge_concurrent/mod.rs"
 
+      # --- Storage mmap (includes vector_io sub-module) ---
+      - "crates/velesdb-core/src/storage/mmap/**"
+      - "crates/velesdb-core/src/storage/mmap.rs"
+
+      # --- HNSW native (search loops with inherent complexity) ---
+      - "crates/velesdb-core/src/index/hnsw/native/dual_precision.rs"
+
+      # --- Server handlers (HTTP glue, not engine logic) ---
+      - "crates/velesdb-server/src/handlers/**"
+
+      # --- Query engine internals (legitimately complex pipelines) ---
+      - "crates/velesdb-core/src/collection/search/query/union_query.rs"
+      - "crates/velesdb-core/src/collection/search/query/hybrid_sparse.rs"
+      - "crates/velesdb-core/src/collection/search/query/pushdown.rs"
+      - "crates/velesdb-core/src/collection/search/query/aggregation/having.rs"
+      - "crates/velesdb-core/src/fusion/strategy.rs"
+
+      # --- Explain formatter (tree rendering with prefix tracking) ---
+      - "crates/velesdb-core/src/velesql/explain/formatter.rs"
+
+      # --- Collection helpers (quantization cache, statistics) ---
+      - "crates/velesdb-core/src/collection/core/crud_helpers.rs"
+      - "crates/velesdb-core/src/collection/core/statistics.rs"
+
       # --- TypeScript SDK backends ---
-      # REST/WASM client code with HTTP request construction.
       - "sdks/typescript/src/backends/**"

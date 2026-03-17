@@ -4,8 +4,10 @@
 //! simultaneous subspace iteration, producing an orthogonal rotation matrix
 //! that reduces inter-subspace correlation and improves recall by 3-15%.
 
+#[cfg(feature = "persistence")]
 use crate::error::Error;
 
+#[cfg(feature = "persistence")]
 use super::pq::{validate_train_params, ProductQuantizer};
 
 /// Train a PQ codebook with optional PCA pre-rotation.

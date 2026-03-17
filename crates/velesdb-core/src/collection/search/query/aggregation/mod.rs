@@ -375,7 +375,13 @@ impl Collection {
 
         for &id in ids {
             let payload = ctx.payload_storage.retrieve(id).ok().flatten();
-            if !self.record_passes_filter(id, payload.as_ref(), ctx, needs_vector_eval, &mut graph_cache)? {
+            if !self.record_passes_filter(
+                id,
+                payload.as_ref(),
+                ctx,
+                needs_vector_eval,
+                &mut graph_cache,
+            )? {
                 continue;
             }
             Self::accumulate_record(

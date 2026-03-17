@@ -51,6 +51,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `true` if disk space was actually reclaimed, `false` if only zeroed.
 #[allow(unused_variables)]
 pub fn punch_hole(file: &File, offset: u64, len: u64) -> io::Result<bool> {
+    // Zero-length punch is a no-op on every platform. Return early to avoid
+    // EINVAL from fallocate(2) on Linux and undefined behaviour from
+    // FSCTL_SET_ZERO_DATA when file_offset == beyond_final_zero on Windows.
+    if len == 0 {
+        return Ok(false);
+    }
+
     #[cfg(target_os = "linux")]
     {
         punch_hole_linux(file, offset, len)
