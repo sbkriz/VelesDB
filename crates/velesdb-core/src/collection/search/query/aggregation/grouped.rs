@@ -131,7 +131,11 @@ impl Collection {
             .iter()
             .filter_map(|agg| match &agg.argument {
                 AggregateArg::Column(col) => {
-                    if seen.insert(col.clone()) { Some(col.clone()) } else { None }
+                    if seen.insert(col.clone()) {
+                        Some(col.clone())
+                    } else {
+                        None
+                    }
                 }
                 AggregateArg::Wildcard => None,
             })
