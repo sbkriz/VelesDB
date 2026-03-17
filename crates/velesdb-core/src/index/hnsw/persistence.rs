@@ -14,6 +14,7 @@ use crate::distance::DistanceMetric;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// HNSW index metadata as stored on disk.
 pub(crate) struct HnswMeta {
@@ -43,14 +44,13 @@ pub(crate) struct HnswVectorsData {
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
     let meta_path = path.join("native_meta.bin");
-    let tmp_path = path.join("native_meta.bin.tmp");
     let bytes = postcard::to_allocvec(&(
         meta.dimension,
         meta.metric as u8,
         meta.enable_vector_storage,
     ))
     .map_err(std::io::Error::other)?;
-    atomic_write(&tmp_path, &meta_path, &bytes)
+    atomic_write(&meta_path, &bytes)
 }
 
 /// Loads HNSW metadata from `native_meta.bin` in the given directory.
@@ -84,10 +84,9 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_mappings(path: &Path, data: &HnswMappingsData) -> std::io::Result<()> {
     let mappings_path = path.join("native_mappings.bin");
-    let tmp_path = path.join("native_mappings.bin.tmp");
     let bytes = postcard::to_allocvec(&(&data.id_to_idx, &data.idx_to_id, data.next_idx))
         .map_err(std::io::Error::other)?;
-    atomic_write(&tmp_path, &mappings_path, &bytes)
+    atomic_write(&mappings_path, &bytes)
 }
 
 /// Loads HNSW id-mappings from `native_mappings.bin` in the given directory.
@@ -118,9 +117,8 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Result<()> {
     let vectors_path = path.join("native_vectors.bin");
-    let tmp_path = path.join("native_vectors.bin.tmp");
     let bytes = postcard::to_allocvec(&data.vectors).map_err(std::io::Error::other)?;
-    atomic_write(&tmp_path, &vectors_path, &bytes)
+    atomic_write(&vectors_path, &bytes)
 }
 
 /// Loads HNSW vectors from `native_vectors.bin` in the given directory.
@@ -136,11 +134,42 @@ pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
     Ok(HnswVectorsData { vectors })
 }
 
-/// Writes `data` to `tmp_path`, fsyncs, then renames to `final_path`.
+/// Writes `data` to a unique temp file, fsyncs, then renames to `final_path`.
 ///
 /// This provides crash-safe persistence: readers always see either the
 /// previous complete file or the new complete file, never a torn write.
-fn atomic_write(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::io::Result<()> {
+///
+/// Each call generates a unique temporary filename using a global counter
+/// and the current thread ID to prevent races when multiple threads
+/// concurrently save the same index file.
+fn atomic_write(final_path: &Path, data: &[u8]) -> std::io::Result<()> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tid = std::thread::current().id();
+
+    // Build temp file in the same directory as the target, with a unique suffix
+    // derived from thread ID + global counter to avoid concurrent-write races.
+    let file_name = final_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let tmp_name = format!("{file_name}.tmp.{tid:?}.{seq}");
+    let tmp_path = final_path.with_file_name(&tmp_name);
+
+    let result = atomic_write_inner(&tmp_path, final_path, data);
+    if result.is_err() {
+        // Best-effort cleanup of the temp file on failure.
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+/// Inner write-fsync-rename step for [`atomic_write`].
+fn atomic_write_inner(
+    tmp_path: &Path,
+    final_path: &Path,
+    data: &[u8],
+) -> std::io::Result<()> {
     let file = std::fs::File::create(tmp_path)?;
     let mut writer = std::io::BufWriter::new(file);
     writer.write_all(data)?;
