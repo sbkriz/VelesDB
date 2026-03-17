@@ -98,9 +98,9 @@ fn drain_wal_entries(
     vector_size: usize,
 ) -> usize {
     let mut replayed = 0usize;
-    while let Ok(true) = replay_one_entry(
-        reader, file_len, index, mmap_data, next_offset, vector_size,
-    ) {
+    while let Ok(true) =
+        replay_one_entry(reader, file_len, index, mmap_data, next_offset, vector_size)
+    {
         replayed += 1;
     }
     replayed

@@ -72,13 +72,19 @@ pub(crate) fn crc32_hash(data: &[u8]) -> u32 {
 /// Validates magic, version, and minimum size of snapshot data.
 fn validate_snapshot_format(data: &[u8]) -> io::Result<()> {
     if data.len() < 25 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Snapshot too small"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Snapshot too small",
+        ));
     }
     if &data[0..4] != SNAPSHOT_MAGIC {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid magic"));
     }
     if data[4] != SNAPSHOT_VERSION {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Unsupported version"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Unsupported version",
+        ));
     }
     Ok(())
 }
@@ -88,18 +94,23 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
     validate_snapshot_format(data)?;
 
     let wal_pos = u64::from_le_bytes(
-        data[5..13].try_into()
+        data[5..13]
+            .try_into()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid WAL position"))?,
     );
     let entry_count_u64 = u64::from_le_bytes(
-        data[13..21].try_into()
+        data[13..21]
+            .try_into()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid entry count"))?,
     );
 
     // P1 Audit: Validate entry_count BEFORE conversion to prevent DoS
     let max_possible_entries = data.len().saturating_sub(25) / 16;
     if entry_count_u64 > max_possible_entries as u64 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Entry count exceeds data size"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Entry count exceeds data size",
+        ));
     }
     #[allow(clippy::cast_possible_truncation)] // Validated above
     let entry_count = entry_count_u64 as usize;
@@ -109,7 +120,8 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
     }
 
     let stored_crc = u32::from_le_bytes(
-        data[data.len() - 4..].try_into()
+        data[data.len() - 4..]
+            .try_into()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid CRC"))?,
     );
     if stored_crc != crc32_hash(&data[..data.len() - 4]) {
@@ -134,11 +146,13 @@ pub(crate) fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, 
     for i in 0..entry_count {
         let offset = entries_start + i * 16;
         let id = u64::from_le_bytes(
-            data[offset..offset + 8].try_into()
+            data[offset..offset + 8]
+                .try_into()
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid entry ID"))?,
         );
         let wal_offset = u64::from_le_bytes(
-            data[offset + 8..offset + 16].try_into()
+            data[offset + 8..offset + 16]
+                .try_into()
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid entry offset"))?,
         );
         index.insert(id, wal_offset);

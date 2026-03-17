@@ -314,4 +314,3 @@ pub(crate) unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
         inter_sum / union_sum
     }
 }
-

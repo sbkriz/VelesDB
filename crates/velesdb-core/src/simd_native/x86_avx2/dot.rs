@@ -46,8 +46,14 @@ pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
     let (combined, _, _) = simd_4acc_dot_loop!(
-        a_ptr, b_ptr, end_main,
-        _mm256_setzero_ps(), _mm256_loadu_ps, _mm256_fmadd_ps, _mm256_add_ps, 8
+        a_ptr,
+        b_ptr,
+        end_main,
+        _mm256_setzero_ps(),
+        _mm256_loadu_ps,
+        _mm256_fmadd_ps,
+        _mm256_add_ps,
+        8
     );
 
     let mut result = hsum_avx256(combined);

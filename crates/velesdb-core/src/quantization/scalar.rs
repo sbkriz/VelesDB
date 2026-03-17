@@ -90,7 +90,6 @@ impl QuantizedVector {
     pub fn memory_size(&self) -> usize {
         self.data.len() + 8 // data + min(4) + max(4)
     }
-
 }
 
 impl QuantizationCodec for QuantizedVector {

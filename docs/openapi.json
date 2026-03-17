@@ -2,13 +2,13 @@
   "openapi": "3.1.0",
   "info": {
     "title": "VelesDB API",
-    "description": "High-performance vector database for AI applications. Supports semantic search, HNSW indexing, and multiple distance metrics.",
+    "description": "High-performance vector database for AI applications. Supports semantic search, HNSW indexing, and multiple distance metrics. Authentication is optional — when API keys are configured via VELESDB_API_KEYS, all endpoints except /health and /ready require a valid Bearer token.",
     "contact": {
       "name": "VelesDB Team",
       "url": "https://github.com/cyberlife-coder/VelesDB"
     },
     "license": {
-      "name": "ELv2",
+      "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
     "version": "1.5.1"
@@ -1811,11 +1811,11 @@
         "tags": [
           "health"
         ],
-        "summary": "Health check endpoint.",
+        "summary": "Liveness probe — always returns 200 OK.",
         "operationId": "health_check",
         "responses": {
           "200": {
-            "description": "Server is healthy",
+            "description": "Server is alive",
             "content": {
               "application/json": {
                 "schema": {
@@ -1934,6 +1934,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe — returns 200 when the database is fully loaded, 503 otherwise.",
+        "operationId": "readiness_check",
+        "responses": {
+          "200": {
+            "description": "Server is ready to accept requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server is not yet ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
                 }
               }
             }
@@ -3855,8 +3886,19 @@
           }
         }
       }
+    },
+    "securitySchemes": {
+      "bearer_auth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     }
   },
+  "security": [
+    {
+      "bearer_auth": []
+    }
+  ],
   "tags": [
     {
       "name": "health",

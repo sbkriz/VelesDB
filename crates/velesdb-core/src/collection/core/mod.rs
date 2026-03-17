@@ -21,8 +21,8 @@ mod lifecycle;
 mod lifecycle_tests;
 mod statistics;
 
-pub use index_management::IndexInfo;
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
+pub use index_management::IndexInfo;
 
 // All implementations are in submodules, no re-exports needed here
 // as they extend the Collection type defined in types.rs

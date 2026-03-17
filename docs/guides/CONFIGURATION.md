@@ -1,8 +1,10 @@
 # ⚙️ Configuration VelesDB
 
-*Version 0.8.0 — Janvier 2026*
+*Version 1.6.0 — Mars 2026*
 
 Guide complet pour configurer VelesDB via fichier de configuration, variables d'environnement et paramètres runtime.
+
+> **Voir aussi :** [SERVER_SECURITY.md](SERVER_SECURITY.md) pour le guide opérationnel du serveur (authentification, TLS, arrêt gracieux, endpoints de santé).
 
 ---
 
@@ -179,6 +181,15 @@ host = "127.0.0.1"
 # Default: 8080
 port = 8080
 
+# Répertoire de données (collections, WAL, index)
+# Default: "./velesdb_data"
+data_dir = "./velesdb_data"
+
+# Timeout de drain des connexions lors de l'arrêt gracieux (secondes)
+# Range: 1 - 300
+# Default: 30
+shutdown_timeout_secs = 30
+
 # Nombre de workers (threads)
 # Range: 1 - 256
 # Default: nombre de CPUs
@@ -196,6 +207,31 @@ cors_enabled = false
 # Origines CORS autorisées (si cors_enabled = true)
 # Default: ["*"]
 cors_origins = ["*"]
+
+# -----------------------------------------------------------------------------
+# AUTHENTICATION (velesdb-server uniquement)
+# Voir SERVER_SECURITY.md pour le guide complet
+# -----------------------------------------------------------------------------
+[auth]
+# Liste des clés API autorisées (Bearer tokens)
+# Lorsque vide ou absent, l'authentification est désactivée (mode dev local)
+# Les endpoints /health et /ready sont toujours publics
+# Default: [] (désactivé)
+# api_keys = ["my-secret-key-1", "my-secret-key-2"]
+
+# -----------------------------------------------------------------------------
+# TLS CONFIGURATION (velesdb-server uniquement)
+# Voir SERVER_SECURITY.md pour le guide complet
+# -----------------------------------------------------------------------------
+[tls]
+# Chemin vers le fichier certificat PEM
+# Les deux champs (cert + key) doivent être définis ensemble
+# Default: null (HTTP en clair)
+# cert = "/path/to/cert.pem"
+
+# Chemin vers le fichier clé privée PEM
+# Default: null (HTTP en clair)
+# key = "/path/to/key.pem"
 
 # -----------------------------------------------------------------------------
 # LOGGING CONFIGURATION
@@ -266,8 +302,12 @@ Toutes les options peuvent être définies via des variables d'environnement ave
 | `VELESDB_HNSW_EF_CONSTRUCTION` | `hnsw.ef_construction` | `600` |
 | `VELESDB_STORAGE_DATA_DIR` | `storage.data_dir` | `/var/lib/velesdb` |
 | `VELESDB_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
-| `VELESDB_SERVER_HOST` | `server.host` | `0.0.0.0` |
-| `VELESDB_SERVER_PORT` | `server.port` | `8080` |
+| `VELESDB_HOST` | `server.host` | `0.0.0.0` |
+| `VELESDB_PORT` | `server.port` | `8080` |
+| `VELESDB_DATA_DIR` | `server.data_dir` | `/var/lib/velesdb` |
+| `VELESDB_API_KEYS` | `auth.api_keys` | `key1,key2,key3` (virgules) |
+| `VELESDB_TLS_CERT` | `tls.cert` | `/etc/ssl/cert.pem` |
+| `VELESDB_TLS_KEY` | `tls.key` | `/etc/ssl/key.pem` |
 | `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
 | `VELESDB_LICENSE_KEY` | `premium.license_key` | `VELES-...` |
 | `VELESDB_CONFIG` | Chemin du fichier config | `/etc/velesdb/velesdb.toml` |
@@ -309,7 +349,7 @@ La configuration suit cet ordre de priorité (du plus bas au plus haut) :
    ↓
 3. Variables d'environnement VELESDB_*
    ↓
-4. Paramètres CLI (--port, --data-dir, etc.)
+4. Paramètres CLI (--host, --port, --data-dir, --tls-cert, --tls-key)
    ↓
 5. Override runtime (REPL \set, VelesQL WITH, API params)
 ```
@@ -377,14 +417,36 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 
 ### Section [server]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `host` | string | `"127.0.0.1"` | Adresse d'écoute |
-| `port` | int | `8080` | Port |
-| `workers` | int | `0` | Workers (0=auto) |
-| `max_body_size` | int | `104857600` | Body max (bytes) |
-| `cors_enabled` | bool | `false` | Activer CORS |
-| `cors_origins` | array | `["*"]` | Origines CORS |
+| Clé | Type | Env var | CLI flag | Défaut | Description |
+|-----|------|---------|----------|--------|-------------|
+| `host` | string | `VELESDB_HOST` | `--host` | `"127.0.0.1"` | Adresse d'écoute |
+| `port` | int | `VELESDB_PORT` | `--port` | `8080` | Port |
+| `data_dir` | string | `VELESDB_DATA_DIR` | `--data-dir` | `"./velesdb_data"` | Répertoire des données |
+| `shutdown_timeout_secs` | int | — | — | `30` | Timeout drain connexions (secondes) |
+| `workers` | int | — | — | `0` | Workers (0=auto) |
+| `max_body_size` | int | — | — | `104857600` | Body max (bytes) |
+| `cors_enabled` | bool | — | — | `false` | Activer CORS |
+| `cors_origins` | array | — | — | `["*"]` | Origines CORS |
+
+### Section [auth]
+
+| Clé | Type | Env var | CLI flag | Défaut | Description |
+|-----|------|---------|----------|--------|-------------|
+| `api_keys` | array | `VELESDB_API_KEYS` | — | `[]` (désactivé) | Clés API Bearer autorisées |
+
+> `VELESDB_API_KEYS` accepte des clés séparées par des virgules : `key1,key2,key3`.
+> Lorsque la liste est vide, l'authentification est désactivée (mode dev local).
+> Les endpoints `/health` et `/ready` sont toujours publics.
+
+### Section [tls]
+
+| Clé | Type | Env var | CLI flag | Défaut | Description |
+|-----|------|---------|----------|--------|-------------|
+| `cert` | string? | `VELESDB_TLS_CERT` | `--tls-cert` | `null` | Chemin du certificat PEM |
+| `key` | string? | `VELESDB_TLS_KEY` | `--tls-key` | `null` | Chemin de la clé privée PEM |
+
+> Les deux champs doivent être définis ensemble. Si aucun n'est défini, le serveur utilise HTTP en clair.
+> Voir [SERVER_SECURITY.md](SERVER_SECURITY.md) pour la génération de certificats.
 
 ### Section [logging]
 

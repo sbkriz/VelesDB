@@ -758,7 +758,11 @@ fn test_concurrent_insert_delete_search_at_index_level() {
                 // All returned IDs must be valid (not deleted from mappings)
                 // and distances must be finite
                 for sr in &results {
-                    assert!(sr.score.is_finite(), "Distance must be finite for ID {}", sr.id);
+                    assert!(
+                        sr.score.is_finite(),
+                        "Distance must be finite for ID {}",
+                        sr.id
+                    );
                 }
             }
         }));
@@ -786,7 +790,8 @@ fn test_concurrent_insert_delete_search_at_index_level() {
     for sr in &results {
         assert!(
             !(0..50).contains(&sr.id),
-            "Soft-deleted ID {} must not appear in search results", sr.id
+            "Soft-deleted ID {} must not appear in search results",
+            sr.id
         );
     }
 
@@ -868,7 +873,8 @@ fn test_delete_exclusion_under_concurrent_search() {
     for sr in &results {
         assert!(
             sr.id % 2 != 0,
-            "Soft-deleted even ID {} must not appear in post-delete search", sr.id
+            "Soft-deleted even ID {} must not appear in post-delete search",
+            sr.id
         );
     }
     // Verify odd IDs are still returned

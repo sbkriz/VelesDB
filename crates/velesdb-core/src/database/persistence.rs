@@ -125,6 +125,48 @@ impl Database {
         }
     }
 
+    /// Flushes all WALs across the typed collection registries.
+    ///
+    /// Best-effort: logs warnings for individual flush failures but continues
+    /// flushing remaining collections. Returns the count of failures.
+    ///
+    /// Note: the legacy `collections` registry is intentionally skipped because
+    /// it shares the same `Arc`'d storage as the typed registries — flushing it
+    /// would double-flush every collection.
+    #[allow(deprecated)]
+    pub fn flush_all(&self) -> usize {
+        let mut failures: usize = 0;
+
+        // Typed registries only — legacy `collections` shares the same Arc'd
+        // storage, so flushing it would double-flush every collection.
+
+        // Vector collections
+        for (name, coll) in self.vector_colls.read().iter() {
+            if let Err(e) = coll.flush() {
+                tracing::warn!(error = %e, collection = %name, "Failed to flush vector collection");
+                failures += 1;
+            }
+        }
+
+        // Graph collections
+        for (name, coll) in self.graph_colls.read().iter() {
+            if let Err(e) = coll.flush() {
+                tracing::warn!(error = %e, collection = %name, "Failed to flush graph collection");
+                failures += 1;
+            }
+        }
+
+        // Metadata collections
+        for (name, coll) in self.metadata_colls.read().iter() {
+            if let Err(e) = coll.flush() {
+                tracing::warn!(error = %e, collection = %name, "Failed to flush metadata collection");
+                failures += 1;
+            }
+        }
+
+        failures
+    }
+
     /// Loads a vector collection from disk, registering it in both registries.
     fn load_vector_collection(&self, path: &std::path::Path, name: &str) -> bool {
         match VectorCollection::open(path.to_path_buf()) {

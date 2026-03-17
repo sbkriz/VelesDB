@@ -153,8 +153,15 @@ pub(crate) unsafe fn squared_l2_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
     let (combined, mut a_p, mut b_p) = simd_4acc_l2_loop!(
-        a_ptr, b_ptr, end_main,
-        _mm256_setzero_ps(), _mm256_loadu_ps, _mm256_sub_ps, _mm256_fmadd_ps, _mm256_add_ps, 8
+        a_ptr,
+        b_ptr,
+        end_main,
+        _mm256_setzero_ps(),
+        _mm256_loadu_ps,
+        _mm256_sub_ps,
+        _mm256_fmadd_ps,
+        _mm256_add_ps,
+        8
     );
 
     let mut result = hsum_avx256(combined);

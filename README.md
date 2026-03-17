@@ -650,6 +650,7 @@ SELECT * FROM active UNION SELECT * FROM archived
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | `GET` | Health check |
+| `/ready` | `GET` | Readiness check |
 | `/metrics` | `GET` | Prometheus metrics endpoint |
 
 ### Request/Response Examples
@@ -1325,6 +1326,17 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 ---
 
 ---
+
+## 🔐 Security
+
+VelesDB's server component (`velesdb-server`) supports **opt-in security features** for deployments beyond localhost:
+
+- **API Key Authentication** — Bearer token auth via `VELESDB_API_KEYS` env var or `[auth]` section in `velesdb.toml`. Disabled by default (local dev mode).
+- **TLS (HTTPS)** — Built-in TLS via rustls. Configure with `VELESDB_TLS_CERT` / `VELESDB_TLS_KEY` env vars or `[tls]` section in `velesdb.toml`.
+- **Graceful Shutdown** — SIGTERM/SIGINT triggers connection drain + WAL flush before exit. Zero data loss on clean shutdown.
+- **Health Endpoints** — `GET /health` (liveness) and `GET /ready` (readiness) for monitoring, always public.
+
+All features are opt-in with zero breaking changes. See [docs/guides/SERVER_SECURITY.md](docs/guides/SERVER_SECURITY.md) for the full guide.
 
 ## 🤝 Contributing
 

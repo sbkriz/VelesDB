@@ -148,7 +148,10 @@ fn test_native_index_brute_force_search() {
     assert_eq!(results.len(), 5);
     assert_eq!(results[0].id, 0);
     for i in 1..results.len() {
-        assert!(results[i].score >= results[i - 1].score, "Results not sorted");
+        assert!(
+            results[i].score >= results[i - 1].score,
+            "Results not sorted"
+        );
     }
 }
 

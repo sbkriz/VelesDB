@@ -186,6 +186,7 @@ mod tests {
             db,
             onboarding_metrics: OnboardingMetrics::default(),
             query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
+            ready: std::sync::atomic::AtomicBool::new(true),
         })
     }
 

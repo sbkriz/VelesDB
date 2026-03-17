@@ -760,7 +760,10 @@ fn test_search_with_rerank_uses_simd_distances() {
     // Note: HNSW may return fewer results if graph not fully connected
     assert!(!results.is_empty(), "Should return at least one result");
     for sr in &results {
-        assert!(sr.score >= -1.0 && sr.score <= 1.0, "Cosine should be in [-1, 1]");
+        assert!(
+            sr.score >= -1.0 && sr.score <= 1.0,
+            "Cosine should be in [-1, 1]"
+        );
     }
 
     // Results should be sorted by similarity (descending for cosine)
@@ -1230,7 +1233,11 @@ fn test_recall_quality_minimum_threshold() {
             crate::scored_result::ScoredResult::new(idx as u64, sim)
         })
         .collect();
-    distances.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    distances.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let ground_truth: Vec<u64> = distances.iter().take(k).map(|sr| sr.id).collect();
 
     // HNSW search
@@ -1360,7 +1367,10 @@ fn test_brute_force_buffered_same_results_as_original() {
     assert_eq!(original.len(), buffered.len());
     for (orig, buf) in original.iter().zip(buffered.iter()) {
         assert_eq!(orig.id, buf.id, "IDs should match");
-        assert!((orig.score - buf.score).abs() < 1e-6, "Distances should match");
+        assert!(
+            (orig.score - buf.score).abs() < 1e-6,
+            "Distances should match"
+        );
     }
 }
 
@@ -1752,10 +1762,8 @@ fn test_search_brute_force_gpu_returns_same_results_as_cpu() {
         );
 
         // Verify same IDs returned (order may differ slightly due to floating point)
-        let cpu_ids: std::collections::HashSet<u64> =
-            cpu_results.iter().map(|sr| sr.id).collect();
-        let gpu_ids: std::collections::HashSet<u64> =
-            gpu_results.iter().map(|sr| sr.id).collect();
+        let cpu_ids: std::collections::HashSet<u64> = cpu_results.iter().map(|sr| sr.id).collect();
+        let gpu_ids: std::collections::HashSet<u64> = gpu_results.iter().map(|sr| sr.id).collect();
 
         let overlap = cpu_ids.intersection(&gpu_ids).count();
         assert!(

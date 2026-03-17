@@ -137,9 +137,9 @@ pub(crate) fn brute_force_search(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::inverted_index::SparseInvertedIndex;
     use super::super::types::SparseVector;
+    use super::*;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 

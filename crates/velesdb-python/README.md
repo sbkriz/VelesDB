@@ -247,6 +247,31 @@ Tested on clustered embeddings (768D) — realistic AI workloads:
 - **97-100% recall** across all scales
 - **Sub-5ms latency** even at 100k vectors
 
+## Connecting to velesdb-server
+
+The `velesdb` Python package provides **embedded** (in-process) access to VelesDB. To connect to a remote `velesdb-server` instance (with optional API key authentication), use standard HTTP requests:
+
+```python
+import requests
+
+API_URL = "http://localhost:8080"
+API_KEY = "my-secret-key"  # Only needed when server has auth enabled
+
+headers = {"Authorization": f"Bearer {API_KEY}"}
+
+# Search for similar vectors
+response = requests.post(
+    f"{API_URL}/collections/documents/search",
+    json={"vector": [0.1, 0.2, ...], "top_k": 5},
+    headers=headers,
+)
+results = response.json()
+```
+
+When the server has TLS enabled, use `https://` and optionally pass `verify=False` for self-signed certificates.
+
+See [SERVER_SECURITY.md](../../docs/guides/SERVER_SECURITY.md) for server authentication and TLS setup.
+
 ## Requirements
 
 - Python 3.9+

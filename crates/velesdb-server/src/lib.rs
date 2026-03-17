@@ -24,10 +24,13 @@
 //! - Swagger UI: `GET /swagger-ui`
 //! - OpenAPI JSON: `GET /api-docs/openapi.json`
 
+pub mod auth;
+pub mod config;
 mod handlers;
+pub mod tls;
 mod types;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use utoipa::OpenApi;
 use velesdb_core::guardrails::QueryLimits;
 use velesdb_core::Database;
@@ -41,8 +44,8 @@ pub use handlers::{
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
     get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, search, search_ids, stream_insert, stream_upsert_points,
-    text_search, update_guardrails, upsert_points,
+    multi_query_search, query, readiness_check, search, search_ids, stream_insert,
+    stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
 // Graph handlers (EPIC-016/US-031)
@@ -67,10 +70,16 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         title = "VelesDB API",
         version = env!("CARGO_PKG_VERSION"),
         description = "High-performance vector database for AI applications. \
-            Supports semantic search, HNSW indexing, and multiple distance metrics.",
-        license(name = "ELv2", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
+            Supports semantic search, HNSW indexing, and multiple distance metrics. \
+            Authentication is optional — when API keys are configured via VELESDB_API_KEYS, \
+            all endpoints except /health and /ready require a valid Bearer token.",
+        license(name = "VelesDB Core License 1.0", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
         contact(name = "VelesDB Team", url = "https://github.com/cyberlife-coder/VelesDB")
     ),
+    security(
+        ("bearer_auth" = [])
+    ),
+    modifiers(&SecurityAddon),
     servers(
         (url = "/", description = "Local server")
     ),
@@ -86,6 +95,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
     ),
     paths(
         handlers::health::health_check,
+        handlers::health::readiness_check,
         handlers::collections::list_collections,
         handlers::collections::create_collection,
         handlers::collections::get_collection,
@@ -183,6 +193,24 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 )]
 pub struct ApiDoc;
 
+/// Adds the Bearer authentication security scheme to the OpenAPI spec.
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearer_auth",
+                utoipa::openapi::security::SecurityScheme::Http(
+                    utoipa::openapi::security::Http::new(
+                        utoipa::openapi::security::HttpAuthScheme::Bearer,
+                    ),
+                ),
+            );
+        }
+    }
+}
+
 // ============================================================================
 // Application State
 // ============================================================================
@@ -195,6 +223,8 @@ pub struct AppState {
     pub onboarding_metrics: OnboardingMetrics,
     /// Query guard-rails configuration (EPIC-048).
     pub query_limits: parking_lot::RwLock<QueryLimits>,
+    /// Readiness flag — `true` once the database is fully loaded.
+    pub ready: AtomicBool,
 }
 
 /// Lightweight counters for first-hour troubleshooting diagnostics.
@@ -366,7 +396,10 @@ mod tests {
     fn test_openapi_has_license() {
         let openapi = ApiDoc::openapi();
         let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
-        assert!(json.contains("ELv2"), "Should have ELv2 license");
+        assert!(
+            json.contains("VelesDB Core License 1.0"),
+            "Should have VelesDB Core License 1.0"
+        );
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub use collections::{
     collection_sanity, create_collection, delete_collection, flush_collection, get_collection,
     is_empty, list_collections,
 };
-pub use health::health_check;
+pub use health::{health_check, readiness_check};
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{delete_point, get_point, stream_insert, stream_upsert_points, upsert_points};
 // EPIC-058 US-007: match_query handler for /collections/{name}/match

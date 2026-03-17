@@ -64,8 +64,7 @@ pub(crate) fn prepare_term_data(
     let mut upper_bound = vec![0.0_f32; n];
     upper_bound[0] = terms[0].query_weight.abs() * terms[0].max_doc_weight;
     for i in 1..n {
-        upper_bound[i] =
-            upper_bound[i - 1] + terms[i].query_weight.abs() * terms[i].max_doc_weight;
+        upper_bound[i] = upper_bound[i - 1] + terms[i].query_weight.abs() * terms[i].max_doc_weight;
     }
 
     Some(PreparedTerms { terms, upper_bound })

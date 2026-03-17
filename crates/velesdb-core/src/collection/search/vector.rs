@@ -28,7 +28,8 @@ impl Collection {
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
         let index_results = self.index.search(query, candidates_k);
-        let rescored = self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
+        let rescored =
+            self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
         self.merge_delta(rescored, query, k, metric)
     }
 
@@ -79,16 +80,10 @@ impl Collection {
         metric: DistanceMetric,
     ) -> Vec<ScoredResult> {
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        crate::collection::streaming::merge_with_delta(
-            tuples,
-            &self.delta_buffer,
-            query,
-            k,
-            metric,
-        )
-        .into_iter()
-        .map(ScoredResult::from)
-        .collect()
+        crate::collection::streaming::merge_with_delta(tuples, &self.delta_buffer, query, k, metric)
+            .into_iter()
+            .map(ScoredResult::from)
+            .collect()
     }
 
     #[cfg(not(feature = "persistence"))]

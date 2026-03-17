@@ -81,11 +81,13 @@ fn resolve_query_vector(
             match param_value {
                 serde_json::Value::Array(arr) => Ok(arr
                     .iter()
-                    .filter_map(|v| v.as_f64().map(|f| {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let r = f as f32;
-                        r
-                    }))
+                    .filter_map(|v| {
+                        v.as_f64().map(|f| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let r = f as f32;
+                            r
+                        })
+                    })
                     .collect()),
                 _ => Err(Error::Config(format!(
                     "Parameter ${name} must be a vector array"
@@ -113,23 +115,19 @@ impl Collection {
             Condition::Comparison(cmp) => {
                 self.evaluate_comparison_condition(node_id, bindings, cmp, params)
             }
-            Condition::And(left, right) => {
-                Ok(self.evaluate_where_condition(node_id, bindings, left, params)?
-                    && self.evaluate_where_condition(node_id, bindings, right, params)?)
-            }
-            Condition::Or(left, right) => {
-                Ok(self.evaluate_where_condition(node_id, bindings, left, params)?
-                    || self.evaluate_where_condition(node_id, bindings, right, params)?)
-            }
+            Condition::And(left, right) => Ok(self
+                .evaluate_where_condition(node_id, bindings, left, params)?
+                && self.evaluate_where_condition(node_id, bindings, right, params)?),
+            Condition::Or(left, right) => Ok(self
+                .evaluate_where_condition(node_id, bindings, left, params)?
+                || self.evaluate_where_condition(node_id, bindings, right, params)?),
             Condition::Not(inner) => {
                 Ok(!self.evaluate_where_condition(node_id, bindings, inner, params)?)
             }
             Condition::Group(inner) => {
                 self.evaluate_where_condition(node_id, bindings, inner, params)
             }
-            Condition::Similarity(sim) => {
-                self.evaluate_similarity_condition(node_id, sim, params)
-            }
+            Condition::Similarity(sim) => self.evaluate_similarity_condition(node_id, sim, params),
             // Other condition types (VectorSearch, VectorFusedSearch, etc.)
             // handled separately in `execute_match_with_similarity`.
             _ => Ok(true),
@@ -253,14 +251,12 @@ impl Collection {
         use crate::velesql::Value;
 
         Ok(match (actual, expected) {
-            (serde_json::Value::Number(n), Value::Integer(i)) => {
-                n.as_i64()
-                    .is_some_and(|actual_i| apply_ord_op(operator, &actual_i, i))
-            }
-            (serde_json::Value::Number(n), Value::Float(f)) => {
-                n.as_f64()
-                    .is_some_and(|actual_f| compare_floats(operator, actual_f, *f))
-            }
+            (serde_json::Value::Number(n), Value::Integer(i)) => n
+                .as_i64()
+                .is_some_and(|actual_i| apply_ord_op(operator, &actual_i, i)),
+            (serde_json::Value::Number(n), Value::Float(f)) => n
+                .as_f64()
+                .is_some_and(|actual_f| compare_floats(operator, actual_f, *f)),
             (serde_json::Value::String(s), Value::String(expected_s)) => {
                 apply_ord_op(operator, &s.as_str(), &expected_s.as_str())
             }
