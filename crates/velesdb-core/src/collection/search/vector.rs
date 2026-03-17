@@ -21,26 +21,30 @@ impl Collection {
         let oversampling = config.pq_rescore_oversampling.unwrap_or(0) as usize;
         drop(config);
 
-        if !is_pq {
-            let results = self.index.search(query, k);
-            return self.merge_delta(results, query, k, metric);
-        }
-
-        // When oversampling is disabled (None or Some(0)), skip rescore entirely
-        // and return raw index results truncated to k.
-        if oversampling == 0 {
+        if !is_pq || oversampling == 0 {
             let results = self.index.search(query, k);
             return self.merge_delta(results, query, k, metric);
         }
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
         let index_results = self.index.search(query, candidates_k);
+        let rescored = self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
+        self.merge_delta(rescored, query, k, metric)
+    }
 
+    /// Rescores PQ candidates using the product quantizer cache.
+    fn rescore_pq_candidates(
+        &self,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+        higher_is_better: bool,
+        index_results: Vec<ScoredResult>,
+    ) -> Vec<ScoredResult> {
         let pq_cache = self.pq_cache.read();
         let quantizer = self.pq_quantizer.read();
         let Some(quantizer) = quantizer.as_ref() else {
-            let results: Vec<ScoredResult> = index_results.into_iter().take(k).collect();
-            return self.merge_delta(results, query, k, metric);
+            return index_results.into_iter().take(k).collect();
         };
 
         let mut rescored: Vec<ScoredResult> = index_results
@@ -48,12 +52,7 @@ impl Collection {
             .map(|sr| {
                 let score = pq_cache.get(&sr.id).map_or(sr.score, |pq_vec| {
                     rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
-                        tracing::warn!(
-                            sr.id,
-                            %err,
-                            "PQ reconstruct failed during rescore; \
-                             falling back to HNSW score"
-                        );
+                        tracing::warn!(sr.id, %err, "PQ rescore failed; using HNSW score");
                         sr.score
                     })
                 });
@@ -61,19 +60,9 @@ impl Collection {
             })
             .collect();
 
-        rescored.sort_by(|a, b| {
-            if higher_is_better {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                a.score
-                    .partial_cmp(&b.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
-        });
+        sort_by_score(&mut rescored, higher_is_better);
         rescored.truncate(k);
-        self.merge_delta(rescored, query, k, metric)
+        rescored
     }
 
     /// Merges HNSW results with the delta buffer (if active).
@@ -113,6 +102,21 @@ impl Collection {
     ) -> Vec<ScoredResult> {
         results
     }
+}
+
+/// Sorts scored results by score (ascending or descending based on metric).
+fn sort_by_score(results: &mut [ScoredResult], higher_is_better: bool) {
+    results.sort_by(|a, b| {
+        if higher_is_better {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
 }
 
 fn rescore_with_metric(
