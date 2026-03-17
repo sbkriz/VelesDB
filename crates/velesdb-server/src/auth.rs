@@ -37,14 +37,19 @@ impl AuthState {
 
 /// Paths that bypass authentication.
 fn is_public_path(path: &str) -> bool {
-    path == "/health" || path == "/ready"
+    path == "/health" || path == "/ready" || path == "/metrics"
 }
 
 /// Extract the Bearer token from the Authorization header value.
 fn extract_bearer_token(header_value: &str) -> Option<&str> {
     let trimmed = header_value.trim();
     if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
-        Some(trimmed[7..].trim())
+        let token = trimmed[7..].trim();
+        if token.is_empty() {
+            None
+        } else {
+            Some(token)
+        }
     } else {
         None
     }
@@ -129,6 +134,11 @@ mod tests {
     }
 
     #[test]
+    fn test_is_public_path_metrics() {
+        assert!(is_public_path("/metrics"));
+    }
+
+    #[test]
     fn test_is_public_path_other() {
         assert!(!is_public_path("/collections"));
         assert!(!is_public_path("/query"));
@@ -149,5 +159,10 @@ mod tests {
         assert_eq!(extract_bearer_token("my-key"), None);
         assert_eq!(extract_bearer_token("Bearer"), None);
         assert_eq!(extract_bearer_token(""), None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_whitespace_only() {
+        assert_eq!(extract_bearer_token("Bearer   "), None);
     }
 }

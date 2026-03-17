@@ -7,8 +7,10 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use std::future::IntoFuture;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -105,7 +107,7 @@ fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
     Ok(state)
 }
 
-fn api_routes() -> Router<Arc<AppState>> {
+fn core_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
@@ -140,6 +142,10 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
         )
+}
+
+fn search_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
@@ -158,6 +164,10 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/aggregate", post(aggregate))
         .route("/query/explain", post(explain))
         .route("/collections/{name}/match", post(match_query))
+}
+
+fn graph_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
@@ -171,6 +181,10 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
         )
+}
+
+fn api_routes() -> Router<Arc<AppState>> {
+    core_routes().merge(search_routes()).merge(graph_routes())
 }
 
 fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
@@ -242,35 +256,53 @@ async fn serve(
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // Create a notify to track when the shutdown signal fires
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let notify_clone = shutdown_notify.clone();
 
-    // Drain timeout already handled by axum's graceful shutdown;
-    // log the configured value for observability
-    tracing::info!("Graceful shutdown complete (drain timeout was {shutdown_timeout_secs}s)");
+    let graceful_shutdown = async move {
+        shutdown_signal().await;
+        notify_clone.notify_one();
+    };
+
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(graceful_shutdown)
+        .into_future();
+
+    // Start server in a task so we can apply drain timeout after signal
+    let server_handle = tokio::spawn(server);
+
+    // Wait for the shutdown signal
+    shutdown_notify.notified().await;
+
+    // Now apply drain timeout
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(shutdown_timeout_secs),
+        server_handle,
+    )
+    .await
+    {
+        Ok(Ok(Ok(()))) => tracing::info!("All connections drained"),
+        Ok(Ok(Err(e))) => tracing::warn!("Server error during drain: {e}"),
+        Ok(Err(e)) => tracing::warn!("Server task error: {e}"),
+        Err(_) => {
+            tracing::warn!(
+                "Drain timeout ({shutdown_timeout_secs}s) reached, forcing shutdown"
+            );
+        }
+    }
+
     flush_and_exit(&state);
     Ok(())
 }
 
-async fn serve_tls(
-    host: &str,
-    port: u16,
+/// Accepts TLS connections until a shutdown signal is received.
+async fn tls_accept_loop(
+    listener: tokio::net::TcpListener,
+    tls_acceptor: TlsAcceptor,
     app: Router,
-    cert_path: &str,
-    key_path: &str,
-    state: Arc<AppState>,
-    shutdown_timeout_secs: u64,
-) -> anyhow::Result<()> {
-    warn_if_exposed(host);
-
-    let tls_acceptor = velesdb_server::tls::load_tls_config(cert_path, key_path)?;
-    let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("VelesDB server listening on https://{}", addr);
-
-    // Track active connections for drain timeout
-    let active_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    active_conns: Arc<std::sync::atomic::AtomicUsize>,
+) {
     let shutdown = tokio::signal::ctrl_c();
 
     #[cfg(unix)]
@@ -290,38 +322,14 @@ async fn serve_tls(
     loop {
         tokio::select! {
             result = listener.accept() => {
-                let (stream, _peer_addr) = result?;
-                let acceptor = tls_acceptor.clone();
-                let tower_service = app.clone();
-                let conns = active_conns.clone();
-                conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                tokio::spawn(async move {
-                    let Ok(tls_stream) = acceptor.accept(stream).await else {
-                        tracing::debug!("TLS handshake failed");
-                        conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        return;
-                    };
-
-                    let io = hyper_util::rt::TokioIo::new(tls_stream);
-                    let hyper_service = hyper::service::service_fn(move |request| {
-                        let clone = tower_service.clone();
-                        async move {
-                            clone.oneshot(request).await
-                        }
-                    });
-
-                    if let Err(err) = hyper_util::server::conn::auto::Builder::new(
-                        hyper_util::rt::TokioExecutor::new(),
-                    )
-                    .serve_connection_with_upgrades(io, hyper_service)
-                    .await
-                    {
-                        tracing::debug!("TLS connection error: {err}");
+                match result {
+                    Ok((stream, _peer_addr)) => {
+                        spawn_tls_connection(stream, tls_acceptor.clone(), app.clone(), active_conns.clone());
                     }
-
-                    conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                });
+                    Err(e) => {
+                        tracing::warn!("Failed to accept TCP connection: {e}");
+                    }
+                }
             }
             _ = &mut shutdown => {
                 tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
@@ -333,8 +341,59 @@ async fn serve_tls(
             }
         }
     }
+}
 
-    // Drain active connections with timeout
+fn spawn_tls_connection(
+    stream: tokio::net::TcpStream,
+    acceptor: TlsAcceptor,
+    app: Router,
+    conns: Arc<std::sync::atomic::AtomicUsize>,
+) {
+    conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tokio::spawn(async move {
+        let Ok(tls_stream) = acceptor.accept(stream).await else {
+            tracing::debug!("TLS handshake failed");
+            conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            return;
+        };
+
+        let io = hyper_util::rt::TokioIo::new(tls_stream);
+        let hyper_service = hyper::service::service_fn(move |request| {
+            let clone = app.clone();
+            async move { clone.oneshot(request).await }
+        });
+
+        if let Err(err) =
+            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                .serve_connection_with_upgrades(io, hyper_service)
+                .await
+        {
+            tracing::debug!("TLS connection error: {err}");
+        }
+
+        conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    });
+}
+
+async fn serve_tls(
+    host: &str,
+    port: u16,
+    app: Router,
+    cert_path: &str,
+    key_path: &str,
+    state: Arc<AppState>,
+    shutdown_timeout_secs: u64,
+) -> anyhow::Result<()> {
+    warn_if_exposed(host);
+
+    let tls_acceptor = velesdb_server::tls::load_tls_config(cert_path, key_path)?;
+    let addr = format!("{host}:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("VelesDB server listening on https://{}", addr);
+
+    let active_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    tls_accept_loop(listener, tls_acceptor, app, active_conns.clone()).await;
+
     drain_connections(&active_conns, shutdown_timeout_secs).await;
     flush_and_exit(&state);
     Ok(())
