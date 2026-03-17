@@ -126,10 +126,13 @@ impl Collection {
 
     /// Extracts the list of columns to aggregate and whether COUNT(*) is present.
     pub(super) fn prepare_agg_columns(aggregations: &[AggregateFunction]) -> (Vec<String>, bool) {
+        let mut seen = std::collections::HashSet::new();
         let columns: Vec<String> = aggregations
             .iter()
             .filter_map(|agg| match &agg.argument {
-                AggregateArg::Column(col) => Some(col.clone()),
+                AggregateArg::Column(col) => {
+                    if seen.insert(col.clone()) { Some(col.clone()) } else { None }
+                }
                 AggregateArg::Wildcard => None,
             })
             .collect();
