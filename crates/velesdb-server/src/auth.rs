@@ -14,6 +14,45 @@ use axum::{
 };
 use std::sync::Arc;
 
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+///
+/// Compares two byte slices in constant time relative to the length of `a`.
+/// Returns `true` only when both slices have equal length and identical contents.
+/// Uses XOR-and-fold so that the comparison does not short-circuit on the first
+/// differing byte.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        // Length mismatch leaks the length difference, but not the key contents.
+        // This is acceptable: an attacker already controls `b` (the submitted
+        // token) and can trivially discover the expected length via other means
+        // (e.g. documentation). The critical property is that *content* is never
+        // leaked through timing.
+        return false;
+    }
+
+    let mut acc: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        acc |= x ^ y;
+    }
+    acc == 0
+}
+
+/// Checks whether `token` matches any configured API key in constant time.
+///
+/// Iterates over **all** keys regardless of early matches to avoid leaking
+/// which key (if any) was correct through timing differences.
+fn any_key_matches(keys: &[String], token: &str) -> bool {
+    let token_bytes = token.as_bytes();
+    let mut matched = false;
+    for key in keys {
+        if constant_time_eq(key.as_bytes(), token_bytes) {
+            matched = true;
+        }
+        // Do NOT early-return — iterate all keys unconditionally.
+    }
+    matched
+}
+
 /// Shared authentication state injected into the middleware.
 #[derive(Debug, Clone)]
 pub struct AuthState {
@@ -81,7 +120,7 @@ pub async fn auth_middleware(
 
     match auth_header {
         Some(value) => match extract_bearer_token(value) {
-            Some(token) if state.api_keys.contains(&token.to_string()) => next.run(request).await,
+            Some(token) if any_key_matches(&state.api_keys, token) => next.run(request).await,
             Some(_) => unauthorized_response("invalid API key"),
             None => {
                 unauthorized_response("invalid Authorization header format, expected: Bearer <key>")
@@ -164,5 +203,47 @@ mod tests {
     #[test]
     fn test_extract_bearer_token_whitespace_only() {
         assert_eq!(extract_bearer_token("Bearer   "), None);
+    }
+
+    // ========================================================================
+    // Constant-time comparison tests
+    // ========================================================================
+
+    #[test]
+    fn test_constant_time_eq_identical() {
+        assert!(constant_time_eq(b"secret-key-42", b"secret-key-42"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_content() {
+        assert!(!constant_time_eq(b"secret-key-42", b"secret-key-43"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_length() {
+        assert!(!constant_time_eq(b"short", b"longer-key"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_any_key_matches_found() {
+        let keys = vec!["key-a".to_string(), "key-b".to_string()];
+        assert!(any_key_matches(&keys, "key-b"));
+    }
+
+    #[test]
+    fn test_any_key_matches_not_found() {
+        let keys = vec!["key-a".to_string(), "key-b".to_string()];
+        assert!(!any_key_matches(&keys, "key-c"));
+    }
+
+    #[test]
+    fn test_any_key_matches_empty_keys() {
+        let keys: Vec<String> = vec![];
+        assert!(!any_key_matches(&keys, "anything"));
     }
 }

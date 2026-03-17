@@ -130,15 +130,12 @@ impl Database {
     /// Best-effort: logs warnings for individual flush failures but continues
     /// flushing remaining collections. Returns the count of failures.
     ///
-    /// Note: the legacy `collections` registry is intentionally skipped because
-    /// it shares the same `Arc`'d storage as the typed registries — flushing it
-    /// would double-flush every collection.
-    #[allow(deprecated)]
+    /// The legacy `collections` registry is **not** iterated because it shares
+    /// the same `Arc`'d inner storage as the typed registries. Flushing both
+    /// would double-flush every collection, causing redundant I/O and
+    /// potentially double-counting failures.
     pub fn flush_all(&self) -> usize {
         let mut failures: usize = 0;
-
-        // Typed registries only — legacy `collections` shares the same Arc'd
-        // storage, so flushing it would double-flush every collection.
 
         // Vector collections
         for (name, coll) in self.vector_colls.read().iter() {

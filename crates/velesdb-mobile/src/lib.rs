@@ -47,9 +47,11 @@
 
 uniffi::setup_scaffolding!();
 
+mod agent;
 mod graph;
 mod types;
 
+pub use agent::{SemanticResult, VelesSemanticMemory};
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
