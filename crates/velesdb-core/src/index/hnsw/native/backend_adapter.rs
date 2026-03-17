@@ -18,11 +18,23 @@ use std::path::Path;
 
 struct LoadedGraph {
     layers: Vec<Layer>,
+    /// Number of layers (used during loading before `layers` is populated).
+    num_layers: usize,
     max_connections: usize,
     max_connections_0: usize,
     ef_construction: usize,
     entry_point: usize,
     max_layer: usize,
+}
+
+/// Temporary struct for graph file header fields during dump.
+struct GraphFileHeader {
+    num_layers: u32,
+    max_connections: u32,
+    max_connections_0: u32,
+    ef_construction: u32,
+    entry_point: u64,
+    max_layer: u32,
 }
 
 // ============================================================================
@@ -205,15 +217,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     ///
     /// Returns `io::Error` if file operations fail.
     pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
-        // Dump vectors
+        let count = self.dump_vectors_file(path, basename)?;
+        self.dump_graph_file(path, basename, count)?;
+        Ok(())
+    }
+
+    /// Writes vector data to `{basename}.vectors`.
+    fn dump_vectors_file(&self, path: &Path, basename: &str) -> std::io::Result<u64> {
         let vectors_path = path.join(format!("{basename}.vectors"));
         let vectors_guard = self.vectors.read();
         let mut writer = BufWriter::new(File::create(&vectors_path)?);
 
-        // Write header: version, count, dimension
         let version: u32 = 1;
-        // SAFETY (EPIC-067/US-002): Vector dimensions are always < 65536 in practice
-        // and vector count fits u64.
+        // Reason: Vector dimensions are always < 65536 and vector count fits u64.
         #[allow(clippy::cast_possible_truncation)]
         let (count, dimension): (u64, u32) = match vectors_guard.as_ref() {
             Some(v) => (v.len() as u64, v.dimension() as u32),
@@ -224,7 +240,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         writer.write_all(&count.to_le_bytes())?;
         writer.write_all(&dimension.to_le_bytes())?;
 
-        // Write vectors from contiguous storage (cold path — safe access preferred)
         if let Some(vectors) = vectors_guard.as_ref() {
             for i in 0..vectors.len() {
                 if let Some(vec) = vectors.get(i) {
@@ -235,58 +250,65 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             }
         }
         writer.flush()?;
-        drop(writer);
+        Ok(count)
+    }
 
-        // Dump graph structure
+    /// Writes graph structure to `{basename}.graph`.
+    fn dump_graph_file(
+        &self,
+        path: &Path,
+        basename: &str,
+        count: u64,
+    ) -> std::io::Result<()> {
         let graph_path = path.join(format!("{basename}.graph"));
         let layers = self.layers.read();
         let mut writer = BufWriter::new(File::create(&graph_path)?);
 
-        // Write header
-        // SAFETY (EPIC-067/US-002): HNSW params are always small (<256 for layers, <1024 for connections)
+        let version: u32 = 1;
+        // Reason: HNSW params are always small (<256 layers, <1024 connections).
         #[allow(clippy::cast_possible_truncation)]
-        let num_layers = layers.len() as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let max_connections = self.max_connections as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let max_connections_0 = self.max_connections_0 as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let ef_construction = self.ef_construction as u32;
-        let entry_point = self.entry_point.read().unwrap_or(0) as u64;
-        #[allow(clippy::cast_possible_truncation)]
-        let max_layer = self.max_layer.load(std::sync::atomic::Ordering::Relaxed) as u32;
+        let header = GraphFileHeader {
+            num_layers: layers.len() as u32,
+            max_connections: self.max_connections as u32,
+            max_connections_0: self.max_connections_0 as u32,
+            ef_construction: self.ef_construction as u32,
+            entry_point: self.entry_point.read().unwrap_or(0) as u64,
+            max_layer: self.max_layer.load(std::sync::atomic::Ordering::Relaxed) as u32,
+        };
 
         writer.write_all(&version.to_le_bytes())?;
-        writer.write_all(&num_layers.to_le_bytes())?;
-        writer.write_all(&max_connections.to_le_bytes())?;
-        writer.write_all(&max_connections_0.to_le_bytes())?;
-        writer.write_all(&ef_construction.to_le_bytes())?;
-        writer.write_all(&entry_point.to_le_bytes())?;
-        writer.write_all(&max_layer.to_le_bytes())?;
+        writer.write_all(&header.num_layers.to_le_bytes())?;
+        writer.write_all(&header.max_connections.to_le_bytes())?;
+        writer.write_all(&header.max_connections_0.to_le_bytes())?;
+        writer.write_all(&header.ef_construction.to_le_bytes())?;
+        writer.write_all(&header.entry_point.to_le_bytes())?;
+        writer.write_all(&header.max_layer.to_le_bytes())?;
         writer.write_all(&count.to_le_bytes())?;
 
-        // Write each layer
-        for layer in layers.iter() {
+        Self::write_layer_data(&mut writer, &layers)?;
+        writer.flush()
+    }
+
+    /// Serializes all layers' neighbor lists to the writer.
+    fn write_layer_data(writer: &mut BufWriter<File>, layers: &[Layer]) -> std::io::Result<()> {
+        for layer in layers {
             let num_nodes = layer.neighbors.len() as u64;
             writer.write_all(&num_nodes.to_le_bytes())?;
 
             for node_neighbors in &layer.neighbors {
                 let neighbors = node_neighbors.read();
-                // SAFETY (EPIC-067/US-002): num_neighbors <= max_connections < 1024
+                // Reason: num_neighbors <= max_connections < 1024
                 #[allow(clippy::cast_possible_truncation)]
                 let num_neighbors = neighbors.len() as u32;
                 writer.write_all(&num_neighbors.to_le_bytes())?;
                 for &neighbor in neighbors.iter() {
-                    // SAFETY (EPIC-067/US-002): NodeId stored as u32 in file format v1
-                    // This limits graph to 4B nodes which is acceptable for HNSW
+                    // Reason: NodeId stored as u32 in file format v1
                     #[allow(clippy::cast_possible_truncation)]
                     let neighbor_u32 = neighbor as u32;
                     writer.write_all(&neighbor_u32.to_le_bytes())?;
                 }
             }
         }
-        writer.flush()?;
-
         Ok(())
     }
 
@@ -337,6 +359,18 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         path: &Path,
     ) -> std::io::Result<(Option<crate::perf_optimizations::ContiguousVectors>, usize)> {
         let mut reader = BufReader::new(File::open(path)?);
+
+        let (count, dimension) = Self::read_vectors_header(&mut reader)?;
+        if count == 0 || dimension == 0 {
+            return Ok((None, 0));
+        }
+
+        let storage = Self::read_vector_data(&mut reader, count, dimension)?;
+        Ok((Some(storage), count))
+    }
+
+    /// Reads and validates the vectors file header, returning `(count, dimension)`.
+    fn read_vectors_header(reader: &mut BufReader<File>) -> std::io::Result<(usize, usize)> {
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
 
@@ -354,13 +388,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         reader.read_exact(&mut buf4)?;
         let dimension = u32::from_le_bytes(buf4) as usize;
 
-        if count == 0 || dimension == 0 {
-            return Ok((None, 0));
-        }
+        Ok((count, dimension))
+    }
 
+    /// Reads `count` vectors of `dimension` from the reader into contiguous storage.
+    fn read_vector_data(
+        reader: &mut BufReader<File>,
+        count: usize,
+        dimension: usize,
+    ) -> std::io::Result<crate::perf_optimizations::ContiguousVectors> {
         let mut storage =
             crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16))
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut buf4 = [0u8; 4];
         let mut buf_vec = vec![0f32; dimension];
         for _ in 0..count {
             for slot in &mut buf_vec {
@@ -371,11 +411,28 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 .push(&buf_vec)
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
-        Ok((Some(storage), count))
+        Ok(storage)
     }
 
     fn load_graph_file(path: &Path) -> std::io::Result<LoadedGraph> {
         let mut reader = BufReader::new(File::open(path)?);
+
+        let graph_header = Self::read_graph_header(&mut reader)?;
+        let layers = Self::read_graph_layers(&mut reader, graph_header.num_layers)?;
+
+        Ok(LoadedGraph {
+            layers,
+            num_layers: graph_header.num_layers,
+            max_connections: graph_header.max_connections,
+            max_connections_0: graph_header.max_connections_0,
+            ef_construction: graph_header.ef_construction,
+            entry_point: graph_header.entry_point,
+            max_layer: graph_header.max_layer,
+        })
+    }
+
+    /// Reads and validates the graph file header.
+    fn read_graph_header(reader: &mut BufReader<File>) -> std::io::Result<LoadedGraph> {
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
 
@@ -388,22 +445,43 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             ));
         }
 
-        reader.read_exact(&mut buf4)?;
-        let num_layers = u32::from_le_bytes(buf4) as usize;
-        reader.read_exact(&mut buf4)?;
-        let max_connections = u32::from_le_bytes(buf4) as usize;
-        reader.read_exact(&mut buf4)?;
-        let max_connections_0 = u32::from_le_bytes(buf4) as usize;
-        reader.read_exact(&mut buf4)?;
-        let ef_construction = u32::from_le_bytes(buf4) as usize;
-        reader.read_exact(&mut buf8)?;
-        let entry_point = u64::from_le_bytes(buf8) as usize;
-        reader.read_exact(&mut buf4)?;
-        let max_layer = u32::from_le_bytes(buf4) as usize;
-        reader.read_exact(&mut buf8)?;
-        let _count_check = u64::from_le_bytes(buf8) as usize;
+        let read_u32 = |r: &mut BufReader<File>, b: &mut [u8; 4]| -> std::io::Result<usize> {
+            r.read_exact(b)?;
+            Ok(u32::from_le_bytes(*b) as usize)
+        };
+        let read_u64 = |r: &mut BufReader<File>, b: &mut [u8; 8]| -> std::io::Result<usize> {
+            r.read_exact(b)?;
+            Ok(u64::from_le_bytes(*b) as usize)
+        };
 
+        let num_layers = read_u32(reader, &mut buf4)?;
+        let max_connections = read_u32(reader, &mut buf4)?;
+        let max_connections_0 = read_u32(reader, &mut buf4)?;
+        let ef_construction = read_u32(reader, &mut buf4)?;
+        let entry_point = read_u64(reader, &mut buf8)?;
+        let max_layer = read_u32(reader, &mut buf4)?;
+        let _count_check = read_u64(reader, &mut buf8)?;
+
+        Ok(LoadedGraph {
+            layers: Vec::new(), // populated by caller
+            num_layers,
+            max_connections,
+            max_connections_0,
+            ef_construction,
+            entry_point,
+            max_layer,
+        })
+    }
+
+    /// Reads `num_layers` layers from the graph file.
+    fn read_graph_layers(
+        reader: &mut BufReader<File>,
+        num_layers: usize,
+    ) -> std::io::Result<Vec<Layer>> {
+        let mut buf4 = [0u8; 4];
+        let mut buf8 = [0u8; 8];
         let mut layers = Vec::with_capacity(num_layers);
+
         for _ in 0..num_layers {
             reader.read_exact(&mut buf8)?;
             let num_nodes = u64::from_le_bytes(buf8) as usize;
@@ -421,14 +499,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             layers.push(layer);
         }
 
-        Ok(LoadedGraph {
-            layers,
-            max_connections,
-            max_connections_0,
-            ef_construction,
-            entry_point,
-            max_layer,
-        })
+        Ok(layers)
     }
 }
 

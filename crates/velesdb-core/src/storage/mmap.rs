@@ -100,75 +100,20 @@ impl MmapStorage {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
 
-        // Issue #318: Recover from interrupted compaction artifacts
-        // (.bak/.tmp files) before opening the data file.
         let data_path = path.join("vectors.dat");
         compaction::recover_compaction_artifacts(&data_path)?;
 
-        // 1. Open/Create Data File
-        let data_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&data_path)?;
+        let data_file = Self::open_data_file(&data_path)?;
+        let mmap = Self::create_initial_mmap(&data_file)?;
 
-        let file_len = data_file.metadata()?.len();
-        if file_len == 0 {
-            data_file.set_len(Self::INITIAL_SIZE)?;
-        }
-
-        // SAFETY: data_file is a valid, open file with set_len() called to ensure
-        // the mapping range is fully allocated.
-        // - Condition 1: File was opened with read+write permissions.
-        // - Condition 2: set_len() was called to ensure the file has INITIAL_SIZE bytes.
-        // - Condition 3: MmapMut requires readable and writable file, guaranteed by OpenOptions.
-        // Reason: Memory mapping requires unsafe due to potential for undefined behavior if file is truncated externally.
-        let mmap = unsafe { MmapMut::map_mut(&data_file)? };
-
-        // 2. Open/Create WAL
         let wal_path = path.join("vectors.wal");
-        let wal_file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&wal_path)?;
-        let wal = io::BufWriter::new(wal_file);
+        let wal = Self::open_wal(&wal_path)?;
 
-        // 3. Load Index (EPIC-033/US-004: Convert to ShardedIndex)
         let index_path = path.join("vectors.idx");
-        let (index, next_offset) = if index_path.exists() {
-            let bytes = std::fs::read(&index_path)?;
-            let flat_index: FxHashMap<u64, usize> = postcard::from_bytes(&bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let (index, next_offset) = Self::load_index(&index_path, dimension)?;
 
-            // Calculate next_offset based on stored data
-            let max_offset = flat_index.values().max().copied().unwrap_or(0);
-            let size = if flat_index.is_empty() {
-                0
-            } else {
-                max_offset + dimension * 4
-            };
-
-            // Convert to ShardedIndex
-            (ShardedIndex::from_hashmap(flat_index), size)
-        } else {
-            (ShardedIndex::new(), 0)
-        };
-
-        // Issue #317: Replay WAL to recover writes since last flush.
-        // `mmap` is still a plain MmapMut here (not yet wrapped in RwLock).
-        let mut next_offset = next_offset;
-        let mut mmap = mmap;
-        let replayed = wal_replay::replay_wal_to_index(
-            &wal_path,
-            &index,
-            dimension,
-            &mut mmap,
-            &mut next_offset,
-        )?;
-        if replayed > 0 {
-            mmap.flush()?;
-        }
+        let (mmap, next_offset) =
+            Self::replay_wal(mmap, next_offset, &wal_path, &index, dimension)?;
 
         Ok(Self {
             path,
@@ -181,6 +126,83 @@ impl MmapStorage {
             metrics: Arc::new(StorageMetrics::new()),
             remap_epoch: AtomicU64::new(0),
         })
+    }
+
+    /// Opens or creates the data file, ensuring it has at least `INITIAL_SIZE` bytes.
+    fn open_data_file(data_path: &Path) -> io::Result<File> {
+        let data_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(data_path)?;
+
+        let file_len = data_file.metadata()?.len();
+        if file_len == 0 {
+            data_file.set_len(Self::INITIAL_SIZE)?;
+        }
+        Ok(data_file)
+    }
+
+    /// Creates the initial memory map for the data file.
+    fn create_initial_mmap(data_file: &File) -> io::Result<MmapMut> {
+        // SAFETY: data_file is a valid, open file with set_len() called to ensure
+        // the mapping range is fully allocated.
+        // - Condition 1: File was opened with read+write permissions.
+        // - Condition 2: set_len() was called to ensure the file has INITIAL_SIZE bytes.
+        // - Condition 3: MmapMut requires readable and writable file, guaranteed by OpenOptions.
+        // Reason: Memory mapping requires unsafe due to potential for undefined behavior if file is truncated externally.
+        unsafe { MmapMut::map_mut(data_file) }
+    }
+
+    /// Opens or creates the WAL file wrapped in a buffered writer.
+    fn open_wal(wal_path: &Path) -> io::Result<io::BufWriter<File>> {
+        let wal_file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(wal_path)?;
+        Ok(io::BufWriter::new(wal_file))
+    }
+
+    /// Loads the sharded index from disk, returning the index and the next write offset.
+    fn load_index(index_path: &Path, dimension: usize) -> io::Result<(ShardedIndex, usize)> {
+        if !index_path.exists() {
+            return Ok((ShardedIndex::new(), 0));
+        }
+
+        let bytes = std::fs::read(index_path)?;
+        let flat_index: FxHashMap<u64, usize> = postcard::from_bytes(&bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let max_offset = flat_index.values().max().copied().unwrap_or(0);
+        let size = if flat_index.is_empty() {
+            0
+        } else {
+            max_offset + dimension * 4
+        };
+
+        Ok((ShardedIndex::from_hashmap(flat_index), size))
+    }
+
+    /// Replays the WAL to recover writes since the last flush.
+    fn replay_wal(
+        mut mmap: MmapMut,
+        mut next_offset: usize,
+        wal_path: &Path,
+        index: &ShardedIndex,
+        dimension: usize,
+    ) -> io::Result<(MmapMut, usize)> {
+        let replayed = wal_replay::replay_wal_to_index(
+            wal_path,
+            index,
+            dimension,
+            &mut mmap,
+            &mut next_offset,
+        )?;
+        if replayed > 0 {
+            mmap.flush()?;
+        }
+        Ok((mmap, next_offset))
     }
 
     /// Ensures the memory map is large enough to hold data at `offset`.

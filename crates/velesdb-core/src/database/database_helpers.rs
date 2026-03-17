@@ -36,21 +36,23 @@ impl Database {
         let arr = value
             .as_array()
             .ok_or_else(|| Error::Query("'vector' must be an array of numbers".to_string()))?;
-        let mut out = Vec::with_capacity(arr.len());
-        for v in arr {
-            let f = v
-                .as_f64()
-                .ok_or_else(|| Error::Query("vector values must be numeric".to_string()))?;
-            if !f.is_finite() || f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
-                return Err(Error::Query(
-                    "vector values must be finite f32-compatible numbers".to_string(),
-                ));
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            let as_f32 = f as f32;
-            out.push(as_f32);
+        arr.iter().map(Self::json_element_to_f32).collect()
+    }
+
+    /// Converts a single JSON number to an f32, validating range and finiteness.
+    fn json_element_to_f32(v: &serde_json::Value) -> Result<f32> {
+        let f = v
+            .as_f64()
+            .ok_or_else(|| Error::Query("vector values must be numeric".to_string()))?;
+        if !f.is_finite() || f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
+            return Err(Error::Query(
+                "vector values must be finite f32-compatible numbers".to_string(),
+            ));
         }
-        Ok(out)
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: range validated above against f32::MIN..=f32::MAX.
+        let as_f32 = f as f32;
+        Ok(as_f32)
     }
 
     pub(super) fn build_update_filter(
@@ -113,20 +115,39 @@ impl Database {
     }
 
     pub(super) fn build_join_column_store(collection: &Collection) -> Result<ColumnStore> {
-        use crate::column_store::{ColumnType, ColumnValue};
-
         let ids = collection.all_ids();
         let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
+
+        let schema = Self::infer_column_schema(&points);
+        let schema_refs: Vec<(&str, crate::column_store::ColumnType)> = schema
+            .iter()
+            .map(|(name, ty)| (name.as_str(), *ty))
+            .collect();
+
+        let mut store = ColumnStore::with_primary_key(&schema_refs, "id")
+            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
+
+        for point in &points {
+            Self::insert_point_row(point, &schema_refs, &mut store)?;
+        }
+
+        Ok(store)
+    }
+
+    /// Infers a consistent column schema from point payloads.
+    ///
+    /// Removes columns whose types are inconsistent across points.
+    fn infer_column_schema(
+        points: &[crate::Point],
+    ) -> Vec<(String, crate::column_store::ColumnType)> {
+        use crate::column_store::ColumnType;
 
         let mut inferred: std::collections::BTreeMap<String, ColumnType> =
             std::collections::BTreeMap::new();
         inferred.insert("id".to_string(), ColumnType::Int);
 
-        for point in &points {
-            let Some(payload) = point.payload.as_ref() else {
-                continue;
-            };
-            let Some(obj) = payload.as_object() else {
+        for point in points {
+            let Some(obj) = point.payload.as_ref().and_then(|p| p.as_object()) else {
                 continue;
             };
             for (key, value) in obj {
@@ -146,50 +167,43 @@ impl Database {
             }
         }
 
-        let schema: Vec<(String, ColumnType)> = inferred.into_iter().collect();
-        let schema_refs: Vec<(&str, ColumnType)> = schema
-            .iter()
-            .map(|(name, ty)| (name.as_str(), *ty))
-            .collect();
+        inferred.into_iter().collect()
+    }
 
-        let mut store = ColumnStore::with_primary_key(&schema_refs, "id")
-            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
-        for point in &points {
-            let Ok(pk) = i64::try_from(point.id) else {
-                continue;
-            };
+    /// Inserts a single point as a row into the column store.
+    fn insert_point_row(
+        point: &crate::Point,
+        schema_refs: &[(&str, crate::column_store::ColumnType)],
+        store: &mut ColumnStore,
+    ) -> Result<()> {
+        use crate::column_store::ColumnValue;
 
-            let mut values: Vec<(String, ColumnValue)> = Vec::with_capacity(schema.len());
-            values.push(("id".to_string(), ColumnValue::Int(pk)));
+        let Ok(pk) = i64::try_from(point.id) else {
+            return Ok(());
+        };
 
-            if let Some(obj) = point
-                .payload
-                .as_ref()
-                .and_then(serde_json::Value::as_object)
-            {
-                for (key, value) in obj {
-                    if key == "id" {
-                        continue;
-                    }
-                    if !schema_refs.iter().any(|(name, _)| *name == key.as_str()) {
-                        continue;
-                    }
-                    if let Some(column_value) = Self::json_to_column_value(value, &mut store) {
-                        values.push((key.clone(), column_value));
-                    }
+        let mut values: Vec<(String, ColumnValue)> = Vec::with_capacity(schema_refs.len());
+        values.push(("id".to_string(), ColumnValue::Int(pk)));
+
+        if let Some(obj) = point.payload.as_ref().and_then(serde_json::Value::as_object) {
+            for (key, value) in obj {
+                if key == "id" || !schema_refs.iter().any(|(name, _)| *name == key.as_str()) {
+                    continue;
+                }
+                if let Some(column_value) = Self::json_to_column_value(value, store) {
+                    values.push((key.clone(), column_value));
                 }
             }
-
-            let row: Vec<(&str, ColumnValue)> = values
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.clone()))
-                .collect();
-            store
-                .insert_row(&row)
-                .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
         }
 
-        Ok(store)
+        let row: Vec<(&str, ColumnValue)> = values
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.clone()))
+            .collect();
+        store
+            .insert_row(&row)
+            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
+        Ok(())
     }
 
     fn json_to_column_type(value: &serde_json::Value) -> Option<crate::column_store::ColumnType> {

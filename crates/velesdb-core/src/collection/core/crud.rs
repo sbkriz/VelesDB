@@ -21,18 +21,23 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension, or if
     /// attempting to insert vectors into a metadata-only collection.
-    #[allow(clippy::too_many_lines)] // Monolithic for coherent lock-ordering; refactor tracked separately.
+    /// Inserts or updates points in the collection.
+    ///
+    /// Accepts any iterator of points (Vec, slice, array, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point has a mismatched dimension, or if
+    /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
         let dimension = config.dimension;
         let storage_mode = config.storage_mode;
-        let metadata_only = config.metadata_only;
 
-        if metadata_only {
+        if config.metadata_only {
             for point in &points {
                 if !point.vector.is_empty() {
-                    // Lazy clone: name only allocated on this error path.
                     return Err(Error::VectorNotAllowed(config.name.clone()));
                 }
             }
@@ -45,11 +50,22 @@ impl Collection {
             validate_dimension_match(dimension, point.dimension())?;
         }
 
-        // Buffer sparse data for batch insert after storage locks are released.
-        // LOCK ORDER: sparse_indexes(9) acquired AFTER vector_storage(2) + payload_storage(3).
-        let mut sparse_batch: Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> =
-            Vec::new();
+        let sparse_batch = self.upsert_storage_and_index(&points, storage_mode)?;
 
+        self.apply_sparse_batch_upsert(&sparse_batch)?;
+        self.invalidate_caches_and_bump_generation();
+        Ok(())
+    }
+
+    /// Stores vectors, payloads, and indexes for a batch of points.
+    ///
+    /// Returns buffered sparse vectors for deferred insertion.
+    fn upsert_storage_and_index(
+        &self,
+        points: &[Point],
+        storage_mode: StorageMode,
+    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
+        let mut sparse_batch = Vec::new();
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
 
@@ -71,11 +87,8 @@ impl Collection {
             vector_storage.store(point.id, &point.vector)?;
 
             self.cache_quantized_vector(
-                &point,
-                storage_mode,
-                sq8_cache.as_deref_mut(),
-                binary_cache.as_deref_mut(),
-                pq_cache.as_deref_mut(),
+                point, storage_mode,
+                sq8_cache.as_deref_mut(), binary_cache.as_deref_mut(), pq_cache.as_deref_mut(),
             );
 
             if let Some(payload) = &point.payload {
@@ -84,82 +97,74 @@ impl Collection {
                 let _ = payload_storage.delete(point.id);
             }
 
-            self.update_secondary_indexes_on_upsert(
-                point.id,
-                old_payload.as_ref(),
-                point.payload.as_ref(),
-            );
-
+            self.update_secondary_indexes_on_upsert(point.id, old_payload.as_ref(), point.payload.as_ref());
             self.index.insert(point.id, &point.vector);
+            Self::update_text_index(&self.text_index, point);
 
-            if let Some(payload) = &point.payload {
-                let text = Self::extract_text_from_payload(payload);
-                if !text.is_empty() {
-                    self.text_index.add_document(point.id, &text);
-                }
-            } else {
-                self.text_index.remove_document(point.id);
-            }
-
-            // Buffer sparse vectors for batch insert after releasing storage locks.
-            if let Some(sv_map) = point.sparse_vectors {
+            if let Some(ref sv_map) = point.sparse_vectors {
                 if !sv_map.is_empty() {
-                    sparse_batch.push((point.id, sv_map));
+                    sparse_batch.push((point.id, sv_map.clone()));
                 }
             }
         }
 
-        // LOCK ORDER: flush while vector_storage(2) + payload_storage(3) still held,
-        // then drop both before acquiring config(1) alone to avoid inversion.
         let point_count = vector_storage.len();
         vector_storage.flush()?;
         payload_storage.flush()?;
         drop(vector_storage);
         drop(payload_storage);
 
-        // config(1) only — all higher-numbered locks released above.
-        let mut config = self.config.write();
-        config.point_count = point_count;
-        drop(config);
-
+        self.config.write().point_count = point_count;
         self.index.save(&self.path)?;
 
-        // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
-        if !sparse_batch.is_empty() {
-            // WAL-before-apply: persist the intent to disk BEFORE mutating the
-            // in-memory index. A crash between WAL write and index insert is safe
-            // because the WAL is replayed on recovery; a crash after index insert
-            // but before WAL write would lose the update.
-            #[cfg(feature = "persistence")]
-            {
-                for (point_id, sv_map) in &sparse_batch {
-                    for (name, sv) in sv_map {
-                        let wal_path =
-                            crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                        crate::index::sparse::persistence::wal_append_upsert(
-                            &wal_path, *point_id, sv,
-                        )?;
-                    }
-                }
-            }
+        Ok(sparse_batch)
+    }
 
-            let mut indexes = self.sparse_indexes.write();
-            for (point_id, sv_map) in &sparse_batch {
+    /// Updates the BM25 text index for a single point.
+    fn update_text_index(text_index: &crate::index::Bm25Index, point: &Point) {
+        if let Some(payload) = &point.payload {
+            let text = Self::extract_text_from_payload(payload);
+            if !text.is_empty() {
+                text_index.add_document(point.id, &text);
+            }
+        } else {
+            text_index.remove_document(point.id);
+        }
+    }
+
+    /// Applies buffered sparse vector upserts with WAL-before-apply semantics.
+    fn apply_sparse_batch_upsert(
+        &self,
+        sparse_batch: &[(u64, BTreeMap<String, crate::index::sparse::SparseVector>)],
+    ) -> Result<()> {
+        if sparse_batch.is_empty() {
+            return Ok(());
+        }
+        #[cfg(feature = "persistence")]
+        {
+            for (point_id, sv_map) in sparse_batch {
                 for (name, sv) in sv_map {
-                    let idx = indexes.entry(name.clone()).or_default();
-                    idx.insert(*point_id, sv);
+                    let wal_path =
+                        crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
                 }
             }
         }
+        let mut indexes = self.sparse_indexes.write();
+        for (point_id, sv_map) in sparse_batch {
+            for (name, sv) in sv_map {
+                let idx = indexes.entry(name.clone()).or_default();
+                idx.insert(*point_id, sv);
+            }
+        }
+        Ok(())
+    }
 
-        // Invalidate stats cache so the next get_stats() recomputes fresh data.
+    /// Invalidates stats cache and bumps write generation.
+    fn invalidate_caches_and_bump_generation(&self) {
         *self.cached_stats.lock() = None;
-
-        // Bump write generation once per batch (CACHE-01 invalidation counter).
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        Ok(())
     }
 
     /// Inserts or updates metadata-only points (no vectors).
@@ -232,124 +237,104 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
-    #[allow(clippy::too_many_lines)] // Monolithic for coherent lock-ordering; refactor tracked separately.
+    /// Bulk insert optimized for high-throughput import.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point has a mismatched dimension.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
         }
 
-        let config = self.config.read();
-        let dimension = config.dimension;
-        drop(config);
-
+        let dimension = self.config.read().dimension;
         for point in points {
             validate_dimension_match(dimension, point.dimension())?;
         }
 
-        // Perf: Collect vectors for parallel HNSW insertion (needed for clone anyway)
         let vectors_for_hnsw: Vec<(u64, Vec<f32>)> =
             points.iter().map(|p| (p.id, p.vector.clone())).collect();
+        let sparse_batch = Self::collect_sparse_batch(points);
 
-        // Collect sparse vectors grouped by index name for batch insert.
-        // LOCK ORDER: sparse_indexes(9) acquired AFTER all lower-numbered locks.
-        let mut sparse_batch: BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>> =
+        self.bulk_store_vectors(&vectors_for_hnsw)?;
+        self.bulk_store_payloads(points)?;
+
+        let inserted = self.index.insert_batch_parallel(vectors_for_hnsw);
+        self.index.set_searching_mode();
+
+        self.config.write().point_count = self.vector_storage.read().len();
+
+        self.apply_sparse_batch_bulk(&sparse_batch)?;
+        self.invalidate_caches_and_bump_generation();
+
+        Ok(inserted)
+    }
+
+    /// Collects sparse vectors grouped by index name for batch insert.
+    fn collect_sparse_batch(
+        points: &[Point],
+    ) -> BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>> {
+        let mut batch: BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>> =
             BTreeMap::new();
         for point in points {
             if let Some(sv_map) = &point.sparse_vectors {
                 for (name, sv) in sv_map {
-                    sparse_batch
-                        .entry(name.clone())
-                        .or_default()
-                        .push((point.id, sv.clone()));
+                    batch.entry(name.clone()).or_default().push((point.id, sv.clone()));
                 }
             }
         }
+        batch
+    }
 
-        // Perf: Single batch WAL write + contiguous mmap write
-        // Use references from vectors_for_hnsw to avoid double allocation
-        let vectors_for_storage: Vec<(u64, &[f32])> = vectors_for_hnsw
-            .iter()
-            .map(|(id, v)| (*id, v.as_slice()))
-            .collect();
+    /// Stores vectors in bulk via batch WAL + mmap write.
+    fn bulk_store_vectors(&self, vectors: &[(u64, Vec<f32>)]) -> Result<()> {
+        let refs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        let mut storage = self.vector_storage.write();
+        storage.store_batch(&refs)?;
+        storage.flush()?;
+        Ok(())
+    }
 
+    /// Stores payloads and updates BM25 text index in bulk.
+    fn bulk_store_payloads(&self, points: &[Point]) -> Result<()> {
+        let mut storage = self.payload_storage.write();
+        for point in points {
+            if let Some(payload) = &point.payload {
+                storage.store(point.id, payload)?;
+                let text = Self::extract_text_from_payload(payload);
+                if !text.is_empty() {
+                    self.text_index.add_document(point.id, &text);
+                }
+            }
+        }
+        storage.flush()?;
+        Ok(())
+    }
+
+    /// Applies sparse batch with WAL-before-apply for bulk insert.
+    fn apply_sparse_batch_bulk(
+        &self,
+        sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
+    ) -> Result<()> {
+        if sparse_batch.is_empty() {
+            return Ok(());
+        }
+        #[cfg(feature = "persistence")]
         {
-            let mut vector_storage = self.vector_storage.write();
-            vector_storage.store_batch(&vectors_for_storage)?;
-            // Perf: Flush while lock is already held — avoids a second write() acquisition
-            vector_storage.flush()?;
-        }
-
-        // Store payloads and update BM25 (still sequential for now)
-        {
-            let mut payload_storage = self.payload_storage.write();
-            for point in points {
-                if let Some(payload) = &point.payload {
-                    payload_storage.store(point.id, payload)?;
-
-                    // Update BM25 text index
-                    let text = Self::extract_text_from_payload(payload);
-                    if !text.is_empty() {
-                        self.text_index.add_document(point.id, &text);
-                    }
-                }
-            }
-            // Perf: Flush while lock is already held — avoids a second write() acquisition
-            payload_storage.flush()?;
-        }
-
-        // Perf: Parallel HNSW insertion (CPU bound - benefits from parallelism)
-        let inserted = self.index.insert_batch_parallel(vectors_for_hnsw);
-        self.index.set_searching_mode();
-
-        // Update point count
-        let mut config = self.config.write();
-        config.point_count = self.vector_storage.read().len();
-        drop(config);
-        // NOTE: index.save() removed - too slow for batch operations
-        // Call collection.flush() explicitly if durability is critical
-
-        // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
-        if !sparse_batch.is_empty() {
-            // WAL-before-apply: persist the intent to disk BEFORE mutating the
-            // in-memory index, matching the semantics of upsert().
-            #[cfg(feature = "persistence")]
-            {
-                for (name, docs) in &sparse_batch {
-                    let wal_path =
-                        crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                    for (point_id, sv) in docs {
-                        crate::index::sparse::persistence::wal_append_upsert(
-                            &wal_path, *point_id, sv,
-                        )?;
-                    }
-                }
-            }
-
-            let mut indexes = self.sparse_indexes.write();
             for (name, docs) in sparse_batch {
-                let idx = indexes.entry(name).or_default();
-                idx.insert_batch_chunk(&docs);
+                let wal_path =
+                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                for (point_id, sv) in docs {
+                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
+                }
             }
         }
-
-        // Invalidate stats cache so the next get_stats() recomputes fresh data.
-        // Placed AFTER sparse mutations so a concurrent get_stats() cannot cache
-        // stats that are missing the sparse data (mirrors ordering in upsert()).
-        *self.cached_stats.lock() = None;
-
-        // Bump write generation once per batch (CACHE-01 invalidation counter).
-        //
-        // Intentional placement: the bump occurs AFTER all mutations (vector
-        // storage write, payload storage write, HNSW insertion, config update)
-        // have completed successfully. Bumping earlier would allow a concurrent
-        // reader to see the new generation before the data is consistent,
-        // causing it to build a fresh plan key that matches no cached entry —
-        // harmless, but wasteful. Bumping here ensures cache invalidation is
-        // visible only once all writes are durable.
-        self.write_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        Ok(inserted)
+        let mut indexes = self.sparse_indexes.write();
+        for (name, docs) in sparse_batch {
+            let idx = indexes.entry(name.clone()).or_default();
+            idx.insert_batch_chunk(docs);
+        }
+        Ok(())
     }
 
     /// Retrieves points by their IDs.
@@ -398,93 +383,80 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
-        let config = self.config.read();
-        let is_metadata_only = config.metadata_only;
-        drop(config);
-
-        let mut payload_storage = self.payload_storage.write();
-
-        if is_metadata_only {
-            // For metadata-only collections, only delete from payload storage
-            for &id in ids {
-                let old_payload = payload_storage.retrieve(id).ok().flatten();
-                payload_storage.delete(id)?;
-                self.text_index.remove_document(id);
-                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
-            }
-
-            // LOCK ORDER: drop payload_storage(3) before acquiring config(1).
-            let point_count = payload_storage.ids().len();
-            drop(payload_storage);
-            // config(1) only — all higher-numbered locks released above.
-            let mut config = self.config.write();
-            config.point_count = point_count;
-            drop(config);
+        if self.config.read().metadata_only {
+            self.delete_metadata_only(ids)?;
         } else {
-            // For vector collections, delete from all stores
-            let mut vector_storage = self.vector_storage.write();
-            // Acquire cache locks once outside the loop (was N×3 lock acquisitions)
-            let mut sq8_cache = self.sq8_cache.write();
-            let mut binary_cache = self.binary_cache.write();
-            let mut pq_cache = self.pq_cache.write();
+            self.delete_vector_points(ids)?;
+        }
+        self.invalidate_caches_and_bump_generation();
+        Ok(())
+    }
 
-            for &id in ids {
-                let old_payload = payload_storage.retrieve(id).ok().flatten();
-                vector_storage.delete(id)?;
-                payload_storage.delete(id)?;
-                self.index.remove(id);
-                sq8_cache.remove(&id);
-                binary_cache.remove(&id);
-                pq_cache.remove(&id);
-                self.text_index.remove_document(id);
-                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
-            }
+    /// Deletes metadata-only points.
+    fn delete_metadata_only(&self, ids: &[u64]) -> Result<()> {
+        let mut payload_storage = self.payload_storage.write();
+        for &id in ids {
+            let old_payload = payload_storage.retrieve(id).ok().flatten();
+            payload_storage.delete(id)?;
+            self.text_index.remove_document(id);
+            self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
+        }
+        let point_count = payload_storage.ids().len();
+        drop(payload_storage);
+        self.config.write().point_count = point_count;
+        Ok(())
+    }
 
-            // LOCK ORDER: drop vector_storage(2), payload_storage(3), caches before acquiring config(1).
-            let point_count = vector_storage.len();
-            drop(vector_storage);
-            drop(payload_storage);
-            drop(sq8_cache);
-            drop(binary_cache);
-            drop(pq_cache);
-            // config(1) only — all higher-numbered locks released above.
-            let mut config = self.config.write();
-            config.point_count = point_count;
-            drop(config);
+    /// Deletes vector points from all stores (vector, payload, index, caches, sparse).
+    fn delete_vector_points(&self, ids: &[u64]) -> Result<()> {
+        let mut payload_storage = self.payload_storage.write();
+        let mut vector_storage = self.vector_storage.write();
+        let mut sq8_cache = self.sq8_cache.write();
+        let mut binary_cache = self.binary_cache.write();
+        let mut pq_cache = self.pq_cache.write();
 
-            // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
-            // WAL-before-apply: write delete intent to WAL before mutating the index.
-            #[cfg(feature = "persistence")]
-            {
-                let indexes = self.sparse_indexes.read();
-                if !indexes.is_empty() {
-                    for (name, _) in indexes.iter() {
-                        let wal_path =
-                            crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                        for &id in ids {
-                            crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
-                        }
-                    }
-                }
-            }
+        for &id in ids {
+            let old_payload = payload_storage.retrieve(id).ok().flatten();
+            vector_storage.delete(id)?;
+            payload_storage.delete(id)?;
+            self.index.remove(id);
+            sq8_cache.remove(&id);
+            binary_cache.remove(&id);
+            pq_cache.remove(&id);
+            self.text_index.remove_document(id);
+            self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
+        }
 
-            {
-                let indexes = self.sparse_indexes.read();
-                for idx in indexes.values() {
-                    for &id in ids {
-                        idx.delete(id);
-                    }
+        let point_count = vector_storage.len();
+        drop(vector_storage);
+        drop(payload_storage);
+        drop(sq8_cache);
+        drop(binary_cache);
+        drop(pq_cache);
+        self.config.write().point_count = point_count;
+
+        self.delete_from_sparse_indexes(ids)
+    }
+
+    /// Deletes IDs from sparse indexes with WAL-before-apply.
+    fn delete_from_sparse_indexes(&self, ids: &[u64]) -> Result<()> {
+        #[cfg(feature = "persistence")]
+        {
+            let indexes = self.sparse_indexes.read();
+            for (name, _) in indexes.iter() {
+                let wal_path =
+                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                for &id in ids {
+                    crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
                 }
             }
         }
-
-        // Invalidate stats cache so the next get_stats() recomputes fresh data.
-        *self.cached_stats.lock() = None;
-
-        // Bump write generation once per batch (CACHE-01 invalidation counter).
-        self.write_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
+        let indexes = self.sparse_indexes.read();
+        for idx in indexes.values() {
+            for &id in ids {
+                idx.delete(id);
+            }
+        }
         Ok(())
     }
 

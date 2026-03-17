@@ -127,8 +127,6 @@ impl Collection {
         vector_weight: Option<f32>,
     ) -> Result<Vec<SearchResult>> {
         use crate::index::VectorIndex;
-        use std::cmp::Reverse;
-        use std::collections::BinaryHeap;
 
         let config = self.config.read();
         validate_dimension_match(config.dimension, vector_query.len())?;
@@ -138,78 +136,80 @@ impl Collection {
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
 
-        // Overfetch for RRF fusion; merge delta buffer entries before fusion so
-        // vectors inserted during an ongoing HNSW rebuild are not missed.
         let overfetch_k = k * 2;
         let raw_vector_results = self.index.search(vector_query, overfetch_k);
         let vector_results =
             self.merge_delta(raw_vector_results, vector_query, overfetch_k, metric);
-
-        // Get BM25 text search results
         let text_results = self.text_index.search(text_query, k * 2);
 
-        // Perf: Apply RRF with FxHashMap for faster hashing
-        // RRF score = weight / (rank + 60) - the constant 60 is standard (Cormack et al.)
-        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> =
+        let fused_scores =
+            Self::compute_rrf_scores(&vector_results, &text_results, weight, text_weight);
+
+        let scored_ids = Self::top_k_from_scores(fused_scores, k);
+        Ok(self.resolve_scored_ids(&scored_ids))
+    }
+
+    /// Computes RRF fused scores from vector and text search results.
+    #[allow(clippy::cast_precision_loss)]
+    fn compute_rrf_scores(
+        vector_results: &[crate::scored_result::ScoredResult],
+        text_results: &[(u64, f32)],
+        vector_weight: f32,
+        text_weight: f32,
+    ) -> rustc_hash::FxHashMap<u64, f32> {
+        let mut fused: rustc_hash::FxHashMap<u64, f32> =
             rustc_hash::FxHashMap::with_capacity_and_hasher(
                 vector_results.len() + text_results.len(),
                 rustc_hash::FxBuildHasher,
             );
-
-        // Add vector scores with RRF
-        #[allow(clippy::cast_precision_loss)]
         for (rank, sr) in vector_results.iter().enumerate() {
-            let rrf_score = weight / (rank as f32 + 60.0);
-            *fused_scores.entry(sr.id).or_insert(0.0) += rrf_score;
+            *fused.entry(sr.id).or_insert(0.0) += vector_weight / (rank as f32 + 60.0);
         }
-
-        // Add text scores with RRF
-        #[allow(clippy::cast_precision_loss)]
         for (rank, (id, _)) in text_results.iter().enumerate() {
-            let rrf_score = text_weight / (rank as f32 + 60.0);
-            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+            *fused.entry(*id).or_insert(0.0) += text_weight / (rank as f32 + 60.0);
         }
+        fused
+    }
 
-        // Perf: Streaming top-k with BinaryHeap (O(n log k) vs O(n log n) for full sort)
-        // Use min-heap of size k: always keep the k highest scores
-        let mut top_k: BinaryHeap<Reverse<(OrderedFloat, u64)>> = BinaryHeap::with_capacity(k + 1);
+    /// Extracts top-k IDs from fused scores using a streaming min-heap.
+    fn top_k_from_scores(
+        fused_scores: rustc_hash::FxHashMap<u64, f32>,
+        k: usize,
+    ) -> Vec<(u64, f32)> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
 
+        let mut heap: BinaryHeap<Reverse<(OrderedFloat, u64)>> = BinaryHeap::with_capacity(k + 1);
         for (id, score) in fused_scores {
-            top_k.push(Reverse((OrderedFloat(score), id)));
-            if top_k.len() > k {
-                top_k.pop(); // Remove smallest
+            heap.push(Reverse((OrderedFloat(score), id)));
+            if heap.len() > k {
+                heap.pop();
             }
         }
-
-        // Extract and sort descending
-        let mut scored_ids: Vec<(u64, f32)> = top_k
+        let mut scored: Vec<(u64, f32)> = heap
             .into_iter()
             .map(|Reverse((OrderedFloat(s), id))| (id, s))
             .collect();
-        scored_ids.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored
+    }
 
-        // Fetch full point data
+    /// Resolves scored IDs to full `SearchResult` with point data.
+    fn resolve_scored_ids(&self, scored_ids: &[(u64, f32)]) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        let results: Vec<SearchResult> = scored_ids
-            .into_iter()
-            .filter_map(|(id, score)| {
+        scored_ids
+            .iter()
+            .filter_map(|&(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
-
-                let point = Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-
-                Some(SearchResult::new(point, score))
+                Some(SearchResult::new(
+                    Point { id, vector, payload, sparse_vectors: None },
+                    score,
+                ))
             })
-            .collect();
-
-        Ok(results)
+            .collect()
     }
 
     /// Performs hybrid search (vector + text) with metadata filtering.
@@ -245,66 +245,45 @@ impl Collection {
 
         let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
         let text_weight = 1.0 - weight;
-
-        // Overfetch for post-filter recall; merge delta buffer entries before
-        // fusion so vectors inserted during an ongoing HNSW rebuild are not missed.
         let candidates_k = k.saturating_mul(4).max(k + 10);
 
-        // Get vector search results
         let raw_vector_results = self.index.search(vector_query, candidates_k);
         let vector_results =
             self.merge_delta(raw_vector_results, vector_query, candidates_k, metric);
-
-        // Get BM25 text search results
         let text_results = self.text_index.search(text_query, candidates_k);
 
-        // Apply RRF (Reciprocal Rank Fusion)
-        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+        let fused_scores =
+            Self::compute_rrf_scores(&vector_results, &text_results, weight, text_weight);
 
-        #[allow(clippy::cast_precision_loss)]
-        for (rank, sr) in vector_results.iter().enumerate() {
-            let rrf_score = weight / (rank as f32 + 60.0);
-            *fused_scores.entry(sr.id).or_insert(0.0) += rrf_score;
-        }
-
-        #[allow(clippy::cast_precision_loss)]
-        for (rank, (id, _)) in text_results.iter().enumerate() {
-            let rrf_score = text_weight / (rank as f32 + 60.0);
-            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
-        }
-
-        // Sort by fused score
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
         scored_ids.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        // Fetch full point data and apply filter
+        Ok(self.resolve_scored_ids_filtered(&scored_ids, filter, k))
+    }
+
+    /// Resolves scored IDs to `SearchResult` with metadata filter applied.
+    fn resolve_scored_ids_filtered(
+        &self,
+        scored_ids: &[(u64, f32)],
+        filter: &crate::filter::Filter,
+        k: usize,
+    ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        let results: Vec<SearchResult> = scored_ids
-            .into_iter()
-            .filter_map(|(id, score)| {
+        scored_ids
+            .iter()
+            .filter_map(|&(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
-
-                // Apply filter - if no payload, filter fails
                 let payload_ref = payload.as_ref()?;
-                if !filter.matches(payload_ref) {
-                    return None;
-                }
-
-                let point = Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-
-                Some(SearchResult::new(point, score))
+                if !filter.matches(payload_ref) { return None; }
+                Some(SearchResult::new(
+                    Point { id, vector, payload, sparse_vectors: None },
+                    score,
+                ))
             })
             .take(k)
-            .collect();
-
-        Ok(results)
+            .collect()
     }
 }

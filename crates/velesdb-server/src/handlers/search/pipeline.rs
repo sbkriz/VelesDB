@@ -218,19 +218,8 @@ pub(crate) fn execute_search_request(
 
     // Hybrid: both dense and sparse
     if has_dense && has_sparse {
-        let expected_dimension = collection.config().dimension;
-        if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
-            return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
-        }
-        let strategy = parse_fusion_strategy(req.fusion.as_ref())?;
         let sparse_query = sparse_vec.expect("sparse_vec is Some when has_sparse is true");
-        return Ok(collection.hybrid_sparse_search(
-            &req.vector,
-            &sparse_query,
-            req.top_k,
-            index_name,
-            &strategy,
-        ));
+        return execute_hybrid_sparse(state, name, collection, req, &sparse_query, index_name);
     }
 
     // Sparse-only
@@ -241,6 +230,30 @@ pub(crate) fn execute_search_request(
 
     // Dense-only
     execute_dense_search(state, name, collection, req)
+}
+
+/// Hybrid dense+sparse search path with dimension validation and fusion.
+#[allow(clippy::result_large_err)]
+fn execute_hybrid_sparse(
+    state: &AppState,
+    name: &str,
+    collection: &VectorCollection,
+    req: &SearchRequest,
+    sparse_query: &velesdb_core::index::sparse::SparseVector,
+    index_name: &str,
+) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
+    let expected_dimension = collection.config().dimension;
+    if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
+        return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
+    }
+    let strategy = parse_fusion_strategy(req.fusion.as_ref())?;
+    Ok(collection.hybrid_sparse_search(
+        &req.vector,
+        sparse_query,
+        req.top_k,
+        index_name,
+        &strategy,
+    ))
 }
 
 /// Shared result-handling for all search modes.

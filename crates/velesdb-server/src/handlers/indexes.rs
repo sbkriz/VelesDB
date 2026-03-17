@@ -31,31 +31,15 @@ pub async fn create_index(
     Path(name): Path<String>,
     Json(req): Json<CreateIndexRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
-    let result = match req.index_type.to_lowercase().as_str() {
-        "hash" => collection.create_property_index(&req.label, &req.property),
-        "range" => collection.create_range_index(&req.label, &req.property),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid index_type: {}. Valid: hash, range", req.index_type),
-                }),
-            )
-                .into_response()
-        }
+    let result = dispatch_index_creation(&collection, &req);
+    let result = match result {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     match result {
@@ -72,11 +56,45 @@ pub async fn create_index(
             .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
+            Json(ErrorResponse { error: e.to_string() }),
         )
             .into_response(),
+    }
+}
+
+/// Look up a vector collection by name, returning a 404 response on miss.
+#[allow(clippy::result_large_err)]
+fn get_collection_or_404(
+    state: &AppState,
+    name: &str,
+) -> Result<velesdb_core::collection::VectorCollection, axum::response::Response> {
+    state.db.get_vector_collection(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{}' not found", name),
+            }),
+        )
+            .into_response()
+    })
+}
+
+/// Dispatch index creation by type.
+#[allow(clippy::result_large_err)]
+fn dispatch_index_creation(
+    collection: &velesdb_core::collection::VectorCollection,
+    req: &CreateIndexRequest,
+) -> Result<velesdb_core::error::Result<()>, axum::response::Response> {
+    match req.index_type.to_lowercase().as_str() {
+        "hash" => Ok(collection.create_property_index(&req.label, &req.property)),
+        "range" => Ok(collection.create_range_index(&req.label, &req.property)),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid index_type: {}. Valid: hash, range", req.index_type),
+            }),
+        )
+            .into_response()),
     }
 }
 

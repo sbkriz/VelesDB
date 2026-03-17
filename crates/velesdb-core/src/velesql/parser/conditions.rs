@@ -285,19 +285,21 @@ impl Parser {
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
         let column = Self::extract_column_name(&column_pair);
 
-        let low = Self::parse_value(
-            inner
-                .next()
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected low value"))?,
-        )?;
-
-        let high = Self::parse_value(
-            inner
-                .next()
-                .ok_or_else(|| ParseError::syntax(0, "", "Expected high value"))?,
-        )?;
+        let low = Self::next_value(&mut inner, "Expected low value")?;
+        let high = Self::next_value(&mut inner, "Expected high value")?;
 
         Ok(Condition::Between(BetweenCondition { column, low, high }))
+    }
+
+    /// Consumes the next pair from the iterator and parses it as a value.
+    fn next_value(
+        inner: &mut pest::iterators::Pairs<Rule>,
+        error_msg: &str,
+    ) -> Result<crate::velesql::ast::Value, ParseError> {
+        let pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", error_msg))?;
+        Self::parse_value(pair)
     }
 
     pub(crate) fn parse_like_expr(
@@ -373,16 +375,7 @@ impl Parser {
         let op_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected operator"))?;
-
-        let operator = match op_pair.as_str() {
-            "=" => CompareOp::Eq,
-            "!=" | "<>" => CompareOp::NotEq,
-            ">" => CompareOp::Gt,
-            ">=" => CompareOp::Gte,
-            "<" => CompareOp::Lt,
-            "<=" => CompareOp::Lte,
-            _ => return Err(ParseError::syntax(0, op_pair.as_str(), "Invalid operator")),
-        };
+        let operator = Self::parse_compare_op(op_pair.as_str())?;
 
         let value = Self::parse_value(
             inner
@@ -395,5 +388,18 @@ impl Parser {
             operator,
             value,
         }))
+    }
+
+    /// Parses a comparison operator string into a `CompareOp`.
+    fn parse_compare_op(op: &str) -> Result<CompareOp, ParseError> {
+        match op {
+            "=" => Ok(CompareOp::Eq),
+            "!=" | "<>" => Ok(CompareOp::NotEq),
+            ">" => Ok(CompareOp::Gt),
+            ">=" => Ok(CompareOp::Gte),
+            "<" => Ok(CompareOp::Lt),
+            "<=" => Ok(CompareOp::Lte),
+            _ => Err(ParseError::syntax(0, op, "Invalid operator")),
+        }
     }
 }

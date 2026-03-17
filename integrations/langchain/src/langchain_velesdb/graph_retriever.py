@@ -318,23 +318,25 @@ class GraphRetriever(BaseRetriever):
             result_docs.append(doc)
 
         if graph_available:
-            remaining = self.expand_k - len(result_docs)
-            neighbor_ids = [
-                nid for nid in expanded_ids if nid not in seed_docs
-            ][:remaining]
-            for neighbor_id in neighbor_ids:
-                try:
-                    neighbor_doc = self._fetch_document(neighbor_id)
-                    if neighbor_doc:
-                        neighbor_doc.metadata["graph_depth"] = 1
-                        neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
-                        result_docs.append(neighbor_doc)
-                except Exception as exc:
-                    logger.debug(
-                        "Failed to fetch neighbour document %s: %s", neighbor_id, exc
-                    )
+            self._append_neighbor_docs(result_docs, expanded_ids, seed_docs)
 
         return result_docs[: self.expand_k]
+
+    def _append_neighbor_docs(
+        self, result_docs: List[Document], expanded_ids: set, seed_docs: dict
+    ) -> None:
+        """Fetch and append expanded neighbor documents to the result list."""
+        remaining = self.expand_k - len(result_docs)
+        neighbor_ids = [nid for nid in expanded_ids if nid not in seed_docs][:remaining]
+        for neighbor_id in neighbor_ids:
+            try:
+                neighbor_doc = self._fetch_document(neighbor_id)
+                if neighbor_doc:
+                    neighbor_doc.metadata["graph_depth"] = 1
+                    neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
+                    result_docs.append(neighbor_doc)
+            except Exception as exc:
+                logger.debug("Failed to fetch neighbour document %s: %s", neighbor_id, exc)
 
     def _traverse_graph(self, source_id: int) -> List[int]:
         """Traverse graph from source node, dispatching to native or REST.

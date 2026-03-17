@@ -38,7 +38,6 @@ impl ScoreBreakdown {
     /// Generates a detailed explanation of the score breakdown.
     #[must_use]
     pub fn explain(&self, strategy: &FusionStrategy) -> ScoreExplanation {
-        let mut components = Vec::new();
         let total_components = self.count_components();
         let default_weight = if total_components > 0 {
             1.0 / total_components as f32
@@ -46,65 +45,8 @@ impl ScoreBreakdown {
             1.0
         };
 
-        if let Some(v) = self.vector_similarity {
-            components.push(ComponentExplanation {
-                name: "vector_similarity".to_string(),
-                value: v,
-                weight: Some(default_weight),
-                contribution: v * default_weight,
-                description: format!("Cosine similarity to query vector: {v:.3}"),
-            });
-        }
-
-        if let Some(g) = self.graph_distance {
-            components.push(ComponentExplanation {
-                name: "graph_distance".to_string(),
-                value: g,
-                weight: Some(default_weight),
-                contribution: g * default_weight,
-                description: format!("Normalized graph proximity: {g:.3}"),
-            });
-        }
-
-        if let Some(p) = self.path_score {
-            components.push(ComponentExplanation {
-                name: "path_score".to_string(),
-                value: p,
-                weight: Some(default_weight),
-                contribution: p * default_weight,
-                description: format!("Path relevance (decay + rel types): {p:.3}"),
-            });
-        }
-
-        if let Some(m) = self.metadata_boost {
-            components.push(ComponentExplanation {
-                name: "metadata_boost".to_string(),
-                value: m,
-                weight: None, // Multiplicative, not weighted
-                contribution: 0.0,
-                description: format!("Metadata multiplier: {m:.2}x"),
-            });
-        }
-
-        if let Some(r) = self.recency_boost {
-            components.push(ComponentExplanation {
-                name: "recency_boost".to_string(),
-                value: r,
-                weight: None,
-                contribution: 0.0,
-                description: format!("Recency multiplier: {r:.2}x"),
-            });
-        }
-
-        for (name, &boost) in &self.custom_boosts {
-            components.push(ComponentExplanation {
-                name: format!("custom:{name}"),
-                value: boost,
-                weight: None,
-                contribution: 0.0,
-                description: format!("Custom boost '{name}': {boost:.2}x"),
-            });
-        }
+        let mut components = self.build_weighted_components(default_weight);
+        self.append_boost_components(&mut components);
 
         let human_readable = Self::generate_human_readable(self.final_score, &components);
 
@@ -113,6 +55,47 @@ impl ScoreBreakdown {
             strategy: strategy.as_str().to_string(),
             components,
             human_readable,
+        }
+    }
+
+    /// Builds weighted score components (vector, graph, path).
+    fn build_weighted_components(&self, weight: f32) -> Vec<ComponentExplanation> {
+        let scored = [
+            ("vector_similarity", self.vector_similarity, "Cosine similarity to query vector"),
+            ("graph_distance", self.graph_distance, "Normalized graph proximity"),
+            ("path_score", self.path_score, "Path relevance (decay + rel types)"),
+        ];
+        scored.into_iter().filter_map(|(name, value, desc)| {
+            let v = value?;
+            Some(ComponentExplanation {
+                name: name.to_string(), value: v,
+                weight: Some(weight), contribution: v * weight,
+                description: format!("{desc}: {v:.3}"),
+            })
+        }).collect()
+    }
+
+    /// Appends multiplicative boost components (metadata, recency, custom).
+    fn append_boost_components(&self, components: &mut Vec<ComponentExplanation>) {
+        let boosts = [
+            ("metadata_boost", self.metadata_boost, "Metadata multiplier"),
+            ("recency_boost", self.recency_boost, "Recency multiplier"),
+        ];
+        for (name, value, desc) in boosts {
+            if let Some(v) = value {
+                components.push(ComponentExplanation {
+                    name: name.to_string(), value: v,
+                    weight: None, contribution: 0.0,
+                    description: format!("{desc}: {v:.2}x"),
+                });
+            }
+        }
+        for (name, &boost) in &self.custom_boosts {
+            components.push(ComponentExplanation {
+                name: format!("custom:{name}"), value: boost,
+                weight: None, contribution: 0.0,
+                description: format!("Custom boost '{name}': {boost:.2}x"),
+            });
         }
     }
 

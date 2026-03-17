@@ -179,41 +179,10 @@ impl EpisodicMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let mut events = Vec::with_capacity(limit);
-        let mut fetch_limit = limit * 2;
-        let max_fetch = self.temporal_index.len().max(limit);
-
-        while events.len() < limit && fetch_limit <= max_fetch * 2 {
-            let recent_entries = self.temporal_index.recent(fetch_limit, since_timestamp);
-            let recent_ids: Vec<u64> = recent_entries.iter().map(|e| e.id).collect();
-
-            if recent_ids.is_empty() {
-                break;
-            }
-
-            let points = collection.get(&recent_ids);
-
-            events = points
-                .into_iter()
-                .flatten()
-                .filter(|p| !self.ttl.is_expired(p.id))
-                .filter_map(|p| {
-                    let payload = p.payload.as_ref()?;
-                    let desc = payload.get("description")?.as_str()?.to_string();
-                    let ts = payload.get("timestamp")?.as_i64()?;
-                    Some((p.id, desc, ts))
-                })
-                .take(limit)
-                .collect();
-
-            if events.len() >= limit || recent_ids.len() < fetch_limit {
-                break;
-            }
-
-            fetch_limit *= 2;
-        }
-
-        Ok(events)
+        Ok(self.fetch_temporal_events(limit, |fetch_limit| {
+            let entries = self.temporal_index.recent(fetch_limit, since_timestamp);
+            entries.iter().map(|e| e.id).collect()
+        }, &collection))
     }
 
     /// Returns events older than `timestamp`.
@@ -232,41 +201,10 @@ impl EpisodicMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let mut events = Vec::with_capacity(limit);
-        let mut fetch_limit = limit * 2;
-        let max_fetch = self.temporal_index.len().max(limit);
-
-        while events.len() < limit && fetch_limit <= max_fetch * 2 {
-            let old_entries = self.temporal_index.older_than(timestamp, fetch_limit);
-            let old_ids: Vec<u64> = old_entries.iter().map(|e| e.id).collect();
-
-            if old_ids.is_empty() {
-                break;
-            }
-
-            let points = collection.get(&old_ids);
-
-            events = points
-                .into_iter()
-                .flatten()
-                .filter(|p| !self.ttl.is_expired(p.id))
-                .filter_map(|p| {
-                    let payload = p.payload.as_ref()?;
-                    let desc = payload.get("description")?.as_str()?.to_string();
-                    let ts = payload.get("timestamp")?.as_i64()?;
-                    Some((p.id, desc, ts))
-                })
-                .take(limit)
-                .collect();
-
-            if events.len() >= limit || old_ids.len() < fetch_limit {
-                break;
-            }
-
-            fetch_limit *= 2;
-        }
-
-        Ok(events)
+        Ok(self.fetch_temporal_events(limit, |fetch_limit| {
+            let entries = self.temporal_index.older_than(timestamp, fetch_limit);
+            entries.iter().map(|e| e.id).collect()
+        }, &collection))
     }
 
     /// Retrieves the `k` most similar episodic events to a query embedding.
@@ -281,12 +219,7 @@ impl EpisodicMemory {
         query_embedding: &[f32],
         k: usize,
     ) -> Result<Vec<(u64, String, i64, f32)>, AgentMemoryError> {
-        if query_embedding.len() != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: query_embedding.len(),
-            });
-        }
+        self.validate_dimension(query_embedding.len())?;
 
         let collection = self
             .db
@@ -301,9 +234,7 @@ impl EpisodicMemory {
             .into_iter()
             .filter(|r| !self.ttl.is_expired(r.point.id))
             .filter_map(|r| {
-                let payload = r.point.payload.as_ref()?;
-                let desc = payload.get("description")?.as_str()?.to_string();
-                let ts = payload.get("timestamp")?.as_i64()?;
+                let (desc, ts) = extract_event_fields(&r.point)?;
                 Some((r.point.id, desc, ts, r.score))
             })
             .collect())
@@ -412,21 +343,8 @@ impl EpisodicMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let existing_ids = collection.all_ids();
-        if !existing_ids.is_empty() {
-            collection
-                .delete(&existing_ids)
-                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-        }
-
-        self.temporal_index.clear();
-        for point in &points {
-            if let Some(payload) = &point.payload {
-                if let Some(ts) = payload.get("timestamp").and_then(serde_json::Value::as_i64) {
-                    self.temporal_index.insert(point.id, ts);
-                }
-            }
-        }
+        Self::clear_existing_points(&collection)?;
+        self.rebuild_temporal_from_points(&points);
 
         collection
             .upsert(points)
@@ -434,4 +352,98 @@ impl EpisodicMemory {
 
         Ok(())
     }
+
+    /// Validates that `len` matches the expected embedding dimension.
+    fn validate_dimension(&self, len: usize) -> Result<(), AgentMemoryError> {
+        if len != self.dimension {
+            return Err(AgentMemoryError::DimensionMismatch {
+                expected: self.dimension,
+                actual: len,
+            });
+        }
+        Ok(())
+    }
+
+    /// Fetches temporal events with progressive widening, filtering expired entries.
+    #[allow(deprecated)]
+    fn fetch_temporal_events(
+        &self,
+        limit: usize,
+        id_fetcher: impl Fn(usize) -> Vec<u64>,
+        collection: &crate::Collection,
+    ) -> Vec<(u64, String, i64)> {
+        let mut events = Vec::with_capacity(limit);
+        let mut fetch_limit = limit * 2;
+        let max_fetch = self.temporal_index.len().max(limit);
+
+        while events.len() < limit && fetch_limit <= max_fetch * 2 {
+            let ids = id_fetcher(fetch_limit);
+            if ids.is_empty() {
+                break;
+            }
+            let id_count = ids.len();
+
+            events = Self::filter_live_events(&self.ttl, collection, &ids, limit);
+
+            if events.len() >= limit || id_count < fetch_limit {
+                break;
+            }
+            fetch_limit *= 2;
+        }
+
+        events
+    }
+
+    /// Fetches points by IDs, filters expired ones, and extracts event fields.
+    #[allow(deprecated)]
+    fn filter_live_events(
+        ttl: &MemoryTtl,
+        collection: &crate::Collection,
+        ids: &[u64],
+        limit: usize,
+    ) -> Vec<(u64, String, i64)> {
+        collection
+            .get(ids)
+            .into_iter()
+            .flatten()
+            .filter(|p| !ttl.is_expired(p.id))
+            .filter_map(|p| {
+                let (desc, ts) = extract_event_fields(&p)?;
+                Some((p.id, desc, ts))
+            })
+            .take(limit)
+            .collect()
+    }
+
+    /// Removes all existing points from the collection.
+    #[allow(deprecated)]
+    fn clear_existing_points(collection: &crate::Collection) -> Result<(), AgentMemoryError> {
+        let existing_ids = collection.all_ids();
+        if !existing_ids.is_empty() {
+            collection
+                .delete(&existing_ids)
+                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Clears and rebuilds the temporal index from a set of points.
+    fn rebuild_temporal_from_points(&self, points: &[Point]) {
+        self.temporal_index.clear();
+        for point in points {
+            if let Some(payload) = &point.payload {
+                if let Some(ts) = payload.get("timestamp").and_then(serde_json::Value::as_i64) {
+                    self.temporal_index.insert(point.id, ts);
+                }
+            }
+        }
+    }
+}
+
+/// Extracts `(description, timestamp)` from a point's payload.
+fn extract_event_fields(point: &Point) -> Option<(String, i64)> {
+    let payload = point.payload.as_ref()?;
+    let desc = payload.get("description")?.as_str()?.to_string();
+    let ts = payload.get("timestamp")?.as_i64()?;
+    Some((desc, ts))
 }

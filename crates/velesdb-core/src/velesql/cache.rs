@@ -136,95 +136,121 @@ impl QueryCache {
         let original_query = query.to_string();
         let hash = (self.hash_fn)(&canonical_query);
 
-        // Hit path: hold an upgradable read while promoting the LRU key.
-        // This keeps writers out of the cache map without taking a full write lock.
-        {
-            let cache = self.cache.upgradable_read();
-            let cached = cache.get(&hash).and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|entry| {
-                        // Strict equality check on hit to avoid query confusion.
-                        entry.original_query == original_query
-                            && entry.canonical_query == canonical_query
-                    })
-                    .cloned()
-            });
-
-            if let Some(cached) = cached {
-                let key = CacheKey {
-                    hash,
-                    original_query: original_query.clone(),
-                };
-                // O(n) LRU promotion: VecDeque::remove shifts elements. For L1 cache size
-                // of 1000 entries, this is ~4KB of data movement per hit — acceptable for
-                // the current QPS targets. If cache hit rate becomes a bottleneck at >50k QPS,
-                // replace with an IndexMap or intrusive linked list for O(1) promotion.
-                let mut order = self.order.write();
-                if let Some(pos) = order.iter().position(|existing| existing == &key) {
-                    order.remove(pos);
-                }
-                order.push_back(key);
-                drop(order);
-                if record_stats {
-                    self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                }
-                return Ok(cached.parsed);
-            }
+        if let Some(cached) = self.try_cache_hit(hash, &original_query, &canonical_query, record_stats) {
+            return Ok(cached);
         }
 
         let parsed = Parser::parse(query)?;
+        self.insert_into_cache(hash, original_query, canonical_query, query, &parsed, record_stats);
+        Ok(parsed)
+    }
 
-        {
-            let mut cache = self.cache.write();
-            let mut order = self.order.write();
-            if record_stats {
-                self.stats.misses.fetch_add(1, Ordering::Relaxed);
-            }
-
-            while Self::entry_count(&cache) >= self.max_size {
-                if let Some(oldest) = order.pop_front() {
-                    if let Some(bucket) = cache.get_mut(&oldest.hash) {
-                        bucket.retain(|entry| entry.original_query != oldest.original_query);
-                        if bucket.is_empty() {
-                            cache.remove(&oldest.hash);
-                        }
-                    }
-                    if record_stats {
-                        self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-
-            let key = CacheKey {
-                hash,
-                original_query: original_query.clone(),
-            };
-
-            if let Some(pos) = order.iter().position(|existing| existing == &key) {
-                order.remove(pos);
-            }
-
-            let new_entry = CacheEntry {
-                original_query,
-                canonical_query,
-                parsed: parsed.clone(),
-            };
-
-            cache
-                .entry(hash)
-                .and_modify(|bucket| {
-                    bucket.retain(|entry| entry.original_query != query);
-                    bucket.push(new_entry.clone());
+    /// Attempts to find and return a cached query, promoting it in LRU order.
+    fn try_cache_hit(
+        &self,
+        hash: u64,
+        original_query: &str,
+        canonical_query: &str,
+        record_stats: bool,
+    ) -> Option<Query> {
+        let cache = self.cache.upgradable_read();
+        let cached = cache.get(&hash).and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| {
+                    entry.original_query == original_query
+                        && entry.canonical_query == canonical_query
                 })
-                .or_insert_with(|| vec![new_entry]);
+                .cloned()
+        })?;
 
-            order.push_back(key);
+        let key = CacheKey {
+            hash,
+            original_query: original_query.to_string(),
+        };
+        // O(n) LRU promotion: VecDeque::remove shifts elements. For L1 cache size
+        // of 1000 entries, this is ~4KB of data movement per hit — acceptable for
+        // the current QPS targets. If cache hit rate becomes a bottleneck at >50k QPS,
+        // replace with an IndexMap or intrusive linked list for O(1) promotion.
+        let mut order = self.order.write();
+        if let Some(pos) = order.iter().position(|existing| existing == &key) {
+            order.remove(pos);
+        }
+        order.push_back(key);
+        drop(order);
 
-            debug_assert_eq!(Self::entry_count(&cache), order.len());
+        if record_stats {
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+        }
+        Some(cached.parsed)
+    }
+
+    /// Inserts a freshly parsed query into the cache, evicting old entries as needed.
+    fn insert_into_cache(
+        &self,
+        hash: u64,
+        original_query: String,
+        canonical_query: String,
+        raw_query: &str,
+        parsed: &Query,
+        record_stats: bool,
+    ) {
+        let mut cache = self.cache.write();
+        let mut order = self.order.write();
+
+        if record_stats {
+            self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
 
-        Ok(parsed)
+        self.evict_oldest(&mut cache, &mut order, record_stats);
+
+        let key = CacheKey {
+            hash,
+            original_query: original_query.clone(),
+        };
+
+        if let Some(pos) = order.iter().position(|existing| existing == &key) {
+            order.remove(pos);
+        }
+
+        let new_entry = CacheEntry {
+            original_query,
+            canonical_query,
+            parsed: parsed.clone(),
+        };
+
+        cache
+            .entry(hash)
+            .and_modify(|bucket| {
+                bucket.retain(|entry| entry.original_query != raw_query);
+                bucket.push(new_entry.clone());
+            })
+            .or_insert_with(|| vec![new_entry]);
+
+        order.push_back(key);
+        debug_assert_eq!(Self::entry_count(&cache), order.len());
+    }
+
+    /// Evicts oldest entries until the cache is below `max_size`.
+    fn evict_oldest(
+        &self,
+        cache: &mut FxHashMap<u64, Vec<CacheEntry>>,
+        order: &mut VecDeque<CacheKey>,
+        record_stats: bool,
+    ) {
+        while Self::entry_count(cache) >= self.max_size {
+            if let Some(oldest) = order.pop_front() {
+                if let Some(bucket) = cache.get_mut(&oldest.hash) {
+                    bucket.retain(|entry| entry.original_query != oldest.original_query);
+                    if bucket.is_empty() {
+                        cache.remove(&oldest.hash);
+                    }
+                }
+                if record_stats {
+                    self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
     }
 
     /// Returns current cache statistics.

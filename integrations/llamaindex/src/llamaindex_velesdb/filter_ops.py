@@ -73,18 +73,24 @@ def metadata_filters_to_core_filter(filters: Any) -> Optional[dict]:
         return None
 
     if isinstance(filters, dict):
-        if "condition" in filters:
-            return filters
-        conditions = [
-            {"type": "eq", "field": key, "value": value}
-            for key, value in filters.items()
-        ]
-        if not conditions:
-            return None
-        if len(conditions) == 1:
-            return {"condition": conditions[0]}
-        return {"condition": {"type": "and", "conditions": conditions}}
+        return _dict_to_core_filter(filters)
 
+    return _object_to_core_filter(filters)
+
+
+def _dict_to_core_filter(filters: dict) -> Optional[dict]:
+    """Convert a plain dict to a VelesDB Core filter."""
+    if "condition" in filters:
+        return filters
+    conditions = [
+        {"type": "eq", "field": key, "value": value}
+        for key, value in filters.items()
+    ]
+    return _wrap_conditions(conditions)
+
+
+def _object_to_core_filter(filters: Any) -> Optional[dict]:
+    """Convert a LlamaIndex MetadataFilters object to a VelesDB Core filter."""
     raw_filters = getattr(filters, "filters", None)
     if raw_filters is None:
         return None
@@ -95,11 +101,25 @@ def metadata_filters_to_core_filter(filters: Any) -> Optional[dict]:
     if len(conditions) == 1:
         return {"condition": conditions[0]}
 
+    mode = _resolve_condition_mode(filters)
+    return {"condition": {"type": mode, "conditions": conditions}}
+
+
+def _resolve_condition_mode(filters: Any) -> str:
+    """Extract and validate the condition mode (and/or) from a filters object."""
     condition_mode = getattr(filters, "condition", None)
     if hasattr(condition_mode, "value"):
         condition_mode = condition_mode.value
     mode = str(condition_mode).strip().lower() if condition_mode is not None else "and"
     if mode not in {"and", "or"}:
         raise ValueError(f"Unsupported metadata filter condition mode: {condition_mode}")
+    return mode
 
-    return {"condition": {"type": mode, "conditions": conditions}}
+
+def _wrap_conditions(conditions: list) -> Optional[dict]:
+    """Wrap a list of conditions into a VelesDB Core filter dict."""
+    if not conditions:
+        return None
+    if len(conditions) == 1:
+        return {"condition": conditions[0]}
+    return {"condition": {"type": "and", "conditions": conditions}}

@@ -78,6 +78,17 @@ use std::collections::HashSet;
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 const MAX_LIMIT: usize = 100_000;
 
+/// Extracted query components from the WHERE clause.
+struct ExtractedComponents {
+    vector_search: Option<Vec<f32>>,
+    similarity_conditions: Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)>,
+    filter_condition: Option<crate::velesql::Condition>,
+    graph_match_predicates: Vec<crate::velesql::GraphMatchPredicate>,
+    sparse_vector_search: Option<crate::velesql::SparseVectorSearch>,
+    is_union_query: bool,
+    is_not_similarity_query: bool,
+}
+
 impl Collection {
     /// Executes a `VelesQL` query on this collection with the `"default"` client id.
     ///
@@ -133,7 +144,6 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed or a guard-rail fires.
-    #[allow(clippy::too_many_lines)] // Complex dispatch logic - refactoring planned
     pub fn execute_query_with_client(
         &self,
         query: &crate::velesql::Query,
@@ -153,279 +163,303 @@ impl Collection {
 
         // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
         if let Some(match_clause) = query.match_clause.as_ref() {
-            let match_results =
-                self.execute_match_with_context(match_clause, params, Some(&ctx))?;
-
-            // Check timeout after potentially expensive traversal.
-            ctx.check_timeout()
-                .map_err(crate::error::Error::from)
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-
-            let mut sorted = match_results;
-            if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
-                for item in order_by.iter().rev() {
-                    self.order_match_results(&mut sorted, &item.expression, item.descending);
-                }
-            }
-
-            let mut results = self
-                .match_results_to_search_results(sorted)
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-            // Final cardinality check for MATCH path (EPIC-048 US-003).
-            // execute_match_with_context only checks cardinality periodically every 100
-            // traversal iterations. A query with <100 iterations that produces many results
-            // (e.g., high fan-out from a single start node) bypasses the periodic check.
-            // This explicit check on the final result set closes that gap.
-            ctx.check_cardinality(results.len())
-                .map_err(crate::error::Error::from)
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-            if let Some(limit) = match_clause.return_clause.limit {
-                let limit = usize::try_from(limit).unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
-                results.truncate(limit);
-            }
-            // Update QueryPlanner adaptive stats for graph/MATCH queries (Fix #8).
-            // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
-            #[allow(clippy::cast_possible_truncation)]
-            let graph_latency_us = ctx.elapsed().as_micros() as u64;
-            self.query_planner
-                .stats()
-                .update_graph_latency(graph_latency_us);
-            self.guard_rails.circuit_breaker.record_success();
-            return Ok(results);
+            return self.dispatch_match_query(match_clause, params, &ctx);
         }
 
         let stmt = &query.select;
-        // Cap limit to prevent overflow in over-fetch calculations
         let limit = usize::try_from(stmt.limit.unwrap_or(10))
             .unwrap_or(MAX_LIMIT)
             .min(MAX_LIMIT);
 
-        // 1. Extract vector search (NEAR) or similarity() conditions if present
+        let extracted = self.extract_query_components(stmt, params)?;
+
+        // Early-return paths for special query shapes.
+        if let Some(results) = self.try_early_return_path(stmt, params, &extracted, limit, &ctx)? {
+            return Ok(results);
+        }
+
+        // Main vector/similarity/metadata dispatch path.
+        let mut results = self.dispatch_main_select(stmt, params, &extracted, limit, &ctx)?;
+
+        // JOIN pushdown analysis (EPIC-031 US-006).
+        self.analyze_join_pushdown(stmt);
+
+        // Final guard-rail checks (EPIC-048).
+        self.check_guardrails_and_record(&ctx, results.len())?;
+
+        // Post-processing: DISTINCT, ORDER BY, LIMIT.
+        results = self.apply_select_postprocessing(stmt, results, params, limit)?;
+
+        // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
+        if extracted.vector_search.is_some() {
+            // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
+            #[allow(clippy::cast_possible_truncation)]
+            let vector_latency_us = ctx.elapsed().as_micros() as u64;
+            self.query_planner
+                .stats()
+                .update_vector_latency(vector_latency_us);
+        }
+        self.guard_rails.circuit_breaker.record_success();
+        Ok(results)
+    }
+
+    /// Dispatches a MATCH query through the graph traversal path.
+    fn dispatch_match_query(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
+        let match_results =
+            self.execute_match_with_context(match_clause, params, Some(ctx))?;
+
+        ctx.check_timeout()
+            .map_err(crate::error::Error::from)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+
+        let mut sorted = match_results;
+        if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
+            for item in order_by.iter().rev() {
+                self.order_match_results(&mut sorted, &item.expression, item.descending);
+            }
+        }
+
+        let mut results = self
+            .match_results_to_search_results(sorted)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        // Final cardinality check for MATCH path (EPIC-048 US-003).
+        ctx.check_cardinality(results.len())
+            .map_err(crate::error::Error::from)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        if let Some(limit) = match_clause.return_clause.limit {
+            let limit = usize::try_from(limit).unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
+            results.truncate(limit);
+        }
+        // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
+        #[allow(clippy::cast_possible_truncation)]
+        let graph_latency_us = ctx.elapsed().as_micros() as u64;
+        self.query_planner
+            .stats()
+            .update_graph_latency(graph_latency_us);
+        self.guard_rails.circuit_breaker.record_success();
+        Ok(results)
+    }
+
+    /// Extracts all query components from the SELECT statement's WHERE clause.
+    fn extract_query_components(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<ExtractedComponents> {
         let mut vector_search = None;
-        let mut similarity_conditions: Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)> =
-            Vec::new();
+        let mut similarity_conditions = Vec::new();
         let mut filter_condition = None;
         let mut graph_match_predicates = Vec::new();
-
-        // EPIC-044 US-002: Check for similarity() OR metadata pattern (union mode)
-        let is_union_query = if let Some(ref cond) = stmt.where_clause {
-            Self::has_similarity_in_problematic_or(cond)
-        } else {
-            false
-        };
-
-        // EPIC-044 US-003: Check for NOT similarity() pattern (scan mode)
-        let is_not_similarity_query = if let Some(ref cond) = stmt.where_clause {
-            Self::has_similarity_under_not(cond)
-        } else {
-            false
-        };
-
-        // Extract sparse vector search condition (Phase 5 hybrid support).
         let mut sparse_vector_search = None;
 
+        let is_union_query = stmt.where_clause.as_ref().is_some_and(Self::has_similarity_in_problematic_or);
+        let is_not_similarity_query = stmt.where_clause.as_ref().is_some_and(Self::has_similarity_under_not);
+
         if let Some(ref cond) = stmt.where_clause {
-            // Validate query structure before extraction
             Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
-
-            // Check for SPARSE_NEAR before cloning for dense extraction.
             sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
 
-            // Reason: extract_vector_search mutates the condition in-place to remove the NEAR node;
-            // the original cond is still needed for similarity/filter extraction below.
-            // Clone is unavoidable until extract_vector_search returns a new condition instead.
             let mut extracted_cond = cond.clone();
             vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
-            // EPIC-044 US-001: Extract ALL similarity conditions for cascade filtering
             similarity_conditions =
                 self.extract_all_similarity_conditions(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);
-
-            // NEAR + similarity() is supported: NEAR finds candidates, similarity() filters by threshold
-            // Multiple similarity() with AND is supported: filters applied sequentially (cascade)
         }
 
-        // 2. Resolve WITH clause options
-        let mut ef_search = None;
-        if let Some(ref with) = stmt.with_clause {
-            ef_search = with.get_ef_search();
-        }
+        Ok(ExtractedComponents {
+            vector_search,
+            similarity_conditions,
+            filter_condition,
+            graph_match_predicates,
+            sparse_vector_search,
+            is_union_query,
+            is_not_similarity_query,
+        })
+    }
 
-        // Get first similarity condition for initial search (if any)
-        let first_similarity = similarity_conditions.first().cloned();
-        let has_graph_predicates = !graph_match_predicates.is_empty();
-        let skip_metadata_prefilter_for_graph_or = has_graph_predicates
-            && stmt
-                .where_clause
-                .as_ref()
-                .is_some_and(Self::condition_contains_or);
-        let execution_limit = if has_graph_predicates {
-            MAX_LIMIT
-        } else {
-            limit
-        };
+    /// Attempts early-return paths: NOT-similarity, union, and sparse queries.
+    ///
+    /// Returns `Ok(Some(results))` if an early path was taken, `Ok(None)` otherwise.
+    fn try_early_return_path(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        limit: usize,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
+        let execution_limit = if has_graph_predicates { MAX_LIMIT } else { limit };
 
-        // 3a. CBO: Choose execution strategy via QueryPlanner (EPIC-046).
-        //
-        // Uses choose_strategy_with_cbo_and_overfetch() which returns both the strategy
-        // and the selectivity-derived over-fetch factor in a single pass.
-        let (cbo_strategy, cbo_over_fetch) = {
-            let col_stats = self.get_stats();
-            self.query_planner.choose_strategy_with_cbo_and_overfetch(
-                &col_stats,
-                filter_condition.as_ref(),
-                limit,
-            )
-        };
-        tracing::debug!(
-            strategy = ?cbo_strategy,
-            over_fetch = cbo_over_fetch,
-            "CBO selected execution strategy"
-        );
-
-        // 3. Execute query based on extracted components
         // EPIC-044 US-003: NOT similarity() requires full scan
-        if is_not_similarity_query {
+        if extracted.is_not_similarity_query {
             if let Some(ref cond) = stmt.where_clause {
-                let mut results = self
-                    .execute_not_similarity_query(cond, params, execution_limit)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                if has_graph_predicates {
-                    results = self
-                        .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
-                        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                }
-
-                // Apply ORDER BY if present
-                if let Some(ref order_by) = stmt.order_by {
-                    self.apply_order_by(&mut results, order_by, params)
-                        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                }
-                results.truncate(limit);
-                // Guard-rail checks for early-return paths (EPIC-048 US-001, US-003).
-                // These paths return before the main-path checks at the bottom of execute_query.
-                // NOT similarity() is a full table scan — timeout and cardinality MUST be enforced.
-                ctx.check_timeout()
-                    .map_err(crate::error::Error::from)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                ctx.check_cardinality(results.len())
-                    .map_err(crate::error::Error::from)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                self.guard_rails.circuit_breaker.record_success();
-                return Ok(results);
+                let results = self.execute_early_return_query(
+                    |s| s.execute_not_similarity_query(cond, params, execution_limit),
+                    stmt, params, cond, has_graph_predicates, limit, ctx,
+                )?;
+                return Ok(Some(results));
             }
         }
 
         // EPIC-044 US-002: Union mode for similarity() OR metadata
-        if is_union_query {
+        if extracted.is_union_query {
             if let Some(ref cond) = stmt.where_clause {
-                let mut results = self
-                    .execute_union_query(cond, params, execution_limit)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                if has_graph_predicates {
-                    results = self
-                        .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
-                        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                }
-
-                // Apply ORDER BY if present
-                if let Some(ref order_by) = stmt.order_by {
-                    self.apply_order_by(&mut results, order_by, params)
-                        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                }
-                results.truncate(limit);
-                // Guard-rail checks for early-return paths (EPIC-048 US-001, US-003).
-                // Union queries return here without reaching the main-path guard-rail checks.
-                ctx.check_timeout()
-                    .map_err(crate::error::Error::from)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                ctx.check_cardinality(results.len())
-                    .map_err(crate::error::Error::from)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                self.guard_rails.circuit_breaker.record_success();
-                return Ok(results);
+                let results = self.execute_early_return_query(
+                    |s| s.execute_union_query(cond, params, execution_limit),
+                    stmt, params, cond, has_graph_predicates, limit, ctx,
+                )?;
+                return Ok(Some(results));
             }
         }
 
         // Phase 5: Sparse-only or hybrid dense+sparse execution.
-        if let Some(ref svs) = sparse_vector_search {
-            let mut results = if let Some(ref dense_vec) = vector_search {
-                // Hybrid: dense NEAR + SPARSE_NEAR -> parallel execution + fusion.
-                let fusion_strategy = stmt.fusion_clause.as_ref().map_or_else(
-                    crate::fusion::FusionStrategy::rrf_default,
-                    |fc| {
-                        use crate::velesql::FusionStrategyType;
-                        match fc.strategy {
-                            FusionStrategyType::Rsf => {
-                                let dw = fc.dense_weight.unwrap_or(0.5);
-                                let sw = fc.sparse_weight.unwrap_or(0.5);
-                                crate::fusion::FusionStrategy::relative_score(dw, sw)
-                                    .unwrap_or_else(|_| {
-                                        crate::fusion::FusionStrategy::rrf_default()
-                                    })
-                            }
-                            FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
-                                k: fc.k.unwrap_or(60),
-                            },
-                            _ => crate::fusion::FusionStrategy::rrf_default(),
-                        }
-                    },
-                );
-                self.execute_hybrid_search_with_strategy(
-                    dense_vec,
-                    svs,
-                    params,
-                    filter_condition.as_ref(),
-                    execution_limit,
-                    &fusion_strategy,
-                )
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?
-            } else {
-                // Sparse-only: no dense NEAR.
-                self.execute_sparse_search(svs, params, filter_condition.as_ref(), execution_limit)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?
-            };
-
-            if has_graph_predicates {
-                if let Some(cond) = stmt.where_clause.as_ref() {
-                    results = self
-                        .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
-                        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-                }
-            }
-
-            ctx.check_timeout()
-                .map_err(crate::error::Error::from)
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-            ctx.check_cardinality(results.len())
-                .map_err(crate::error::Error::from)
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-
-            if stmt.distinct == crate::velesql::DistinctMode::All {
-                results = distinct::apply_distinct(results, &stmt.columns);
-            }
-            if let Some(ref order_by) = stmt.order_by {
-                self.apply_order_by(&mut results, order_by, params)?;
-            }
-            results.truncate(limit);
-            self.guard_rails.circuit_breaker.record_success();
-            return Ok(results);
+        if let Some(ref svs) = extracted.sparse_vector_search {
+            let results = self.dispatch_sparse_query(
+                stmt, params, extracted, svs, limit, ctx,
+            )?;
+            return Ok(Some(results));
         }
 
-        // EPIC-044 US-001: Support multiple similarity() with AND (cascade filtering).
-        // Dispatch delegated to dispatch_vector_query() in execution_paths.rs.
+        Ok(None)
+    }
+
+    /// Executes an early-return query path with guard-rail checks and post-processing.
+    #[allow(clippy::too_many_arguments)]
+    fn execute_early_return_query(
+        &self,
+        execute_fn: impl FnOnce(&Self) -> Result<Vec<SearchResult>>,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        cond: &crate::velesql::Condition,
+        has_graph_predicates: bool,
+        limit: usize,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
+        let mut results = execute_fn(self)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        if has_graph_predicates {
+            results = self
+                .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        }
+        if let Some(ref order_by) = stmt.order_by {
+            self.apply_order_by(&mut results, order_by, params)
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        }
+        results.truncate(limit);
+        self.check_guardrails_and_record(ctx, results.len())?;
+        self.guard_rails.circuit_breaker.record_success();
+        Ok(results)
+    }
+
+    /// Dispatches sparse-only or hybrid dense+sparse search.
+    fn dispatch_sparse_query(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        svs: &crate::velesql::SparseVectorSearch,
+        limit: usize,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
+        let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
+        let execution_limit = if has_graph_predicates { MAX_LIMIT } else { limit };
+
+        let mut results = if let Some(ref dense_vec) = extracted.vector_search {
+            let fusion_strategy = Self::resolve_fusion_strategy(stmt);
+            self.execute_hybrid_search_with_strategy(
+                dense_vec, svs, params, extracted.filter_condition.as_ref(),
+                execution_limit, &fusion_strategy,
+            )
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?
+        } else {
+            self.execute_sparse_search(svs, params, extracted.filter_condition.as_ref(), execution_limit)
+                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?
+        };
+
+        if has_graph_predicates {
+            if let Some(cond) = stmt.where_clause.as_ref() {
+                results = self
+                    .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
+                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            }
+        }
+
+        self.check_guardrails_and_record(ctx, results.len())?;
+
+        if stmt.distinct == crate::velesql::DistinctMode::All {
+            results = distinct::apply_distinct(results, &stmt.columns);
+        }
+        if let Some(ref order_by) = stmt.order_by {
+            self.apply_order_by(&mut results, order_by, params)?;
+        }
+        results.truncate(limit);
+        self.guard_rails.circuit_breaker.record_success();
+        Ok(results)
+    }
+
+    /// Resolves the fusion strategy from the query's FUSION clause.
+    fn resolve_fusion_strategy(stmt: &crate::velesql::SelectStatement) -> crate::fusion::FusionStrategy {
+        stmt.fusion_clause.as_ref().map_or_else(
+            crate::fusion::FusionStrategy::rrf_default,
+            |fc| {
+                use crate::velesql::FusionStrategyType;
+                match fc.strategy {
+                    FusionStrategyType::Rsf => {
+                        let dw = fc.dense_weight.unwrap_or(0.5);
+                        let sw = fc.sparse_weight.unwrap_or(0.5);
+                        crate::fusion::FusionStrategy::relative_score(dw, sw)
+                            .unwrap_or_else(|_| crate::fusion::FusionStrategy::rrf_default())
+                    }
+                    FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
+                        k: fc.k.unwrap_or(60),
+                    },
+                    _ => crate::fusion::FusionStrategy::rrf_default(),
+                }
+            },
+        )
+    }
+
+    /// Dispatches the main SELECT query path (vector, similarity, metadata).
+    fn dispatch_main_select(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        limit: usize,
+        _ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
+        let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
+        let skip_metadata_prefilter_for_graph_or = has_graph_predicates
+            && stmt.where_clause.as_ref().is_some_and(Self::condition_contains_or);
+        let execution_limit = if has_graph_predicates { MAX_LIMIT } else { limit };
+        let ef_search = stmt.with_clause.as_ref().and_then(crate::velesql::WithClause::get_ef_search);
+        let first_similarity = extracted.similarity_conditions.first().cloned();
+
+        let (cbo_strategy, cbo_over_fetch) = {
+            let col_stats = self.get_stats();
+            self.query_planner.choose_strategy_with_cbo_and_overfetch(
+                &col_stats, extracted.filter_condition.as_ref(), limit,
+            )
+        };
+        tracing::debug!(
+            strategy = ?cbo_strategy, over_fetch = cbo_over_fetch,
+            "CBO selected execution strategy"
+        );
+
         let mut results = self
             .dispatch_vector_query(
-                vector_search.as_ref(),
-                first_similarity.as_ref(),
-                &similarity_conditions,
-                filter_condition.as_ref(),
-                execution_limit,
-                skip_metadata_prefilter_for_graph_or,
-                ef_search,
-                cbo_strategy,
-                cbo_over_fetch,
+                extracted.vector_search.as_ref(), first_similarity.as_ref(),
+                &extracted.similarity_conditions, extracted.filter_condition.as_ref(),
+                execution_limit, skip_metadata_prefilter_for_graph_or,
+                ef_search, cbo_strategy, cbo_over_fetch,
             )
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
 
@@ -437,69 +471,60 @@ impl Collection {
             }
         }
 
-        // P1-B: Filter pushdown analysis for JOIN queries (EPIC-031 US-006).
-        //
-        // When the query has JOIN clauses, analyze WHERE conditions to classify filters:
-        // - Graph/payload filters → already applied above
-        // - ColumnStore filters → logged for future cross-store JOIN execution
-        // - Post-JOIN filters → deferred (require cross-store data)
-        //
-        // This wires up `analyze_for_pushdown` to activate the classification,
-        // enabling the future ColumnStore JOIN executor to consume the analysis.
-        if !stmt.joins.is_empty() {
-            if let Some(ref cond) = stmt.where_clause {
-                // BUG-8 fix: from_alias is now Vec<String> containing all aliases
-                // visible in scope (FROM alias + JOIN aliases).
-                let graph_vars: std::collections::HashSet<String> =
-                    stmt.from_alias.iter().cloned().collect();
-                let join_tables = pushdown::extract_join_tables(&stmt.joins);
-                let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
-                tracing::debug!(
-                    column_store_filters = analysis.column_store_filters.len(),
-                    graph_filters = analysis.graph_filters.len(),
-                    post_join_filters = analysis.post_join_filters.len(),
-                    has_pushdown = analysis.has_pushdown(),
-                    "JOIN pushdown analysis complete"
-                );
-            }
-        }
+        Ok(results)
+    }
 
-        // Check timeout after all search/filter operations (EPIC-048 US-001).
+    /// Checks timeout and cardinality guard-rails, recording failure on violation.
+    fn check_guardrails_and_record(
+        &self,
+        ctx: &crate::guardrails::QueryContext,
+        result_count: usize,
+    ) -> Result<()> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-
-        // Check cardinality on final result set (EPIC-048 US-003).
-        // check_cardinality uses fetch_add internally; since this is the only call on this
-        // ctx for the SELECT path, passing results.len() as the delta is correct.
-        ctx.check_cardinality(results.len())
+        ctx.check_cardinality(result_count)
             .map_err(crate::error::Error::from)
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        Ok(())
+    }
 
-        // EPIC-052 US-001: Apply DISTINCT deduplication if requested
+    /// Analyzes JOIN pushdown opportunities (EPIC-031 US-006).
+    #[allow(clippy::unused_self)]
+    fn analyze_join_pushdown(&self, stmt: &crate::velesql::SelectStatement) {
+        if stmt.joins.is_empty() {
+            return;
+        }
+        if let Some(ref cond) = stmt.where_clause {
+            let graph_vars: std::collections::HashSet<String> =
+                stmt.from_alias.iter().cloned().collect();
+            let join_tables = pushdown::extract_join_tables(&stmt.joins);
+            let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
+            tracing::debug!(
+                column_store_filters = analysis.column_store_filters.len(),
+                graph_filters = analysis.graph_filters.len(),
+                post_join_filters = analysis.post_join_filters.len(),
+                has_pushdown = analysis.has_pushdown(),
+                "JOIN pushdown analysis complete"
+            );
+        }
+    }
+
+    /// Applies DISTINCT, ORDER BY, and LIMIT to SELECT results.
+    fn apply_select_postprocessing(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        mut results: Vec<SearchResult>,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct::apply_distinct(results, &stmt.columns);
         }
-
-        // Apply ORDER BY if present
         if let Some(ref order_by) = stmt.order_by {
             self.apply_order_by(&mut results, order_by, params)?;
         }
-
-        // Apply limit
         results.truncate(limit);
-
-        // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
-        // Only record vector latency when a NEAR search was performed.
-        if vector_search.is_some() {
-            // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
-            #[allow(clippy::cast_possible_truncation)]
-            let vector_latency_us = ctx.elapsed().as_micros() as u64;
-            self.query_planner
-                .stats()
-                .update_vector_latency(vector_latency_us);
-        }
-        self.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
 

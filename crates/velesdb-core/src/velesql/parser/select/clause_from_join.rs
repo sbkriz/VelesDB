@@ -37,50 +37,25 @@ impl Parser {
         let mut alias = None;
         let mut condition = None;
         let mut using_columns = None;
+
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::join_type => join_type = Self::parse_join_type(inner_pair.as_str()),
                 Rule::identifier => table = extract_identifier(&inner_pair),
-                Rule::alias_clause => {
-                    for alias_inner in inner_pair.into_inner() {
-                        if alias_inner.as_rule() == Rule::identifier {
-                            alias = Some(extract_identifier(&alias_inner));
-                        }
-                    }
-                }
+                Rule::alias_clause => alias = Self::extract_alias(inner_pair),
                 Rule::join_spec => {
-                    for spec_inner in inner_pair.into_inner() {
-                        match spec_inner.as_rule() {
-                            Rule::on_clause => {
-                                for on_inner in spec_inner.into_inner() {
-                                    if on_inner.as_rule() == Rule::join_condition {
-                                        condition = Some(Self::parse_join_condition(on_inner)?);
-                                    }
-                                }
-                            }
-                            Rule::using_clause => {
-                                using_columns = Some(
-                                    spec_inner
-                                        .into_inner()
-                                        .filter(|p| p.as_rule() == Rule::identifier)
-                                        .map(|p| extract_identifier(&p))
-                                        .collect(),
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
+                    let (cond, using) = Self::parse_join_spec(inner_pair)?;
+                    condition = cond;
+                    using_columns = using;
                 }
                 _ => {}
             }
         }
+
         if condition.is_none() && using_columns.is_none() {
-            return Err(ParseError::syntax(
-                0,
-                "",
-                "JOIN clause requires ON or USING",
-            ));
+            return Err(ParseError::syntax(0, "", "JOIN clause requires ON or USING"));
         }
+
         Ok(JoinClause {
             join_type,
             table,
@@ -88,6 +63,45 @@ impl Parser {
             condition,
             using_columns,
         })
+    }
+
+    /// Extracts an alias identifier from an alias clause pair.
+    fn extract_alias(pair: pest::iterators::Pair<Rule>) -> Option<String> {
+        pair.into_inner()
+            .find(|p| p.as_rule() == Rule::identifier)
+            .map(|p| extract_identifier(&p))
+    }
+
+    /// Parses a join_spec into an optional ON condition and optional USING columns.
+    fn parse_join_spec(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(Option<JoinCondition>, Option<Vec<String>>), ParseError> {
+        let mut condition = None;
+        let mut using_columns = None;
+
+        for spec_inner in pair.into_inner() {
+            match spec_inner.as_rule() {
+                Rule::on_clause => {
+                    for on_inner in spec_inner.into_inner() {
+                        if on_inner.as_rule() == Rule::join_condition {
+                            condition = Some(Self::parse_join_condition(on_inner)?);
+                        }
+                    }
+                }
+                Rule::using_clause => {
+                    using_columns = Some(
+                        spec_inner
+                            .into_inner()
+                            .filter(|p| p.as_rule() == Rule::identifier)
+                            .map(|p| extract_identifier(&p))
+                            .collect(),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        Ok((condition, using_columns))
     }
 
     fn parse_join_type(text: &str) -> crate::velesql::JoinType {

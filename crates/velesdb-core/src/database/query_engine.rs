@@ -315,7 +315,7 @@ impl Database {
     }
 
     /// Executes an INSERT statement.
-    #[allow(clippy::too_many_lines, deprecated)]
+    #[allow(deprecated)]
     fn execute_insert(
         &self,
         stmt: &crate::velesql::InsertStatement,
@@ -382,7 +382,7 @@ impl Database {
     }
 
     /// Executes an UPDATE statement.
-    #[allow(clippy::too_many_lines, deprecated)]
+    #[allow(deprecated)]
     fn execute_update(
         &self,
         stmt: &crate::velesql::UpdateStatement,

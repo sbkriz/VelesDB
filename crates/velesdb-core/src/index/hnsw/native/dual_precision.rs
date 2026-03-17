@@ -369,7 +369,6 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             .inner
             .max_layer
             .load(std::sync::atomic::Ordering::Relaxed);
-        let quantizer = store.quantizer();
 
         // Greedy search from top layer to layer 1 using int8 distances
         let mut current_ep = ep;
@@ -378,55 +377,79 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         }
 
         // Search layer 0 with ef_search using int8 distances
+        let ef = ef_search.max(k);
         let mut visited: FxHashSet<NodeId> = FxHashSet::default();
         let mut candidates: BinaryHeap<Reverse<(u32, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(u32, NodeId)> = BinaryHeap::new();
 
-        // Initialize with entry point
-        if let Some(ep_slice) = store.get_slice(current_ep) {
-            let dist = quantizer.distance_l2_quantized_slice(query_int8, ep_slice);
-            candidates.push(Reverse((dist, current_ep)));
-            results.push((dist, current_ep));
-            visited.insert(current_ep);
-        }
-
-        let ef = ef_search.max(k);
+        Self::init_search_from_ep(store, query_int8, current_ep, &mut visited, &mut candidates, &mut results);
 
         while let Some(Reverse((c_dist, c_node))) = candidates.pop() {
-            let furthest_dist = results.peek().map_or(u32::MAX, |r| r.0);
-
-            if c_dist > furthest_dist && results.len() >= ef {
+            if c_dist > results.peek().map_or(u32::MAX, |r| r.0) && results.len() >= ef {
                 break;
             }
 
             let layers = self.inner.layers.read();
             let _ = layers[0].with_neighbors(c_node, |neighbors| {
-                for &neighbor in neighbors {
-                    if visited.insert(neighbor) {
-                        if let Some(neighbor_slice) = store.get_slice(neighbor) {
-                            let dist =
-                                quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
-                            let furthest = results.peek().map_or(u32::MAX, |r| r.0);
-
-                            if dist < furthest || results.len() < ef {
-                                candidates.push(Reverse((dist, neighbor)));
-                                results.push((dist, neighbor));
-
-                                if results.len() > ef {
-                                    results.pop();
-                                }
-                            }
-                        }
-                    }
-                }
+                Self::process_int8_neighbors(
+                    store, query_int8, neighbors, ef,
+                    &mut visited, &mut candidates, &mut results,
+                );
             });
         }
 
-        // Convert to sorted vec
         let mut result_vec: Vec<(NodeId, u32)> = results.into_iter().map(|(d, n)| (n, d)).collect();
         result_vec.sort_by_key(|&(_, d)| d);
         result_vec.truncate(k);
         result_vec
+    }
+
+    /// Seeds the search state with the entry point for layer-0 int8 search.
+    fn init_search_from_ep(
+        store: &QuantizedVectorStore,
+        query_int8: &[u8],
+        ep: NodeId,
+        visited: &mut rustc_hash::FxHashSet<NodeId>,
+        candidates: &mut std::collections::BinaryHeap<std::cmp::Reverse<(u32, NodeId)>>,
+        results: &mut std::collections::BinaryHeap<(u32, NodeId)>,
+    ) {
+        if let Some(ep_slice) = store.get_slice(ep) {
+            let dist = store.quantizer().distance_l2_quantized_slice(query_int8, ep_slice);
+            candidates.push(std::cmp::Reverse((dist, ep)));
+            results.push((dist, ep));
+            visited.insert(ep);
+        }
+    }
+
+    /// Evaluates neighbor candidates using int8 distances, updating the search state.
+    fn process_int8_neighbors(
+        store: &QuantizedVectorStore,
+        query_int8: &[u8],
+        neighbors: &[NodeId],
+        ef: usize,
+        visited: &mut rustc_hash::FxHashSet<NodeId>,
+        candidates: &mut std::collections::BinaryHeap<std::cmp::Reverse<(u32, NodeId)>>,
+        results: &mut std::collections::BinaryHeap<(u32, NodeId)>,
+    ) {
+        let quantizer = store.quantizer();
+        for &neighbor in neighbors {
+            if !visited.insert(neighbor) {
+                continue;
+            }
+            let Some(neighbor_slice) = store.get_slice(neighbor) else {
+                continue;
+            };
+            let dist = quantizer.distance_l2_quantized_slice(query_int8, neighbor_slice);
+            let furthest = results.peek().map_or(u32::MAX, |r| r.0);
+
+            if dist < furthest || results.len() < ef {
+                candidates.push(std::cmp::Reverse((dist, neighbor)));
+                results.push((dist, neighbor));
+                if results.len() > ef {
+                    results.pop();
+                }
+            }
+        }
     }
 
     /// Greedy search in a single layer using int8 distances.

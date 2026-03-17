@@ -139,14 +139,13 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed or a guard-rail is violated.
-    #[allow(clippy::too_many_lines)] // BFS traversal + guard-rail checks + binding projection
+    /// Executes a MATCH query on this collection (EPIC-045 US-002, EPIC-048).
     pub fn execute_match_with_context(
         &self,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
-        // Get limit from return clause
         let limit = match_clause.return_clause.limit.map_or(100, |l| l as usize);
 
         if match_clause.patterns.is_empty() {
@@ -155,15 +154,8 @@ impl Collection {
             ));
         }
 
-        // EPIC-048 multi-pattern fix: iterate ALL patterns and merge results.
-        // Each pattern is executed independently.
-        // seen_pairs is per-pattern and keys on (start_id, target_id) so that multiple
-        // start nodes that each connect to the same target produce distinct result rows
-        // (e.g., MATCH (a)-[:KNOWS]->(b) where two different `a` reach the same `b`).
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
-        // Tracks how many results we have already reported to check_cardinality so we only
-        // pass the delta (not the cumulative total) on each periodic check.
         let mut reported_cardinality: usize = 0;
         let edge_store = self.edge_store.read();
 
@@ -172,9 +164,6 @@ impl Collection {
                 break;
             }
 
-            // Per-pattern deduplication keys on (start_id, target_id) so that two
-            // different start nodes reaching the same target each produce a distinct row.
-            // Keying only on target_id would incorrectly collapse those rows.
             let mut seen_pairs: std::collections::HashSet<(u64, u64)> =
                 std::collections::HashSet::new();
 
@@ -183,39 +172,14 @@ impl Collection {
                 continue;
             }
 
-            // If no relationships in pattern, return start nodes directly
             if pattern.relationships.is_empty() {
-                for (node_id, bindings) in start_nodes {
-                    if all_results.len() >= limit {
-                        break;
-                    }
-                    // Apply WHERE filter if present (EPIC-045 US-002)
-                    if let Some(ref where_clause) = match_clause.where_clause {
-                        if !self.evaluate_where_condition(
-                            node_id,
-                            Some(&bindings),
-                            where_clause,
-                            params,
-                        )? {
-                            continue;
-                        }
-                    }
-                    // For single-node patterns, use (node_id, node_id) as the pair key.
-                    if seen_pairs.contains(&(node_id, node_id)) {
-                        continue;
-                    }
-                    seen_pairs.insert((node_id, node_id));
-
-                    let mut result = MatchResult::new(node_id, 0, Vec::new());
-                    result.bindings.clone_from(&bindings);
-                    result.projected =
-                        self.project_properties(&bindings, &match_clause.return_clause);
-                    all_results.push(result);
-                }
+                self.collect_single_node_results(
+                    &start_nodes, match_clause, params, &mut seen_pairs,
+                    &mut all_results, limit,
+                )?;
                 continue;
             }
 
-            // Compute max depth and rel types for this pattern
             let max_depth = Self::compute_max_depth(pattern);
             let rel_types = Self::extract_rel_types(pattern);
 
@@ -235,80 +199,130 @@ impl Collection {
                     }
 
                     iteration_count += 1;
+                    self.check_periodic_guardrails(
+                        ctx, iteration_count, &all_results, &mut reported_cardinality,
+                    )?;
 
-                    // Guard-rail checks every 100 iterations (EPIC-048).
-                    if iteration_count % 100 == 0 {
-                        if let Some(ctx) = ctx {
-                            ctx.check_timeout()
-                                .map_err(|e| Error::GuardRail(e.to_string()))?;
-                            // Pass delta (new results since last check) not cumulative total,
-                            // because check_cardinality uses fetch_add internally.
-                            let new_results =
-                                all_results.len().saturating_sub(reported_cardinality);
-                            if new_results > 0 {
-                                ctx.check_cardinality(new_results)
-                                    .map_err(|e| Error::GuardRail(e.to_string()))?;
-                                reported_cardinality = all_results.len();
-                            }
-                        }
-                    }
+                    let match_result = self.build_traversal_match_result(
+                        &traversal_result, &start_bindings, pattern, ctx,
+                    )?;
 
-                    let mut match_result = MatchResult::new(
-                        traversal_result.target_id,
-                        traversal_result.depth,
-                        traversal_result.path.clone(),
-                    );
-
-                    // Copy start bindings
-                    match_result.bindings.clone_from(&start_bindings);
-
-                    // Guard-rail depth check (US-002).
-                    if let Some(ctx) = ctx {
-                        ctx.check_depth(traversal_result.depth)
-                            .map_err(|e| Error::GuardRail(e.to_string()))?;
-                    }
-
-                    // Add target node binding if pattern has alias
-                    if let Some(target_pattern) = pattern.nodes.get(traversal_result.depth as usize)
-                    {
-                        if let Some(ref alias) = target_pattern.alias {
-                            let alias_str: String = alias.clone();
-                            match_result
-                                .bindings
-                                .insert(alias_str, traversal_result.target_id);
-                        }
-                    }
-
-                    // Apply WHERE filter if present (EPIC-045 US-002)
                     if let Some(ref where_clause) = match_clause.where_clause {
                         if !self.evaluate_where_condition(
                             traversal_result.target_id,
                             Some(&match_result.bindings),
-                            where_clause,
-                            params,
+                            where_clause, params,
                         )? {
                             continue;
                         }
                     }
 
-                    // Skip duplicate (start, target) pairs within this pattern.
-                    // Keying on the pair preserves rows where different start nodes
-                    // reach the same target via distinct traversal paths.
                     if seen_pairs.contains(&(start_id, traversal_result.target_id)) {
                         continue;
                     }
                     seen_pairs.insert((start_id, traversal_result.target_id));
 
-                    // Project properties from RETURN clause (EPIC-058 US-007)
-                    match_result.projected = self
-                        .project_properties(&match_result.bindings, &match_clause.return_clause);
+                    let mut final_result = match_result;
+                    final_result.projected = self
+                        .project_properties(&final_result.bindings, &match_clause.return_clause);
 
-                    all_results.push(match_result);
-                } // end for traversal_result
-            } // end for (start_id, start_bindings)
-        } // end for pattern
+                    all_results.push(final_result);
+                }
+            }
+        }
 
         Ok(all_results)
+    }
+
+    /// Collects results for single-node patterns (no relationships).
+    fn collect_single_node_results(
+        &self,
+        start_nodes: &[(u64, HashMap<String, u64>)],
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        seen_pairs: &mut std::collections::HashSet<(u64, u64)>,
+        all_results: &mut Vec<MatchResult>,
+        limit: usize,
+    ) -> Result<()> {
+        for (node_id, bindings) in start_nodes {
+            if all_results.len() >= limit {
+                break;
+            }
+            if let Some(ref where_clause) = match_clause.where_clause {
+                if !self.evaluate_where_condition(
+                    *node_id, Some(bindings), where_clause, params,
+                )? {
+                    continue;
+                }
+            }
+            if seen_pairs.contains(&(*node_id, *node_id)) {
+                continue;
+            }
+            seen_pairs.insert((*node_id, *node_id));
+
+            let mut result = MatchResult::new(*node_id, 0, Vec::new());
+            result.bindings.clone_from(bindings);
+            result.projected =
+                self.project_properties(bindings, &match_clause.return_clause);
+            all_results.push(result);
+        }
+        Ok(())
+    }
+
+    /// Periodic guard-rail checks every 100 iterations (EPIC-048).
+    #[allow(clippy::unused_self)]
+    fn check_periodic_guardrails(
+        &self,
+        ctx: Option<&QueryContext>,
+        iteration_count: u32,
+        all_results: &[MatchResult],
+        reported_cardinality: &mut usize,
+    ) -> Result<()> {
+        if iteration_count % 100 != 0 {
+            return Ok(());
+        }
+        let Some(ctx) = ctx else { return Ok(()) };
+        ctx.check_timeout()
+            .map_err(|e| Error::GuardRail(e.to_string()))?;
+        let new_results = all_results.len().saturating_sub(*reported_cardinality);
+        if new_results > 0 {
+            ctx.check_cardinality(new_results)
+                .map_err(|e| Error::GuardRail(e.to_string()))?;
+            *reported_cardinality = all_results.len();
+        }
+        Ok(())
+    }
+
+    /// Builds a `MatchResult` from a traversal result with bindings and depth check.
+    #[allow(clippy::unused_self)]
+    fn build_traversal_match_result(
+        &self,
+        traversal_result: &crate::collection::graph::TraversalResult,
+        start_bindings: &HashMap<String, u64>,
+        pattern: &GraphPattern,
+        ctx: Option<&QueryContext>,
+    ) -> Result<MatchResult> {
+        let mut match_result = MatchResult::new(
+            traversal_result.target_id,
+            traversal_result.depth,
+            traversal_result.path.clone(),
+        );
+        match_result.bindings.clone_from(start_bindings);
+
+        if let Some(ctx) = ctx {
+            ctx.check_depth(traversal_result.depth)
+                .map_err(|e| Error::GuardRail(e.to_string()))?;
+        }
+
+        if let Some(target_pattern) = pattern.nodes.get(traversal_result.depth as usize) {
+            if let Some(ref alias) = target_pattern.alias {
+                match_result
+                    .bindings
+                    .insert(alias.clone(), traversal_result.target_id);
+            }
+        }
+
+        Ok(match_result)
     }
 
     /// Finds start nodes matching the first node pattern.
@@ -322,73 +336,54 @@ impl Collection {
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
 
-        // If node has labels, filter by label
         let has_label_filter = !first_node.labels.is_empty();
         let has_property_filter = !first_node.properties.is_empty();
 
-        // Scan all nodes and filter.
-        // Retrieve the payload at most once per node (reused for both label and property checks).
         for id in vector_storage.ids() {
-            let mut matches = true;
-
-            // Retrieve payload once when either filter requires it.
             let payload_opt = if has_label_filter || has_property_filter {
                 payload_storage.retrieve(id).ok().flatten()
             } else {
                 None
             };
 
-            // Check label filter
-            if has_label_filter {
-                if let Some(ref payload) = payload_opt {
-                    if let Some(labels) = payload.get("_labels").and_then(|v| v.as_array()) {
-                        let node_labels: Vec<&str> =
-                            labels.iter().filter_map(|v| v.as_str()).collect();
-                        for required_label in &first_node.labels {
-                            let label_str: &str = required_label.as_str();
-                            if !node_labels.contains(&label_str) {
-                                matches = false;
-                                break;
-                            }
-                        }
-                    } else {
-                        matches = false;
-                    }
-                } else {
-                    matches = false;
-                }
+            if has_label_filter && !Self::node_matches_labels(payload_opt.as_ref(), &first_node.labels) {
+                continue;
+            }
+            if has_property_filter && !Self::node_matches_properties(payload_opt.as_ref(), &first_node.properties) {
+                continue;
             }
 
-            // Check property filter (reuses the same payload retrieved above)
-            if matches && has_property_filter {
-                if let Some(ref payload) = payload_opt {
-                    for (key, expected_value) in &first_node.properties {
-                        if let Some(actual_value) = payload.get(key) {
-                            if !Self::values_match(expected_value, actual_value) {
-                                matches = false;
-                                break;
-                            }
-                        } else {
-                            matches = false;
-                            break;
-                        }
-                    }
-                } else {
-                    matches = false;
-                }
+            let mut bindings: HashMap<String, u64> = HashMap::new();
+            if let Some(ref alias) = first_node.alias {
+                bindings.insert(alias.clone(), id);
             }
-
-            if matches {
-                let mut bindings: HashMap<String, u64> = HashMap::new();
-                if let Some(ref alias) = first_node.alias {
-                    let alias_str: String = alias.clone();
-                    bindings.insert(alias_str, id);
-                }
-                results.push((id, bindings));
-            }
+            results.push((id, bindings));
         }
 
         Ok(results)
+    }
+
+    /// Checks if a node's payload matches the required labels.
+    fn node_matches_labels(payload: Option<&serde_json::Value>, required: &[String]) -> bool {
+        let Some(payload) = payload else { return false };
+        let Some(labels) = payload.get("_labels").and_then(|v| v.as_array()) else {
+            return false;
+        };
+        let node_labels: Vec<&str> = labels.iter().filter_map(|v| v.as_str()).collect();
+        required.iter().all(|r| node_labels.contains(&r.as_str()))
+    }
+
+    /// Checks if a node's payload matches the required properties.
+    fn node_matches_properties(
+        payload: Option<&serde_json::Value>,
+        properties: &HashMap<String, crate::velesql::Value>,
+    ) -> bool {
+        let Some(payload) = payload else { return false };
+        properties.iter().all(|(key, expected)| {
+            payload
+                .get(key)
+                .is_some_and(|actual| Self::values_match(expected, actual))
+        })
     }
 
     /// Computes maximum traversal depth from pattern.

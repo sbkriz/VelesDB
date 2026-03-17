@@ -102,6 +102,21 @@ def _normalise_edge(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _extract_graph_metadata(node: Any) -> Dict[str, Any]:
+    """Build metadata dict from a LlamaIndex node for graph loading."""
+    content = node.get_content() if hasattr(node, "get_content") else None
+    metadata: Dict[str, Any] = {
+        "node_id": node.node_id,
+        "text_preview": content[:200] if content else "",
+    }
+    if hasattr(node, "metadata") and node.metadata:
+        metadata.update({
+            k: v for k, v in node.metadata.items()
+            if isinstance(v, (str, int, float, bool))
+        })
+    return metadata
+
+
 class GraphLoader:
     """Load entities and relations into VelesDB's Knowledge Graph.
 
@@ -298,27 +313,11 @@ class GraphLoader:
         nodes_added = 0
 
         for node in nodes:
-            # Use deterministic SHA256-based ID (not Python hash() which is randomized)
             node_id = _generate_id(node.node_id, node_label)
-
-            content = node.get_content() if hasattr(node, "get_content") else None
-            metadata = {
-                "node_id": node.node_id,
-                "text_preview": content[:200] if content else "",
-            }
-
-            if hasattr(node, "metadata") and node.metadata:
-                metadata.update({
-                    k: v for k, v in node.metadata.items()
-                    if isinstance(v, (str, int, float, bool))
-                })
+            metadata = _extract_graph_metadata(node)
 
             try:
-                self.add_node(
-                    id=node_id,
-                    label=node_label,
-                    metadata=metadata,
-                )
+                self.add_node(id=node_id, label=node_label, metadata=metadata)
                 nodes_added += 1
             except Exception as e:
                 logger.warning(f"Failed to add node {node.node_id}: {e}")

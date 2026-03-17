@@ -123,70 +123,37 @@ impl OperationalMetrics {
         use std::fmt::Write;
         let mut output = String::new();
 
-        // Queries total
-        // BUG-4 FIX: success = total - errors, not total (which includes errors)
         let total = self.queries_total.load(Ordering::Relaxed);
         let errors = self.query_errors.load(Ordering::Relaxed);
         let success = total.saturating_sub(errors);
 
-        output.push_str("# HELP velesdb_queries_total Total number of queries executed\n");
-        output.push_str("# TYPE velesdb_queries_total counter\n");
-        let _ = writeln!(
-            output,
-            "velesdb_queries_total{{status=\"success\"}} {success}"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_queries_total{{status=\"error\"}} {errors}\n"
-        );
+        Self::write_metric_header(&mut output, "velesdb_queries_total", "counter", "Total number of queries executed");
+        let _ = writeln!(output, "velesdb_queries_total{{status=\"success\"}} {success}");
+        let _ = writeln!(output, "velesdb_queries_total{{status=\"error\"}} {errors}\n");
 
-        // Query types
-        output.push_str("# HELP velesdb_queries_by_type Queries by type\n");
-        output.push_str("# TYPE velesdb_queries_by_type counter\n");
-        let _ = writeln!(
-            output,
-            "velesdb_queries_by_type{{type=\"vector\"}} {}",
-            self.vector_queries.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_queries_by_type{{type=\"graph\"}} {}",
-            self.graph_queries.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_queries_by_type{{type=\"hybrid\"}} {}\n",
-            self.hybrid_queries.load(Ordering::Relaxed)
-        );
+        Self::write_metric_header(&mut output, "velesdb_queries_by_type", "counter", "Queries by type");
+        let _ = writeln!(output, "velesdb_queries_by_type{{type=\"vector\"}} {}", self.vector_queries.load(Ordering::Relaxed));
+        let _ = writeln!(output, "velesdb_queries_by_type{{type=\"graph\"}} {}", self.graph_queries.load(Ordering::Relaxed));
+        let _ = writeln!(output, "velesdb_queries_by_type{{type=\"hybrid\"}} {}\n", self.hybrid_queries.load(Ordering::Relaxed));
 
-        // Documents
-        output.push_str("# HELP velesdb_documents_total Total documents in database\n");
-        output.push_str("# TYPE velesdb_documents_total gauge\n");
-        let _ = writeln!(
-            output,
-            "velesdb_documents_total {}\n",
-            self.documents_total.load(Ordering::Relaxed)
-        );
-
-        // Index size
-        output.push_str("# HELP velesdb_index_size_bytes Total index size in bytes\n");
-        output.push_str("# TYPE velesdb_index_size_bytes gauge\n");
-        let _ = writeln!(
-            output,
-            "velesdb_index_size_bytes {}\n",
-            self.index_size_bytes.load(Ordering::Relaxed)
-        );
-
-        // Active connections
-        output.push_str("# HELP velesdb_active_connections Current active connections\n");
-        output.push_str("# TYPE velesdb_active_connections gauge\n");
-        let _ = writeln!(
-            output,
-            "velesdb_active_connections {}",
-            self.active_connections.load(Ordering::Relaxed)
-        );
+        Self::write_gauge(&mut output, "velesdb_documents_total", "Total documents in database", self.documents_total.load(Ordering::Relaxed));
+        Self::write_gauge(&mut output, "velesdb_index_size_bytes", "Total index size in bytes", self.index_size_bytes.load(Ordering::Relaxed));
+        Self::write_gauge(&mut output, "velesdb_active_connections", "Current active connections", self.active_connections.load(Ordering::Relaxed));
 
         output
+    }
+
+    /// Writes a Prometheus metric header (HELP + TYPE lines).
+    fn write_metric_header(output: &mut String, name: &str, metric_type: &str, help: &str) {
+        use std::fmt::Write;
+        let _ = write!(output, "# HELP {name} {help}\n# TYPE {name} {metric_type}\n");
+    }
+
+    /// Writes a Prometheus gauge metric with header.
+    fn write_gauge(output: &mut String, name: &str, help: &str, value: u64) {
+        use std::fmt::Write;
+        Self::write_metric_header(output, name, "gauge", help);
+        let _ = writeln!(output, "{name} {value}\n");
     }
 }
 

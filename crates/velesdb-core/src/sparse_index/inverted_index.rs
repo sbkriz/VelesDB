@@ -286,6 +286,27 @@ impl SparseInvertedIndex {
             return;
         }
 
+        let (batch_postings, batch_max_weights, batch_doc_ids) =
+            Self::build_batch_buffers(docs);
+
+        let mut seg = self.mutable.write();
+        let new_docs = Self::merge_doc_ids(&mut seg, batch_doc_ids);
+        if new_docs > 0 {
+            self.doc_count.fetch_add(new_docs, Ordering::Relaxed);
+        }
+
+        Self::merge_batch_into_segment(&mut seg, batch_postings, &batch_max_weights);
+
+        if seg.doc_count >= FREEZE_THRESHOLD {
+            self.freeze_inner(&mut seg);
+        }
+    }
+
+    /// Pre-computes posting entries and max weights from a batch of documents.
+    #[allow(clippy::type_complexity)]
+    fn build_batch_buffers(
+        docs: &[(u64, SparseVector)],
+    ) -> (FxHashMap<u32, Vec<PostingEntry>>, FxHashMap<u32, f32>, FxHashSet<u64>) {
         let mut batch_postings: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
         let mut batch_max_weights: FxHashMap<u32, f32> = FxHashMap::default();
         let mut batch_doc_ids: FxHashSet<u64> = FxHashSet::default();
@@ -308,7 +329,11 @@ impl SparseInvertedIndex {
             }
         }
 
-        let mut seg = self.mutable.write();
+        (batch_postings, batch_max_weights, batch_doc_ids)
+    }
+
+    /// Merges batch doc IDs into the mutable segment, returning the count of new docs.
+    fn merge_doc_ids(seg: &mut MutableSegment, batch_doc_ids: FxHashSet<u64>) -> u64 {
         let mut new_docs = 0_u64;
         for point_id in batch_doc_ids {
             if seg.doc_set.insert(point_id) {
@@ -316,24 +341,25 @@ impl SparseInvertedIndex {
                 new_docs += 1;
             }
         }
-        if new_docs > 0 {
-            self.doc_count.fetch_add(new_docs, Ordering::Relaxed);
-        }
+        new_docs
+    }
 
+    /// Merges batch postings and max weights into the mutable segment.
+    fn merge_batch_into_segment(
+        seg: &mut MutableSegment,
+        batch_postings: FxHashMap<u32, Vec<PostingEntry>>,
+        batch_max_weights: &FxHashMap<u32, f32>,
+    ) {
         for (term_id, updates) in batch_postings {
             let entries = seg.postings.entry(term_id).or_default();
             MutableSegment::merge_batch_postings(entries, updates);
 
-            if let Some(abs_weight) = batch_max_weights.get(&term_id) {
+            if let Some(&abs_weight) = batch_max_weights.get(&term_id) {
                 let max_weight = seg.max_weights.entry(term_id).or_insert(0.0);
-                if *abs_weight > *max_weight {
-                    *max_weight = *abs_weight;
+                if abs_weight > *max_weight {
+                    *max_weight = abs_weight;
                 }
             }
-        }
-
-        if seg.doc_count >= FREEZE_THRESHOLD {
-            self.freeze_inner(&mut seg);
         }
     }
 

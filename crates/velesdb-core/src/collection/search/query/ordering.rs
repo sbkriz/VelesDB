@@ -80,102 +80,24 @@ impl Collection {
         order_by: &[crate::velesql::SelectOrderBy],
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<()> {
-        use crate::velesql::OrderByExpr;
-
         if order_by.is_empty() {
             return Ok(());
         }
 
-        // BUG-3 FIX: Pre-compute similarity scores for ALL ORDER BY similarity() columns
-        // Each similarity() can use a different vector, so we need separate score vectors
-        let mut similarity_scores_map: std::collections::HashMap<usize, Vec<f32>> =
-            std::collections::HashMap::new();
-        for (idx, ob) in order_by.iter().enumerate() {
-            if let OrderByExpr::Similarity(sim) = &ob.expr {
-                let order_vec = Self::resolve_vector(&sim.vector, params)?;
-                let scores: Vec<f32> = results
-                    .iter()
-                    .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
-                    .collect();
-                similarity_scores_map.insert(idx, scores);
-            }
-        }
+        let similarity_scores_map = self.precompute_similarity_scores(results, order_by, params)?;
+        let higher_is_better = self.config.read().metric.higher_is_better();
 
-        // Get metric for similarity comparison direction
-        let metric = self.config.read().metric;
-        let higher_is_better = metric.higher_is_better();
-
-        // Create index-based sorting to maintain score association
         let mut indices: Vec<usize> = (0..results.len()).collect();
-
-        // BUG-5 FIX: Use stable sort to preserve relative order of equal elements
-        // This ensures documented stable multi-column sorting behavior
         indices.sort_by(|&i, &j| {
-            // Compare by each ORDER BY column in sequence
-            for (idx, ob) in order_by.iter().enumerate() {
-                let cmp = match &ob.expr {
-                    OrderByExpr::Similarity(_) => {
-                        // BUG-3 FIX: Use scores for THIS specific similarity() column
-                        if let Some(scores) = similarity_scores_map.get(&idx) {
-                            let score_i = scores[i];
-                            let score_j = scores[j];
-                            score_i.total_cmp(&score_j)
-                        } else {
-                            Ordering::Equal
-                        }
-                    }
-                    OrderByExpr::Field(field_name) => {
-                        let val_i = results[i]
-                            .point
-                            .payload
-                            .as_ref()
-                            .and_then(|p| p.get(field_name));
-                        let val_j = results[j]
-                            .point
-                            .payload
-                            .as_ref()
-                            .and_then(|p| p.get(field_name));
-                        compare_json_values(val_i, val_j)
-                    }
-                    OrderByExpr::Aggregate(_) => {
-                        // EPIC-040 US-002: ORDER BY aggregate requires pre-computed values
-                        // For raw results (not grouped), aggregates don't apply - skip
-                        Ordering::Equal
-                    }
-                };
-
-                // Apply direction (ASC/DESC)
-                let directed_cmp = if ob.descending {
-                    // For similarity with distance metrics, invert the comparison
-                    if matches!(&ob.expr, OrderByExpr::Similarity(_)) && !higher_is_better {
-                        cmp // Distance: lower is better, DESC means keep natural order
-                    } else {
-                        cmp.reverse()
-                    }
-                } else {
-                    // ASC
-                    if matches!(&ob.expr, OrderByExpr::Similarity(_)) && !higher_is_better {
-                        cmp.reverse() // Distance: lower is better, ASC means reverse
-                    } else {
-                        cmp
-                    }
-                };
-
-                // If not equal, return this comparison
-                if directed_cmp != Ordering::Equal {
-                    return directed_cmp;
-                }
-                // Otherwise, continue to next ORDER BY column
-            }
-            Ordering::Equal
+            Self::compare_by_order_columns(
+                i, j, results, order_by, &similarity_scores_map, higher_is_better,
+            )
         });
 
-        // Reorder results based on sorted indices
         let sorted_results: Vec<SearchResult> =
             indices.iter().map(|&i| results[i].clone()).collect();
         results.clone_from_slice(&sorted_results);
 
-        // Update scores if similarity was used (use first similarity column's scores)
         if let Some(scores) = similarity_scores_map.get(&0) {
             for (i, result) in results.iter_mut().enumerate() {
                 result.score = scores[indices[i]];
@@ -183,5 +105,75 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    /// Pre-computes similarity scores for all ORDER BY similarity() columns.
+    fn precompute_similarity_scores(
+        &self,
+        results: &[SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<std::collections::HashMap<usize, Vec<f32>>> {
+        use crate::velesql::OrderByExpr;
+        let mut map = std::collections::HashMap::new();
+        for (idx, ob) in order_by.iter().enumerate() {
+            if let OrderByExpr::Similarity(sim) = &ob.expr {
+                let order_vec = Self::resolve_vector(&sim.vector, params)?;
+                let scores: Vec<f32> = results
+                    .iter()
+                    .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
+                    .collect();
+                map.insert(idx, scores);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Compares two result indices across all ORDER BY columns.
+    fn compare_by_order_columns(
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        similarity_scores: &std::collections::HashMap<usize, Vec<f32>>,
+        higher_is_better: bool,
+    ) -> Ordering {
+        use crate::velesql::OrderByExpr;
+        for (idx, ob) in order_by.iter().enumerate() {
+            let cmp = match &ob.expr {
+                OrderByExpr::Similarity(_) => similarity_scores
+                    .get(&idx)
+                    .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
+                OrderByExpr::Field(field_name) => {
+                    let val_i = results[i].point.payload.as_ref().and_then(|p| p.get(field_name));
+                    let val_j = results[j].point.payload.as_ref().and_then(|p| p.get(field_name));
+                    compare_json_values(val_i, val_j)
+                }
+                OrderByExpr::Aggregate(_) => Ordering::Equal,
+            };
+
+            let is_similarity = matches!(&ob.expr, OrderByExpr::Similarity(_));
+            let directed_cmp = Self::apply_sort_direction(cmp, ob.descending, is_similarity, higher_is_better);
+            if directed_cmp != Ordering::Equal {
+                return directed_cmp;
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Applies ASC/DESC direction, accounting for distance metric inversion.
+    fn apply_sort_direction(
+        cmp: Ordering,
+        descending: bool,
+        is_similarity: bool,
+        higher_is_better: bool,
+    ) -> Ordering {
+        if descending {
+            if is_similarity && !higher_is_better { cmp } else { cmp.reverse() }
+        } else if is_similarity && !higher_is_better {
+            cmp.reverse()
+        } else {
+            cmp
+        }
     }
 }

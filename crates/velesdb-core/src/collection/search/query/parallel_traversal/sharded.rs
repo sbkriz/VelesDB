@@ -90,107 +90,107 @@ impl ShardedTraverser {
         let mut all_results = Vec::new();
         let mut global_visited = FxHashSet::default();
 
-        // Include start nodes at depth 0
         for &start in start_nodes {
             global_visited.insert(start);
-            stats.add_nodes_visited(1); // Count start node
+            stats.add_nodes_visited(1);
             all_results.push(TraversalResult::new(start, start, Vec::new(), 0));
         }
 
-        // Initialize: assign start nodes to shards
-        let mut shard_frontiers: Vec<Vec<(u64, u64, Vec<u64>)>> = vec![Vec::new(); self.num_shards];
+        let mut shard_frontiers = self.initialize_frontiers(start_nodes);
 
-        for &start in start_nodes {
-            let shard = self.shard_for_node(start);
-            shard_frontiers[shard].push((start, start, Vec::new()));
-        }
-
-        // Iterative BFS with shard parallelism
         for depth in 1..=self.config.max_depth {
             if all_results.len() >= self.config.limit {
                 break;
             }
-
-            // Check if any shard has work
-            let has_work = shard_frontiers.iter().any(|f| !f.is_empty());
-            if !has_work {
+            if shard_frontiers.iter().all(Vec::is_empty) {
                 break;
             }
 
-            // Process each shard in parallel
-            #[allow(clippy::type_complexity)]
-            let shard_results: Vec<(Vec<TraversalResult>, Vec<(u64, u64, Vec<u64>)>)> =
-                shard_frontiers
-                    .par_iter()
-                    .map(|frontier| {
-                        let mut results = Vec::new();
-                        let mut next_frontier = Vec::new();
+            let shard_results = self.expand_shards(&shard_frontiers, &adjacency, &stats, depth);
 
-                        for (start_node, current_node, path) in frontier {
-                            let neighbors = adjacency(*current_node);
-                            stats.add_edges_traversed(neighbors.len());
-
-                            // Adjacency returns (neighbor_id, edge_id)
-                            for (neighbor, edge_id) in neighbors {
-                                let mut new_path = path.clone();
-                                new_path.push(edge_id);
-
-                                results.push(TraversalResult::new(
-                                    *start_node,
-                                    neighbor,
-                                    new_path.clone(),
-                                    depth,
-                                ));
-
-                                next_frontier.push((*start_node, neighbor, new_path));
-                            }
-                        }
-
-                        (results, next_frontier)
-                    })
-                    .collect();
-
-            // Merge results and build next frontiers
-            let mut new_shard_frontiers: Vec<Vec<(u64, u64, Vec<u64>)>> =
-                vec![Vec::new(); self.num_shards];
-
-            // Track nodes newly discovered in this round
-            let mut newly_visited = FxHashSet::default();
-
-            for (results, next_frontier) in shard_results {
-                for result in results {
-                    if global_visited.insert(result.end_node) {
-                        stats.add_nodes_visited(1);
-                        newly_visited.insert(result.end_node);
-                        all_results.push(result);
-
-                        if all_results.len() >= self.config.limit {
-                            break;
-                        }
-                    }
-                }
-
-                // Distribute next frontier nodes to their shards
-                // Include nodes that were newly discovered (they need expansion)
-                for (start, node, path) in next_frontier {
-                    if !newly_visited.contains(&node) {
-                        // Node was already visited in a previous round
-                        continue;
-                    }
-                    let shard = self.shard_for_node(node);
-                    new_shard_frontiers[shard].push((start, node, path));
-                }
-            }
-
-            shard_frontiers = new_shard_frontiers;
+            shard_frontiers = self.merge_shard_results(
+                shard_results, &mut global_visited, &stats, &mut all_results,
+            );
         }
 
         let mut final_stats = stats;
         final_stats.start_nodes_count = start_nodes.len();
         final_stats.raw_results = all_results.len();
         final_stats.deduplicated_results = all_results.len();
-
         (all_results, final_stats)
+    }
+
+    /// Initializes shard frontiers from start nodes.
+    fn initialize_frontiers(&self, start_nodes: &[u64]) -> Vec<Vec<(u64, u64, Vec<u64>)>> {
+        let mut frontiers = vec![Vec::new(); self.num_shards];
+        for &start in start_nodes {
+            frontiers[self.shard_for_node(start)].push((start, start, Vec::new()));
+        }
+        frontiers
+    }
+
+    /// Expands all shard frontiers in parallel.
+    #[allow(clippy::type_complexity, clippy::unused_self)]
+    fn expand_shards<F>(
+        &self,
+        shard_frontiers: &[Vec<(u64, u64, Vec<u64>)>],
+        adjacency: &F,
+        stats: &TraversalStats,
+        depth: u32,
+    ) -> Vec<(Vec<TraversalResult>, Vec<(u64, u64, Vec<u64>)>)>
+    where
+        F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
+    {
+        shard_frontiers
+            .par_iter()
+            .map(|frontier| {
+                let mut results = Vec::new();
+                let mut next_frontier = Vec::new();
+                for (start_node, current_node, path) in frontier {
+                    let neighbors = adjacency(*current_node);
+                    stats.add_edges_traversed(neighbors.len());
+                    for (neighbor, edge_id) in neighbors {
+                        let mut new_path = path.clone();
+                        new_path.push(edge_id);
+                        results.push(TraversalResult::new(*start_node, neighbor, new_path.clone(), depth));
+                        next_frontier.push((*start_node, neighbor, new_path));
+                    }
+                }
+                (results, next_frontier)
+            })
+            .collect()
+    }
+
+    /// Merges shard results, deduplicates, and builds next frontiers.
+    #[allow(clippy::type_complexity)]
+    fn merge_shard_results(
+        &self,
+        shard_results: Vec<(Vec<TraversalResult>, Vec<(u64, u64, Vec<u64>)>)>,
+        global_visited: &mut FxHashSet<u64>,
+        stats: &TraversalStats,
+        all_results: &mut Vec<TraversalResult>,
+    ) -> Vec<Vec<(u64, u64, Vec<u64>)>> {
+        let mut new_frontiers = vec![Vec::new(); self.num_shards];
+        let mut newly_visited = FxHashSet::default();
+
+        for (results, next_frontier) in shard_results {
+            for result in results {
+                if global_visited.insert(result.end_node) {
+                    stats.add_nodes_visited(1);
+                    newly_visited.insert(result.end_node);
+                    all_results.push(result);
+                    if all_results.len() >= self.config.limit {
+                        break;
+                    }
+                }
+            }
+            for (start, node, path) in next_frontier {
+                if newly_visited.contains(&node) {
+                    new_frontiers[self.shard_for_node(node)].push((start, node, path));
+                }
+            }
+        }
+        new_frontiers
     }
 
     /// Executes BFS within a single shard (for testing/debugging).

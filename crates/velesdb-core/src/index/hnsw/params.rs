@@ -70,72 +70,22 @@ impl HnswParams {
     /// | ≤1M | 128 | 1600 | ≥95% |
     #[must_use]
     pub fn for_dataset_size(dimension: usize, expected_vectors: usize) -> Self {
-        match expected_vectors {
-            // Small datasets: balanced params
-            0..=10_000 => match dimension {
-                0..=256 => Self {
-                    max_connections: 24,
-                    ef_construction: 200,
-                    max_elements: 20_000,
-                    storage_mode: StorageMode::Full,
-                },
-                _ => Self {
-                    max_connections: 32,
-                    ef_construction: 400,
-                    max_elements: 20_000,
-                    storage_mode: StorageMode::Full,
-                },
-            },
-            // Medium datasets: aggressive params for 100K scale
-            // Optimized based on arXiv 2024-2025 research (VAMANA, DiskANN)
-            10_001..=100_000 => match dimension {
-                0..=256 => Self {
-                    max_connections: 64,
-                    ef_construction: 800,
-                    max_elements: 150_000,
-                    storage_mode: StorageMode::Full,
-                },
-                // 768D at 100K: M=128, ef=1600 targeting high recall
-                _ => Self {
-                    max_connections: 128,
-                    ef_construction: 1600,
-                    max_elements: 150_000,
-                    storage_mode: StorageMode::Full,
-                },
-            },
-            // Large datasets: maximum params for 500K scale
-            // M=128, ef=2000 based on OpenSearch/FAISS benchmarks
-            100_001..=500_000 => match dimension {
-                0..=256 => Self {
-                    max_connections: 96,
-                    ef_construction: 1200,
-                    max_elements: 750_000,
-                    storage_mode: StorageMode::Full,
-                },
-                // 768D at 500K: M=128, ef=2000 targeting high recall
-                _ => Self {
-                    max_connections: 128,
-                    ef_construction: 2000,
-                    max_elements: 750_000,
-                    storage_mode: StorageMode::Full,
-                },
-            },
-            // Very large datasets (up to 1M): maximum params targeting high recall
-            _ => match dimension {
-                0..=256 => Self {
-                    max_connections: 64,
-                    ef_construction: 800,
-                    max_elements: 1_500_000,
-                    storage_mode: StorageMode::Full,
-                },
-                // 768D+ at 1M vectors: M=128, ef=1600 based on OpenSearch research
-                _ => Self {
-                    max_connections: 128,
-                    ef_construction: 1600,
-                    max_elements: 1_500_000,
-                    storage_mode: StorageMode::Full,
-                },
-            },
+        let (m_low, ef_low, m_high, ef_high, max_elems) = match expected_vectors {
+            0..=10_000 => (24, 200, 32, 400, 20_000),
+            10_001..=100_000 => (64, 800, 128, 1600, 150_000),
+            100_001..=500_000 => (96, 1200, 128, 2000, 750_000),
+            _ => (64, 800, 128, 1600, 1_500_000),
+        };
+        let (m, ef) = if dimension <= 256 {
+            (m_low, ef_low)
+        } else {
+            (m_high, ef_high)
+        };
+        Self {
+            max_connections: m,
+            ef_construction: ef,
+            max_elements: max_elems,
+            storage_mode: StorageMode::Full,
         }
     }
 

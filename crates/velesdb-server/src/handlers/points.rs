@@ -185,43 +185,20 @@ pub async fn upsert_points(
     Path(name): Path<String>,
     Json(req): Json<UpsertPointsRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Collection '{}' not found or is not a vector collection",
-                        name
-                    ),
-                }),
-            )
-                .into_response()
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let points = match build_points_from_request(req) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
         }
     };
 
-    let mut points: Vec<Point> = Vec::with_capacity(req.points.len());
-    for p in req.points {
-        let sparse = match convert_sparse_inputs(p.sparse_vector, p.sparse_vectors) {
-            Ok(s) => s,
-            Err(e) => {
-                return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
-            }
-        };
-        let mut point = Point::new(p.id, p.vector, p.payload);
-        point.sparse_vectors = sparse;
-        points.push(point);
-    }
-
-    // CRITICAL: upsert_bulk is blocking (HNSW insertion + I/O)
+    // CRITICAL: upsert_bulk is blocking (HNSW insertion + I/O).
     // Must use spawn_blocking to avoid blocking the async runtime.
-    //
-    // NOTE: This handler intentionally does NOT push points to the delta buffer.
-    // The delta buffer is only used by the streaming ingest path
-    // (`stream_upsert_points`) during a background HNSW rebuild. Standard
-    // upserts go directly through `upsert_bulk`, which inserts straight into
-    // the HNSW index and WAL — no buffering needed.
     let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
     match result {
@@ -235,19 +212,47 @@ pub async fn upsert_points(
         }
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
+            Json(ErrorResponse { error: e.to_string() }),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
+            Json(ErrorResponse { error: format!("Task panicked: {e}") }),
         )
             .into_response(),
     }
+}
+
+/// Look up a vector collection by name, returning a 404 response on miss.
+#[allow(clippy::result_large_err)]
+fn get_vector_collection_or_404(
+    state: &AppState,
+    name: &str,
+) -> Result<VectorCollection, axum::response::Response> {
+    state.db.get_vector_collection(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!(
+                    "Collection '{}' not found or is not a vector collection",
+                    name
+                ),
+            }),
+        )
+            .into_response()
+    })
+}
+
+/// Convert an `UpsertPointsRequest` into a `Vec<Point>`, merging sparse inputs.
+fn build_points_from_request(req: UpsertPointsRequest) -> Result<Vec<Point>, String> {
+    let mut points: Vec<Point> = Vec::with_capacity(req.points.len());
+    for p in req.points {
+        let sparse = convert_sparse_inputs(p.sparse_vector, p.sparse_vectors)?;
+        let mut point = Point::new(p.id, p.vector, p.payload);
+        point.sparse_vectors = sparse;
+        points.push(point);
+    }
+    Ok(points)
 }
 
 /// Stream upsert points using NDJSON.
@@ -276,76 +281,13 @@ pub async fn stream_upsert_points(
     Path(name): Path<String>,
     body: Body,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Collection '{}' not found or is not a vector collection",
-                        name
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
-    let mut stream = body.into_data_stream();
-    let mut buffer = Vec::<u8>::new();
-    let mut batch = Vec::with_capacity(STREAM_BATCH_SIZE);
-    let mut stats = StreamUpsertStats::default();
-    let mut last_flush = Instant::now();
+    let stats = process_ndjson_stream(&collection, body).await;
 
-    while let Some(chunk_result) = stream.next().await {
-        match chunk_result {
-            Ok(chunk) => {
-                buffer.extend_from_slice(&chunk);
-
-                while let Some(newline_pos) = buffer.iter().position(|byte| *byte == b'\n') {
-                    let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
-                    let line = String::from_utf8_lossy(&line_bytes);
-                    // N-2: pre-parse `id` field for the warning log. This is a second
-                    // JSON parse of the same line (parse_ndjson_line also parses it),
-                    // but only occurs on the error path (malformed NDJSON). On the
-                    // happy path the id_hint parse result is unused if the line is
-                    // well-formed. A future refactor could extract id from the Point
-                    // struct inside parse_ndjson_line to eliminate the double parse.
-                    let id_hint = serde_json::from_str::<serde_json::Value>(line.trim())
-                        .ok()
-                        .and_then(|v| v.get("id").and_then(|id| id.as_u64()));
-                    parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
-
-                    if batch.len() >= STREAM_BATCH_SIZE
-                        || (!batch.is_empty() && last_flush.elapsed() >= STREAM_BATCH_MAX_WAIT)
-                    {
-                        flush_point_batch_with_delta(&collection, &mut batch, &mut stats).await;
-                        last_flush = Instant::now();
-                    }
-                }
-            }
-            Err(error) => {
-                // M-7: count network errors so clients can detect partial delivery.
-                stats.network_errors += 1;
-                tracing::warn!(error = %error, "Error while reading request body stream");
-            }
-        }
-    }
-
-    if !buffer.is_empty() {
-        let line = String::from_utf8_lossy(&buffer);
-        let id_hint = serde_json::from_str::<serde_json::Value>(line.trim())
-            .ok()
-            .and_then(|v| v.get("id").and_then(|id| id.as_u64()));
-        parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
-    }
-
-    flush_point_batch_with_delta(&collection, &mut batch, &mut stats).await;
-
-    // notify_upsert is intentionally called once at stream completion (not per batch)
-    // to avoid triggering auto-reindex threshold checks mid-stream. The HNSW rebuild
-    // is deferred until the entire stream is ingested for efficiency.
     if stats.inserted > 0 {
         state.db.notify_upsert(&name, stats.inserted);
     }
@@ -358,6 +300,72 @@ pub async fn stream_upsert_points(
         "network_errors": stats.network_errors
     }))
     .into_response()
+}
+
+/// Pre-parse the `id` field from a JSON line for diagnostic logging.
+fn extract_id_hint(line: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|v| v.get("id").and_then(|id| id.as_u64()))
+}
+
+/// Read an NDJSON body stream, batching points and flushing periodically.
+async fn process_ndjson_stream(
+    collection: &VectorCollection,
+    body: Body,
+) -> StreamUpsertStats {
+    let mut stream = body.into_data_stream();
+    let mut buffer = Vec::<u8>::new();
+    let mut batch = Vec::with_capacity(STREAM_BATCH_SIZE);
+    let mut stats = StreamUpsertStats::default();
+    let mut last_flush = Instant::now();
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                buffer.extend_from_slice(&chunk);
+                process_buffer_lines(&mut buffer, &mut batch, &mut stats);
+                if should_flush(&batch, last_flush) {
+                    flush_point_batch_with_delta(collection, &mut batch, &mut stats).await;
+                    last_flush = Instant::now();
+                }
+            }
+            Err(error) => {
+                stats.network_errors += 1;
+                tracing::warn!(error = %error, "Error while reading request body stream");
+            }
+        }
+    }
+
+    // Drain any remaining incomplete line in the buffer.
+    if !buffer.is_empty() {
+        let line = String::from_utf8_lossy(&buffer);
+        let id_hint = extract_id_hint(line.trim());
+        parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
+    }
+
+    flush_point_batch_with_delta(collection, &mut batch, &mut stats).await;
+    stats
+}
+
+/// Extract complete lines from the byte buffer and parse them as NDJSON points.
+fn process_buffer_lines(
+    buffer: &mut Vec<u8>,
+    batch: &mut Vec<Point>,
+    stats: &mut StreamUpsertStats,
+) {
+    while let Some(newline_pos) = buffer.iter().position(|byte| *byte == b'\n') {
+        let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
+        let line = String::from_utf8_lossy(&line_bytes);
+        let id_hint = extract_id_hint(line.trim());
+        parse_ndjson_line(line.trim(), batch, stats, id_hint);
+    }
+}
+
+/// Check whether the current batch should be flushed.
+fn should_flush(batch: &[Point], last_flush: Instant) -> bool {
+    batch.len() >= STREAM_BATCH_SIZE
+        || (!batch.is_empty() && last_flush.elapsed() >= STREAM_BATCH_MAX_WAIT)
 }
 
 /// Stream-insert a single point via the bounded ingestion channel.
@@ -389,45 +397,49 @@ pub async fn stream_insert(
     Path(name): Path<String>,
     Json(req): Json<StreamInsertRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Collection '{}' not found or is not a vector collection",
-                        name
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
-    // M-3: validate vector dimension before sending into the channel.
+    if let Err(resp) = validate_stream_dimension(&collection, &req) {
+        return resp;
+    }
+
+    let point = Point::new(req.id, req.vector, req.payload);
+    stream_insert_result_to_response(collection.stream_insert(point))
+}
+
+/// Validate that the request vector dimension matches the collection.
+#[allow(clippy::result_large_err)]
+fn validate_stream_dimension(
+    collection: &VectorCollection,
+    req: &StreamInsertRequest,
+) -> Result<(), axum::response::Response> {
     let expected_dim = collection.dimension();
     if req.vector.len() != expected_dim {
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!(
-                    "Vector dimension mismatch: collection expects {expected_dim}, \
-                     got {}",
+                    "Vector dimension mismatch: collection expects {expected_dim}, got {}",
                     req.vector.len()
                 ),
             }),
         )
-            .into_response();
+            .into_response());
     }
+    Ok(())
+}
 
-    let point = Point::new(req.id, req.vector, req.payload);
-
-    match collection.stream_insert(point) {
+/// Convert a `stream_insert` result into an HTTP response.
+fn stream_insert_result_to_response(
+    result: Result<(), BackpressureError>,
+) -> axum::response::Response {
+    match result {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(BackpressureError::BufferFull) => {
             let mut headers = axum::http::HeaderMap::new();
-            // N-1: RFC 7231 §7.1.3 requires Retry-After to be a non-negative integer (seconds).
             headers.insert("Retry-After", axum::http::HeaderValue::from_static("1"));
             (
                 StatusCode::TOO_MANY_REQUESTS,

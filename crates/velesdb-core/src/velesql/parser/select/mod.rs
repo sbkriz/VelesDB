@@ -35,64 +35,106 @@ impl Parser {
     pub(crate) fn parse_select_stmt(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<SelectStatement, ParseError> {
-        let mut distinct = crate::velesql::DistinctMode::None;
-        let mut columns = SelectColumns::All;
-        let mut from = String::new();
-        let mut from_alias: Vec<String> = Vec::new();
-        let mut joins = Vec::new();
-        let mut where_clause = None;
-        let mut order_by = None;
-        let mut limit = None;
-        let mut offset = None;
-        let mut with_clause = None;
-        let mut group_by = None;
-        let mut having = None;
-        let mut fusion_clause = None;
+        let mut stmt = SelectStmtBuilder::default();
+
         for inner_pair in pair.into_inner() {
-            match inner_pair.as_rule() {
-                Rule::distinct_modifier => distinct = crate::velesql::DistinctMode::All,
-                Rule::select_list => columns = Self::parse_select_list(inner_pair)?,
-                Rule::from_clause => {
-                    let (table, aliases) = Self::parse_from_clause(inner_pair);
-                    from = table;
-                    from_alias = aliases;
-                }
-                Rule::join_clause => {
-                    let join = Self::parse_join_clause(inner_pair)?;
-                    // BUG-8: Collect JOIN aliases into from_alias so all
-                    // aliases visible in scope are available to the executor.
-                    if let Some(ref alias) = join.alias {
-                        from_alias.push(alias.clone());
-                    }
-                    joins.push(join);
-                }
-                Rule::where_clause => where_clause = Some(Self::parse_where_clause(inner_pair)?),
-                Rule::group_by_clause => group_by = Some(Self::parse_group_by_clause(inner_pair)),
-                Rule::having_clause => having = Some(Self::parse_having_clause(inner_pair)?),
-                Rule::order_by_clause => order_by = Some(Self::parse_order_by_clause(inner_pair)?),
-                Rule::limit_clause => limit = Some(Self::parse_limit_clause(inner_pair)?),
-                Rule::offset_clause => offset = Some(Self::parse_offset_clause(inner_pair)?),
-                Rule::with_clause => with_clause = Some(Self::parse_with_clause(inner_pair)?),
-                Rule::using_fusion_clause => {
-                    fusion_clause = Some(Self::parse_using_fusion_clause(inner_pair));
-                }
-                _ => {}
-            }
+            Self::dispatch_select_clause(inner_pair, &mut stmt)?;
         }
-        Ok(SelectStatement {
-            distinct,
-            columns,
-            from,
-            from_alias,
-            joins,
-            where_clause,
-            order_by,
-            limit,
-            offset,
-            with_clause,
-            group_by,
-            having,
-            fusion_clause,
-        })
+
+        Ok(stmt.build())
+    }
+
+    /// Dispatches a single clause within a SELECT statement to the appropriate parser.
+    fn dispatch_select_clause(
+        pair: pest::iterators::Pair<Rule>,
+        stmt: &mut SelectStmtBuilder,
+    ) -> Result<(), ParseError> {
+        match pair.as_rule() {
+            Rule::distinct_modifier => stmt.distinct = crate::velesql::DistinctMode::All,
+            Rule::select_list => stmt.columns = Self::parse_select_list(pair)?,
+            Rule::from_clause => {
+                let (table, aliases) = Self::parse_from_clause(pair);
+                stmt.from = table;
+                stmt.from_alias = aliases;
+            }
+            Rule::join_clause => {
+                let join = Self::parse_join_clause(pair)?;
+                // BUG-8: Collect JOIN aliases into from_alias so all
+                // aliases visible in scope are available to the executor.
+                if let Some(ref alias) = join.alias {
+                    stmt.from_alias.push(alias.clone());
+                }
+                stmt.joins.push(join);
+            }
+            Rule::where_clause => stmt.where_clause = Some(Self::parse_where_clause(pair)?),
+            Rule::group_by_clause => stmt.group_by = Some(Self::parse_group_by_clause(pair)),
+            Rule::having_clause => stmt.having = Some(Self::parse_having_clause(pair)?),
+            Rule::order_by_clause => stmt.order_by = Some(Self::parse_order_by_clause(pair)?),
+            Rule::limit_clause => stmt.limit = Some(Self::parse_limit_clause(pair)?),
+            Rule::offset_clause => stmt.offset = Some(Self::parse_offset_clause(pair)?),
+            Rule::with_clause => stmt.with_clause = Some(Self::parse_with_clause(pair)?),
+            Rule::using_fusion_clause => {
+                stmt.fusion_clause = Some(Self::parse_using_fusion_clause(pair));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Builder accumulator for `SelectStatement` fields during parsing.
+struct SelectStmtBuilder {
+    distinct: crate::velesql::DistinctMode,
+    columns: SelectColumns,
+    from: String,
+    from_alias: Vec<String>,
+    joins: Vec<crate::velesql::JoinClause>,
+    where_clause: Option<crate::velesql::Condition>,
+    order_by: Option<Vec<crate::velesql::SelectOrderBy>>,
+    limit: Option<u64>,
+    offset: Option<u64>,
+    with_clause: Option<crate::velesql::WithClause>,
+    group_by: Option<crate::velesql::GroupByClause>,
+    having: Option<crate::velesql::HavingClause>,
+    fusion_clause: Option<crate::velesql::FusionClause>,
+}
+
+impl Default for SelectStmtBuilder {
+    fn default() -> Self {
+        Self {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: Vec::new(),
+            joins: Vec::new(),
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        }
+    }
+}
+
+impl SelectStmtBuilder {
+    fn build(self) -> SelectStatement {
+        SelectStatement {
+            distinct: self.distinct,
+            columns: self.columns,
+            from: self.from,
+            from_alias: self.from_alias,
+            joins: self.joins,
+            where_clause: self.where_clause,
+            order_by: self.order_by,
+            limit: self.limit,
+            offset: self.offset,
+            with_clause: self.with_clause,
+            group_by: self.group_by,
+            having: self.having,
+            fusion_clause: self.fusion_clause,
+        }
     }
 }

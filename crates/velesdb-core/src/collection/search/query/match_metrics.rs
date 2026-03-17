@@ -171,30 +171,32 @@ impl MatchMetrics {
     pub fn to_prometheus(&self) -> String {
         let mut output = String::new();
 
-        // Total queries
-        output.push_str("# HELP velesdb_match_queries_total Total MATCH queries executed\n");
-        output.push_str("# TYPE velesdb_match_queries_total counter\n");
-        output.push_str(&format!(
-            "velesdb_match_queries_total {}\n",
-            self.total_queries.load(Ordering::Relaxed)
-        ));
+        Self::write_counter(&mut output, "velesdb_match_queries_total",
+            "Total MATCH queries executed", self.total_queries.load(Ordering::Relaxed));
+        Self::write_counter(&mut output, "velesdb_match_queries_success_total",
+            "Successful MATCH queries", self.successful_queries.load(Ordering::Relaxed));
+        Self::write_counter(&mut output, "velesdb_match_queries_failed_total",
+            "Failed MATCH queries", self.failed_queries.load(Ordering::Relaxed));
 
-        // Success/failure breakdown
-        output.push_str("# HELP velesdb_match_queries_success_total Successful MATCH queries\n");
-        output.push_str("# TYPE velesdb_match_queries_success_total counter\n");
-        output.push_str(&format!(
-            "velesdb_match_queries_success_total {}\n",
-            self.successful_queries.load(Ordering::Relaxed)
-        ));
+        self.write_latency_histogram(&mut output);
 
-        output.push_str("# HELP velesdb_match_queries_failed_total Failed MATCH queries\n");
-        output.push_str("# TYPE velesdb_match_queries_failed_total counter\n");
-        output.push_str(&format!(
-            "velesdb_match_queries_failed_total {}\n",
-            self.failed_queries.load(Ordering::Relaxed)
-        ));
+        Self::write_counter(&mut output, "velesdb_match_results_total",
+            "Total results returned", self.total_results.load(Ordering::Relaxed));
+        Self::write_counter(&mut output, "velesdb_match_guardrail_hits_total",
+            "Guard-rail violations", self.guard_rail_hits.load(Ordering::Relaxed));
+        Self::write_counter(&mut output, "velesdb_match_similarity_queries_total",
+            "Queries with similarity", self.similarity_queries.load(Ordering::Relaxed));
 
-        // Latency histogram
+        output
+    }
+
+    /// Writes a Prometheus counter metric line.
+    fn write_counter(output: &mut String, name: &str, help: &str, value: u64) {
+        output.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n{name} {value}\n"));
+    }
+
+    /// Writes the latency histogram section.
+    fn write_latency_histogram(&self, output: &mut String) {
         output.push_str("# HELP velesdb_match_latency_seconds MATCH query latency histogram\n");
         output.push_str("# TYPE velesdb_match_latency_seconds histogram\n");
         let mut cumulative = 0u64;
@@ -202,40 +204,13 @@ impl MatchMetrics {
             cumulative += self.latency_buckets[i].load(Ordering::Relaxed);
             output.push_str(&format!(
                 "velesdb_match_latency_seconds_bucket{{le=\"{}\"}} {}\n",
-                bound as f64 / 1000.0,
-                cumulative
+                bound as f64 / 1000.0, cumulative
             ));
         }
         cumulative += self.latency_buckets[LATENCY_BUCKETS_MS.len()].load(Ordering::Relaxed);
         output.push_str(&format!(
             "velesdb_match_latency_seconds_bucket{{le=\"+Inf\"}} {cumulative}\n",
         ));
-
-        // Results returned
-        output.push_str("# HELP velesdb_match_results_total Total results returned\n");
-        output.push_str("# TYPE velesdb_match_results_total counter\n");
-        output.push_str(&format!(
-            "velesdb_match_results_total {}\n",
-            self.total_results.load(Ordering::Relaxed)
-        ));
-
-        // Guard-rail hits
-        output.push_str("# HELP velesdb_match_guardrail_hits_total Guard-rail violations\n");
-        output.push_str("# TYPE velesdb_match_guardrail_hits_total counter\n");
-        output.push_str(&format!(
-            "velesdb_match_guardrail_hits_total {}\n",
-            self.guard_rail_hits.load(Ordering::Relaxed)
-        ));
-
-        // Similarity queries
-        output.push_str("# HELP velesdb_match_similarity_queries_total Queries with similarity\n");
-        output.push_str("# TYPE velesdb_match_similarity_queries_total counter\n");
-        output.push_str(&format!(
-            "velesdb_match_similarity_queries_total {}\n",
-            self.similarity_queries.load(Ordering::Relaxed)
-        ));
-
-        output
     }
 
     /// Resets all metrics (for testing).

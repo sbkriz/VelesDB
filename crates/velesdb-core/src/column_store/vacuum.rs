@@ -9,6 +9,24 @@ use super::ColumnStore;
 use roaring::RoaringBitmap;
 use std::collections::HashMap;
 
+/// Filters a column vector, removing entries at deleted indices and counting reclaimed bytes.
+fn compact_vec<T: Copy>(
+    data: &[T],
+    deleted: &rustc_hash::FxHashSet<usize>,
+    element_bytes: u64,
+) -> (Vec<T>, u64) {
+    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len()));
+    let mut bytes_reclaimed = 0u64;
+    for (idx, value) in data.iter().enumerate() {
+        if deleted.contains(&idx) {
+            bytes_reclaimed += element_bytes;
+        } else {
+            new_data.push(*value);
+        }
+    }
+    (new_data, bytes_reclaimed)
+}
+
 impl ColumnStore {
     /// Runs vacuum to remove tombstones and compact data.
     ///
@@ -27,7 +45,6 @@ impl ColumnStore {
         let start = std::time::Instant::now();
         let tombstones_found = self.deleted_rows.len();
 
-        // Phase 1: Early exit if no tombstones
         if tombstones_found == 0 {
             return VacuumStats {
                 tombstones_found: 0,
@@ -42,7 +59,23 @@ impl ColumnStore {
             ..Default::default()
         };
 
-        // Phase 2: Build index mapping (old_idx -> new_idx)
+        let (old_to_new, new_row_count) = self.build_compaction_map();
+        self.compact_all_columns(&mut stats);
+        self.remap_primary_index(&old_to_new);
+        self.remap_row_expiry(&old_to_new);
+
+        stats.tombstones_removed = self.deleted_rows.len();
+        self.deleted_rows.clear();
+        self.deletion_bitmap.clear();
+        self.row_count = new_row_count;
+
+        stats.completed = true;
+        stats.duration_ms = start.elapsed().as_millis() as u64;
+        stats
+    }
+
+    /// Builds the old-to-new row index mapping, skipping deleted rows.
+    fn build_compaction_map(&self) -> (HashMap<usize, usize>, usize) {
         let mut old_to_new: HashMap<usize, usize> = HashMap::new();
         let mut new_idx = 0;
         for old_idx in 0..self.row_count {
@@ -51,32 +84,37 @@ impl ColumnStore {
                 new_idx += 1;
             }
         }
-        let new_row_count = new_idx;
+        (old_to_new, new_idx)
+    }
 
-        // Phase 3: Compact each column
+    /// Compacts all columns, removing deleted rows and accumulating reclaimed bytes.
+    fn compact_all_columns(&mut self, stats: &mut VacuumStats) {
         for column in self.columns.values_mut() {
             let (new_col, bytes) = Self::compact_column(column, &self.deleted_rows);
             stats.bytes_reclaimed += bytes;
             *column = new_col;
         }
+    }
 
-        // Phase 4: Update primary index
-        if self.primary_key_column.is_some() {
-            let mut new_primary_index: HashMap<i64, usize> = HashMap::new();
-            let mut new_row_idx_to_pk: HashMap<usize, i64> = HashMap::new();
-
-            for (pk, old_idx) in &self.primary_index {
-                if let Some(&new_idx) = old_to_new.get(old_idx) {
-                    new_primary_index.insert(*pk, new_idx);
-                    new_row_idx_to_pk.insert(new_idx, *pk);
-                }
-            }
-
-            self.primary_index = new_primary_index;
-            self.row_idx_to_pk = new_row_idx_to_pk;
+    /// Remaps the primary index to use compacted row indices.
+    fn remap_primary_index(&mut self, old_to_new: &HashMap<usize, usize>) {
+        if self.primary_key_column.is_none() {
+            return;
         }
+        let mut new_primary_index: HashMap<i64, usize> = HashMap::new();
+        let mut new_row_idx_to_pk: HashMap<usize, i64> = HashMap::new();
+        for (pk, old_idx) in &self.primary_index {
+            if let Some(&new_idx) = old_to_new.get(old_idx) {
+                new_primary_index.insert(*pk, new_idx);
+                new_row_idx_to_pk.insert(new_idx, *pk);
+            }
+        }
+        self.primary_index = new_primary_index;
+        self.row_idx_to_pk = new_row_idx_to_pk;
+    }
 
-        // Phase 5: Update row expiry mapping
+    /// Remaps row expiry timestamps to compacted row indices.
+    fn remap_row_expiry(&mut self, old_to_new: &HashMap<usize, usize>) {
         let mut new_row_expiry: HashMap<usize, u64> = HashMap::new();
         for (old_idx, expiry) in &self.row_expiry {
             if let Some(&new_idx) = old_to_new.get(old_idx) {
@@ -84,16 +122,6 @@ impl ColumnStore {
             }
         }
         self.row_expiry = new_row_expiry;
-
-        // Phase 6: Clear tombstones and update row count
-        stats.tombstones_removed = self.deleted_rows.len();
-        self.deleted_rows.clear();
-        self.deletion_bitmap.clear(); // EPIC-043 US-002: Also clear RoaringBitmap
-        self.row_count = new_row_count;
-
-        stats.completed = true;
-        stats.duration_ms = start.elapsed().as_millis() as u64;
-        stats
     }
 
     /// Compacts a single column by removing deleted rows.
@@ -101,52 +129,22 @@ impl ColumnStore {
         column: &TypedColumn,
         deleted: &rustc_hash::FxHashSet<usize>,
     ) -> (TypedColumn, u64) {
-        let mut bytes_reclaimed = 0u64;
-
         match column {
             TypedColumn::Int(data) => {
-                let mut new_data = Vec::with_capacity(data.len() - deleted.len());
-                for (idx, value) in data.iter().enumerate() {
-                    if deleted.contains(&idx) {
-                        bytes_reclaimed += 8; // i64 size
-                    } else {
-                        new_data.push(*value);
-                    }
-                }
-                (TypedColumn::Int(new_data), bytes_reclaimed)
+                let (new_data, bytes) = compact_vec(data, deleted, 8);
+                (TypedColumn::Int(new_data), bytes)
             }
             TypedColumn::Float(data) => {
-                let mut new_data = Vec::with_capacity(data.len() - deleted.len());
-                for (idx, value) in data.iter().enumerate() {
-                    if deleted.contains(&idx) {
-                        bytes_reclaimed += 8; // f64 size
-                    } else {
-                        new_data.push(*value);
-                    }
-                }
-                (TypedColumn::Float(new_data), bytes_reclaimed)
+                let (new_data, bytes) = compact_vec(data, deleted, 8);
+                (TypedColumn::Float(new_data), bytes)
             }
             TypedColumn::String(data) => {
-                let mut new_data = Vec::with_capacity(data.len() - deleted.len());
-                for (idx, value) in data.iter().enumerate() {
-                    if deleted.contains(&idx) {
-                        bytes_reclaimed += 4; // StringId size
-                    } else {
-                        new_data.push(*value);
-                    }
-                }
-                (TypedColumn::String(new_data), bytes_reclaimed)
+                let (new_data, bytes) = compact_vec(data, deleted, 4);
+                (TypedColumn::String(new_data), bytes)
             }
             TypedColumn::Bool(data) => {
-                let mut new_data = Vec::with_capacity(data.len() - deleted.len());
-                for (idx, value) in data.iter().enumerate() {
-                    if deleted.contains(&idx) {
-                        bytes_reclaimed += 1; // bool size
-                    } else {
-                        new_data.push(*value);
-                    }
-                }
-                (TypedColumn::Bool(new_data), bytes_reclaimed)
+                let (new_data, bytes) = compact_vec(data, deleted, 1);
+                (TypedColumn::Bool(new_data), bytes)
             }
         }
     }

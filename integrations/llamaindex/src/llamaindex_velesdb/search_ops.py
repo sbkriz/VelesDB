@@ -29,6 +29,22 @@ from llamaindex_velesdb.security import (
 logger = logging.getLogger(__name__)
 
 
+def _filter_by_threshold(
+    result: VectorStoreQueryResult,
+    score_threshold: float,
+) -> VectorStoreQueryResult:
+    """Return a new result containing only entries above the score threshold."""
+    filtered_indices = [
+        i for i, score in enumerate(result.similarities)
+        if score >= score_threshold
+    ]
+    return VectorStoreQueryResult(
+        nodes=[result.nodes[i] for i in filtered_indices] if result.nodes else [],
+        similarities=[result.similarities[i] for i in filtered_indices],
+        ids=[result.ids[i] for i in filtered_indices] if result.ids else [],
+    )
+
+
 class SearchOpsMixin:
     """Mixin providing all search and query operations for VelesDBVectorStore.
 
@@ -197,15 +213,7 @@ class SearchOpsMixin:
         result = self.query(query, **kwargs)
 
         if score_threshold > 0.0 and result.similarities:
-            filtered_indices = [
-                i for i, score in enumerate(result.similarities)
-                if score >= score_threshold
-            ]
-            return VectorStoreQueryResult(
-                nodes=[result.nodes[i] for i in filtered_indices] if result.nodes else [],
-                similarities=[result.similarities[i] for i in filtered_indices],
-                ids=[result.ids[i] for i in filtered_indices] if result.ids else [],
-            )
+            return _filter_by_threshold(result, score_threshold)
 
         return result
 

@@ -259,27 +259,11 @@ impl ProceduralMemory {
             .into_iter()
             .filter(|r| !self.ttl.is_expired(r.point.id))
             .filter_map(|r| {
-                let payload = r.point.payload.as_ref()?;
-                let name = payload.get("name")?.as_str()?.to_string();
-                let steps: Vec<String> = payload
-                    .get("steps")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                let confidence = payload.get("confidence")?.as_f64()? as f32;
-
-                if confidence < min_confidence {
+                let pm = extract_procedure_match(&r.point, r.score)?;
+                if pm.confidence < min_confidence {
                     return None;
                 }
-
-                Some(ProcedureMatch {
-                    id: r.point.id,
-                    name,
-                    steps,
-                    confidence,
-                    score: r.score,
-                })
+                Some(pm)
             })
             .collect())
     }
@@ -416,25 +400,7 @@ impl ProceduralMemory {
             .into_iter()
             .flatten()
             .filter(|p| !self.ttl.is_expired(p.id))
-            .filter_map(|p| {
-                let payload = p.payload.as_ref()?;
-                let name = payload.get("name")?.as_str()?.to_string();
-                let steps: Vec<String> = payload
-                    .get("steps")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                let confidence = payload.get("confidence")?.as_f64()? as f32;
-
-                Some(ProcedureMatch {
-                    id: p.id,
-                    name,
-                    steps,
-                    confidence,
-                    score: 0.0,
-                })
-            })
+            .filter_map(|p| extract_procedure_match(&p, 0.0))
             .collect())
     }
 
@@ -500,20 +466,8 @@ impl ProceduralMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let existing_ids = collection.all_ids();
-        if !existing_ids.is_empty() {
-            collection
-                .delete(&existing_ids)
-                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-        }
-
-        {
-            let mut ids = self.stored_ids.write();
-            ids.clear();
-            for point in &points {
-                ids.insert(point.id);
-            }
-        }
+        clear_existing_points(&collection)?;
+        self.rebuild_stored_ids(&points);
 
         collection
             .upsert(points)
@@ -521,4 +475,47 @@ impl ProceduralMemory {
 
         Ok(())
     }
+
+    /// Clears and rebuilds `stored_ids` from a set of deserialized points.
+    fn rebuild_stored_ids(&self, points: &[Point]) {
+        let mut ids = self.stored_ids.write();
+        ids.clear();
+        for point in points {
+            ids.insert(point.id);
+        }
+    }
+}
+
+/// Extracts a `ProcedureMatch` from a point's payload with the given similarity score.
+fn extract_procedure_match(point: &Point, score: f32) -> Option<ProcedureMatch> {
+    let payload = point.payload.as_ref()?;
+    let name = payload.get("name")?.as_str()?.to_string();
+    let steps: Vec<String> = payload
+        .get("steps")?
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    #[allow(clippy::cast_possible_truncation)]
+    let confidence = payload.get("confidence")?.as_f64()? as f32;
+
+    Some(ProcedureMatch {
+        id: point.id,
+        name,
+        steps,
+        confidence,
+        score,
+    })
+}
+
+/// Removes all existing points from a collection.
+#[allow(deprecated)]
+fn clear_existing_points(collection: &crate::Collection) -> Result<(), AgentMemoryError> {
+    let existing_ids = collection.all_ids();
+    if !existing_ids.is_empty() {
+        collection
+            .delete(&existing_ids)
+            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+    }
+    Ok(())
 }

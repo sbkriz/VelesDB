@@ -68,6 +68,81 @@ def _stable_hash_id(value: str) -> int:
     return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
+def _validate_all_embeddings(nodes: List[BaseNode]) -> None:
+    """Validate that every node has an embedding (required for sparse alignment)."""
+    for i, node in enumerate(nodes):
+        if node.get_embedding() is None:
+            raise ValueError(
+                f"Node at index {i} has no embedding. All nodes must have embeddings "
+                f"when sparse_vectors are provided to preserve index alignment."
+            )
+
+
+def _build_node_payload(node: BaseNode) -> dict:
+    """Build a VelesDB payload dict from a LlamaIndex node."""
+    node_id = node.node_id
+    payload: dict = {"text": node.get_content(), "node_id": node_id}
+    if hasattr(node, "metadata") and node.metadata:
+        for key, value in node.metadata.items():
+            if isinstance(value, (str, int, float, bool)):
+                payload[key] = value
+    return payload
+
+
+def _build_points_with_ids(
+    nodes: List[BaseNode],
+    sparse_vectors: Optional[list] = None,
+) -> tuple[list, List[str]]:
+    """Convert nodes to VelesDB points and collect node IDs."""
+    points: list = []
+    ids: List[str] = []
+    for idx, node in enumerate(nodes):
+        embedding = node.get_embedding()
+        if embedding is None:
+            continue
+        node_id = node.node_id
+        ids.append(node_id)
+        point: dict = {
+            "id": _stable_hash_id(node_id),
+            "vector": embedding,
+            "payload": _build_node_payload(node),
+        }
+        if sparse_vectors is not None and idx < len(sparse_vectors):
+            point["sparse_vector"] = sparse_vectors[idx]
+        points.append(point)
+    return points, ids
+
+
+def _flush_in_batches(collection: Any, points: list, batch_size: int) -> None:
+    """Send points to a collection in batches via stream_insert."""
+    for start in range(0, len(points), batch_size):
+        collection.stream_insert(points[start : start + batch_size])
+
+
+def _build_stream_points(
+    nodes: List[BaseNode],
+    sparse_vectors: Optional[list] = None,
+) -> list:
+    """Convert nodes to VelesDB points, requiring all nodes have embeddings."""
+    points: list = []
+    for idx, node in enumerate(nodes):
+        embedding = node.get_embedding()
+        if embedding is None:
+            raise ValueError(
+                f"Node at index {idx} (id={node.node_id!r}) has no embedding. "
+                f"All nodes passed to stream_insert must have embeddings."
+            )
+        point: dict = {
+            "id": _stable_hash_id(node.node_id),
+            "vector": embedding,
+            "payload": _build_node_payload(node),
+        }
+        if sparse_vectors is not None and idx < len(sparse_vectors):
+            point["sparse_vector"] = sparse_vectors[idx]
+        points.append(point)
+    return points
+
+
 class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore):
     """VelesDB vector store for LlamaIndex.
 
@@ -272,60 +347,23 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         if not nodes:
             return []
 
-        # Security: Validate batch size
         validate_batch_size(len(nodes))
 
-        # Extract sparse vectors from kwargs (v1.5)
         sparse_vectors = add_kwargs.get("sparse_vectors")
         if sparse_vectors is not None:
             for sv in sparse_vectors:
                 validate_sparse_vector(sv)
 
-        # Get dimension from first node's embedding
         first_embedding = nodes[0].get_embedding()
         if first_embedding is None:
             raise ValueError("Nodes must have embeddings")
         dimension = len(first_embedding)
 
-        # When sparse_vectors are provided, all nodes must have embeddings so
-        # that sparse_vectors[idx] stays aligned with the built points list.
         if sparse_vectors is not None:
-            for i, node in enumerate(nodes):
-                if node.get_embedding() is None:
-                    raise ValueError(
-                        f"Node at index {i} has no embedding. All nodes must have embeddings "
-                        f"when sparse_vectors are provided to preserve index alignment."
-                    )
+            _validate_all_embeddings(nodes)
 
         collection = self._get_collection(dimension)
-        points = []
-        ids = []
-
-        for idx, node in enumerate(nodes):
-            embedding = node.get_embedding()
-            if embedding is None:
-                continue
-
-            node_id = node.node_id
-            ids.append(node_id)
-
-            payload = {"text": node.get_content(), "node_id": node_id}
-
-            if hasattr(node, "metadata") and node.metadata:
-                for key, value in node.metadata.items():
-                    if isinstance(value, (str, int, float, bool)):
-                        payload[key] = value
-
-            point = {
-                "id": _stable_hash_id(node_id),
-                "vector": embedding,
-                "payload": payload,
-            }
-
-            if sparse_vectors is not None and idx < len(sparse_vectors):
-                point["sparse_vector"] = sparse_vectors[idx]
-
-            points.append(point)
+        points, ids = _build_points_with_ids(nodes, sparse_vectors)
 
         if points:
             collection.upsert(points)
@@ -354,7 +392,6 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         if not nodes:
             return []
 
-        # Security: Validate batch size
         validate_batch_size(len(nodes))
 
         first_emb = nodes[0].get_embedding()
@@ -362,20 +399,7 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
             raise ValueError("Nodes must have embeddings")
         collection = self._get_collection(len(first_emb))
 
-        points, result_ids = [], []
-        for node in nodes:
-            emb = node.get_embedding()
-            if emb is None:
-                continue
-            nid = node.node_id
-            result_ids.append(nid)
-            payload = {"text": node.get_content(), "node_id": nid}
-            if hasattr(node, "metadata") and node.metadata:
-                payload.update({
-                    k: v for k, v in node.metadata.items()
-                    if isinstance(v, (str, int, float, bool))
-                })
-            points.append({"id": _stable_hash_id(nid), "vector": emb, "payload": payload})
+        points, result_ids = _build_points_with_ids(nodes)
         if points:
             collection.upsert_bulk(points)
         return result_ids
@@ -410,37 +434,9 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         first_embedding = nodes[0].get_embedding()
         if first_embedding is None:
             raise ValueError("Nodes must have embeddings")
-        dimension = len(first_embedding)
 
-        collection = self._get_collection(dimension)
-        points = []
-
-        for idx, node in enumerate(nodes):
-            embedding = node.get_embedding()
-            if embedding is None:
-                raise ValueError(
-                    f"Node at index {idx} (id={node.node_id!r}) has no embedding. "
-                    f"All nodes passed to stream_insert must have embeddings."
-                )
-
-            node_id = node.node_id
-            payload = {"text": node.get_content(), "node_id": node_id}
-
-            if hasattr(node, "metadata") and node.metadata:
-                for key, value in node.metadata.items():
-                    if isinstance(value, (str, int, float, bool)):
-                        payload[key] = value
-
-            point = {
-                "id": _stable_hash_id(node_id),
-                "vector": embedding,
-                "payload": payload,
-            }
-
-            if sparse_vectors is not None and idx < len(sparse_vectors):
-                point["sparse_vector"] = sparse_vectors[idx]
-
-            points.append(point)
+        collection = self._get_collection(len(first_embedding))
+        points = _build_stream_points(nodes, sparse_vectors)
 
         if points:
             collection.stream_insert(points)
@@ -479,38 +475,11 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         first_embedding = nodes[0].get_embedding()
         if first_embedding is None:
             raise ValueError("Nodes must have embeddings")
-        dimension = len(first_embedding)
 
-        collection = self._get_collection(dimension)
-        result_ids: List[str] = []
-        batch: list = []
+        collection = self._get_collection(len(first_embedding))
+        points, result_ids = _build_points_with_ids(nodes)
 
-        for node in nodes:
-            embedding = node.get_embedding()
-            if embedding is None:
-                continue
-
-            node_id = node.node_id
-            result_ids.append(node_id)
-
-            payload = {"text": node.get_content(), "node_id": node_id}
-            if hasattr(node, "metadata") and node.metadata:
-                for key, value in node.metadata.items():
-                    if isinstance(value, (str, int, float, bool)):
-                        payload[key] = value
-
-            batch.append({
-                "id": _stable_hash_id(node_id),
-                "vector": embedding,
-                "payload": payload,
-            })
-
-            if len(batch) >= batch_size:
-                collection.stream_insert(batch)
-                batch = []
-
-        if batch:
-            collection.stream_insert(batch)
+        _flush_in_batches(collection, points, batch_size)
 
         return result_ids
 

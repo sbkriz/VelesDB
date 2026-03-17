@@ -91,7 +91,6 @@ impl Collection {
                 let val = params.get(name).ok_or_else(|| {
                     Error::Config(format!("Missing sparse vector parameter: ${name}"))
                 })?;
-
                 let obj = val.as_object().ok_or_else(|| {
                     Error::Config(format!(
                         "Invalid sparse vector parameter ${name}: expected object with \
@@ -99,52 +98,56 @@ impl Collection {
                     ))
                 })?;
 
-                // Try structured format first
-                if let (Some(indices_val), Some(values_val)) =
-                    (obj.get("indices"), obj.get("values"))
-                {
-                    let indices: Vec<u32> =
-                        serde_json::from_value(indices_val.clone()).map_err(|e| {
-                            Error::Config(format!(
-                                "Invalid sparse vector parameter ${name}.indices: {e}"
-                            ))
-                        })?;
-                    let values: Vec<f32> =
-                        serde_json::from_value(values_val.clone()).map_err(|e| {
-                            Error::Config(format!(
-                                "Invalid sparse vector parameter ${name}.values: {e}"
-                            ))
-                        })?;
-                    if indices.len() != values.len() {
-                        return Err(Error::Config(format!(
-                            "Sparse vector parameter ${name}: indices and values must have equal length"
-                        )));
-                    }
-                    let pairs: Vec<(u32, f32)> = indices.into_iter().zip(values).collect();
-                    return Ok(SparseVector::new(pairs));
+                // Try structured format first: {"indices": [...], "values": [...]}
+                if let Some(sv) = Self::try_parse_structured_sparse(obj, name)? {
+                    return Ok(sv);
                 }
 
                 // Shorthand: {"12": 0.8, "45": 0.3}
-                let mut pairs = Vec::with_capacity(obj.len());
-                for (k, v) in obj {
-                    let idx: u32 = k.parse().map_err(|_| {
-                        Error::Config(format!(
-                            "Invalid sparse vector parameter ${name}: \
-                             key '{k}' is not a valid u32 index"
-                        ))
-                    })?;
-                    #[allow(clippy::cast_possible_truncation)]
-                    let weight = v.as_f64().ok_or_else(|| {
-                        Error::Config(format!(
-                            "Invalid sparse vector parameter ${name}: \
-                             value for key '{k}' is not a number"
-                        ))
-                    })? as f32;
-                    pairs.push((idx, weight));
-                }
-                Ok(SparseVector::new(pairs))
+                Self::parse_shorthand_sparse(obj, name)
             }
         }
+    }
+
+    /// Tries to parse a structured sparse vector format with `indices` and `values` arrays.
+    fn try_parse_structured_sparse(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        name: &str,
+    ) -> Result<Option<SparseVector>> {
+        let (Some(indices_val), Some(values_val)) = (obj.get("indices"), obj.get("values")) else {
+            return Ok(None);
+        };
+        let indices: Vec<u32> = serde_json::from_value(indices_val.clone()).map_err(|e| {
+            Error::Config(format!("Invalid sparse vector parameter ${name}.indices: {e}"))
+        })?;
+        let values: Vec<f32> = serde_json::from_value(values_val.clone()).map_err(|e| {
+            Error::Config(format!("Invalid sparse vector parameter ${name}.values: {e}"))
+        })?;
+        if indices.len() != values.len() {
+            return Err(Error::Config(format!(
+                "Sparse vector parameter ${name}: indices and values must have equal length"
+            )));
+        }
+        Ok(Some(SparseVector::new(indices.into_iter().zip(values).collect())))
+    }
+
+    /// Parses shorthand sparse vector format: `{"12": 0.8, "45": 0.3}`.
+    fn parse_shorthand_sparse(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        name: &str,
+    ) -> Result<SparseVector> {
+        let mut pairs = Vec::with_capacity(obj.len());
+        for (k, v) in obj {
+            let idx: u32 = k.parse().map_err(|_| {
+                Error::Config(format!("Invalid sparse vector parameter ${name}: key '{k}' is not a valid u32 index"))
+            })?;
+            #[allow(clippy::cast_possible_truncation)]
+            let weight = v.as_f64().ok_or_else(|| {
+                Error::Config(format!("Invalid sparse vector parameter ${name}: value for key '{k}' is not a number"))
+            })? as f32;
+            pairs.push((idx, weight));
+        }
+        Ok(SparseVector::new(pairs))
     }
 
     // ------------------------------------------------------------------
