@@ -192,7 +192,7 @@ pub use point::{Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
-    BinaryQuantizedVector, QuantizedVector, StorageMode,
+    BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode,
 };
 
 #[cfg(feature = "persistence")]
