@@ -115,23 +115,55 @@ impl Collection {
             Condition::Comparison(cmp) => {
                 self.evaluate_comparison_condition(node_id, bindings, cmp, params)
             }
-            Condition::And(left, right) => Ok(self
-                .evaluate_where_condition(node_id, bindings, left, params)?
-                && self.evaluate_where_condition(node_id, bindings, right, params)?),
-            Condition::Or(left, right) => Ok(self
-                .evaluate_where_condition(node_id, bindings, left, params)?
-                || self.evaluate_where_condition(node_id, bindings, right, params)?),
-            Condition::Not(inner) => {
-                Ok(!self.evaluate_where_condition(node_id, bindings, inner, params)?)
+            Condition::And(left, right) => {
+                self.evaluate_logical_and(node_id, bindings, left, right, params)
             }
-            Condition::Group(inner) => {
-                self.evaluate_where_condition(node_id, bindings, inner, params)
+            Condition::Or(left, right) => {
+                self.evaluate_logical_or(node_id, bindings, left, right, params)
+            }
+            Condition::Not(inner) | Condition::Group(inner) => {
+                let result = self.evaluate_where_condition(node_id, bindings, inner, params)?;
+                Ok(if matches!(condition, Condition::Not(_)) {
+                    !result
+                } else {
+                    result
+                })
             }
             Condition::Similarity(sim) => self.evaluate_similarity_condition(node_id, sim, params),
             // Other condition types (VectorSearch, VectorFusedSearch, etc.)
             // handled separately in `execute_match_with_similarity`.
             _ => Ok(true),
         }
+    }
+
+    /// Short-circuits an AND condition, evaluating left before right.
+    fn evaluate_logical_and(
+        &self,
+        node_id: u64,
+        bindings: Option<&HashMap<String, u64>>,
+        left: &crate::velesql::Condition,
+        right: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        Ok(
+            self.evaluate_where_condition(node_id, bindings, left, params)?
+                && self.evaluate_where_condition(node_id, bindings, right, params)?,
+        )
+    }
+
+    /// Short-circuits an OR condition, evaluating left before right.
+    fn evaluate_logical_or(
+        &self,
+        node_id: u64,
+        bindings: Option<&HashMap<String, u64>>,
+        left: &crate::velesql::Condition,
+        right: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        Ok(
+            self.evaluate_where_condition(node_id, bindings, left, params)?
+                || self.evaluate_where_condition(node_id, bindings, right, params)?,
+        )
     }
 
     /// Evaluates a single comparison condition against a node's payload.

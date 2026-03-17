@@ -22,29 +22,10 @@ impl Database {
 
         for entry in std::fs::read_dir(&self.data_dir)? {
             let entry = entry?;
-            let path = entry.path();
-
-            if !path.is_dir() {
-                continue;
-            }
-            let config_path = path.join("config.json");
-            if !config_path.exists() {
-                continue;
-            }
-
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-
-            // Skip names already present in the legacy registry.
-            if self.collections.read().contains_key(&name) {
-                continue;
-            }
-
-            if self.try_load_single_collection(&path, &name) {
-                loaded_count += 1;
+            if let Some(name) = self.loadable_collection_name(&entry) {
+                if self.try_load_single_collection(&entry.path(), &name) {
+                    loaded_count += 1;
+                }
             }
         }
 
@@ -60,6 +41,25 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    /// Returns the collection name if the directory entry is a loadable collection.
+    ///
+    /// A directory is loadable when it contains `config.json` and is not
+    /// already registered in the legacy collections map.
+    fn loadable_collection_name(&self, entry: &std::fs::DirEntry) -> Option<String> {
+        let path = entry.path();
+        if !path.is_dir() {
+            return None;
+        }
+        if !path.join("config.json").exists() {
+            return None;
+        }
+        let name = path.file_name()?.to_str().unwrap_or("unknown").to_string();
+        if self.collections.read().contains_key(&name) {
+            return None;
+        }
+        Some(name)
     }
 
     /// Attempts to load a single collection directory, returning `true` on success.

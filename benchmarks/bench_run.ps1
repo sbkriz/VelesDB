@@ -123,44 +123,44 @@ function Parse-CriterionOutput {
 # Main Execution
 # =============================================================================
 
-Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "  VelesDB Reproducible Benchmark Suite (EPIC-026/US-001)" -ForegroundColor Cyan
-Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Output "==============================================================="
+Write-Output "  VelesDB Reproducible Benchmark Suite (EPIC-026/US-001)"
+Write-Output "==============================================================="
 
 # Collect environment info
-Write-Host "`n📊 Collecting environment information..." -ForegroundColor Yellow
+Write-Output "`nCollecting environment information..."
 $envInfo = Get-EnvironmentInfo
 
-Write-Host "  OS: $($envInfo.os)" -ForegroundColor Gray
-Write-Host "  CPU: $($envInfo.cpu) ($($envInfo.cpu_cores) cores)" -ForegroundColor Gray
-Write-Host "  RAM: $($envInfo.ram_gb) GB" -ForegroundColor Gray
-Write-Host "  Rust: $($envInfo.rust_version)" -ForegroundColor Gray
-Write-Host "  VelesDB: $($envInfo.velesdb_version)" -ForegroundColor Gray
+Write-Output "  OS: $($envInfo.os)"
+Write-Output "  CPU: $($envInfo.cpu) ($($envInfo.cpu_cores) cores)"
+Write-Output "  RAM: $($envInfo.ram_gb) GB"
+Write-Output "  Rust: $($envInfo.rust_version)"
+Write-Output "  VelesDB: $($envInfo.velesdb_version)"
 
 # Build release
-Write-Host "`n🔨 Building release with SIMD features..." -ForegroundColor Yellow
+Write-Output "`nBuilding release with SIMD features..."
 cargo build --release --features "simd" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Build failed!" -ForegroundColor Red
+    Write-Output "Build failed!"
     exit 1
 }
-Write-Host "  ✅ Build successful" -ForegroundColor Green
+Write-Output "  Build successful"
 
 # Warmup (unless Quick mode)
 if (-not $Quick) {
-    Write-Host "`n🔥 Warmup run (discarded)..." -ForegroundColor Yellow
+    Write-Output "`nWarmup run (discarded)..."
     cargo bench --bench hnsw_bench -- --warm-up-time 3 --noplot 2>&1 | Out-Null
 }
 
 # Run benchmarks
-Write-Host "`n🏃 Running $Runs benchmark iterations..." -ForegroundColor Yellow
+Write-Output "`nRunning $Runs benchmark iterations..."
 
 $allResults = @()
 $sampleSize = if ($Quick) { 10 } else { 50 }
 $warmupTime = if ($Quick) { 1 } else { 3 }
 
 for ($i = 1; $i -le $Runs; $i++) {
-    Write-Host "  Run $i/$Runs..." -ForegroundColor Gray
+    Write-Output "  Run $i/$Runs..."
     
     $output = cargo bench --bench hnsw_bench -- --sample-size $sampleSize --warm-up-time $warmupTime --noplot 2>&1
     $metrics = Parse-CriterionOutput $output
@@ -171,7 +171,7 @@ for ($i = 1; $i -le $Runs; $i++) {
 }
 
 # Aggregate results
-Write-Host "`n📈 Aggregating results..." -ForegroundColor Yellow
+Write-Output "`nAggregating results..."
 
 $aggregated = @{
     environment = $envInfo
@@ -224,18 +224,18 @@ $aggregated | ConvertTo-Json -Depth 10 | Out-File $jsonPath -Encoding UTF8
 $aggregated | ConvertTo-Json -Depth 10 | Out-File $latestPath -Encoding UTF8
 
 # Display results
-Write-Host "`n═══════════════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "  Results Summary" -ForegroundColor Green
-Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Output "`n==============================================================="
+Write-Output "  Results Summary"
+Write-Output "==============================================================="
 
 foreach ($name in $aggregated.benchmarks.Keys | Sort-Object) {
     $bench = $aggregated.benchmarks[$name]
-    Write-Host "`n  $name" -ForegroundColor Cyan
-    Write-Host "    p50: $($bench.p50_us) µs | mean: $($bench.mean_us) µs | p99: $($bench.p99_us) µs" -ForegroundColor Gray
+    Write-Output "`n  $name"
+    Write-Output "    p50: $($bench.p50_us) us | mean: $($bench.mean_us) us | p99: $($bench.p99_us) us"
 }
 
-Write-Host "`n📁 Results saved to:" -ForegroundColor Yellow
-Write-Host "   $jsonPath" -ForegroundColor Gray
-Write-Host "   $latestPath" -ForegroundColor Gray
+Write-Output "`nResults saved to:"
+Write-Output "   $jsonPath"
+Write-Output "   $latestPath"
 
-Write-Host "`n✅ Benchmark complete!" -ForegroundColor Green
+Write-Output "`nBenchmark complete!"

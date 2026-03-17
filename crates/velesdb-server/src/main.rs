@@ -286,9 +286,7 @@ async fn serve(
         Ok(Ok(Err(e))) => tracing::warn!("Server error during drain: {e}"),
         Ok(Err(e)) => tracing::warn!("Server task error: {e}"),
         Err(_) => {
-            tracing::warn!(
-                "Drain timeout ({shutdown_timeout_secs}s) reached, forcing shutdown"
-            );
+            tracing::warn!("Drain timeout ({shutdown_timeout_secs}s) reached, forcing shutdown");
         }
     }
 

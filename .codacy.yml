@@ -22,6 +22,8 @@ exclude_paths:
   # limits don't apply to test harnesses, unsafe is used for test fixtures.
   # Test quality is enforced by `cargo test`, not static analysis.
   - "crates/**/src/**/*_tests.rs"
+  - "crates/**/src/**/*_test.rs"
+  - "crates/**/src/**/tests.rs"
   - "crates/**/tests/**"
   # Benchmark harnesses (criterion) — perf code, not production
   - "crates/**/benches/**"
