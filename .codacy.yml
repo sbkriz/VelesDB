@@ -175,6 +175,12 @@ engines:
       - "crates/velesdb-core/src/collection/graph/traversal.rs"
       - "crates/velesdb-core/src/collection/graph/edge_concurrent/mod.rs"
 
+      # --- Aggregation engine (sequential + parallel pipelines) ---
+      # runtime_where_passes is 24 NLOC but Codacy counts the
+      # RuntimeWhereCtx struct definition in the same measurement scope,
+      # inflating the metric to 66. Actual method is well under limit.
+      - "crates/velesdb-core/src/collection/search/query/aggregation/mod.rs"
+
       # --- TypeScript SDK backends ---
       # REST/WASM client code with HTTP request construction.
       - "sdks/typescript/src/backends/**"
