@@ -334,6 +334,31 @@ impl Collection {
         }
     }
 
+    /// Checks whether a single record passes the WHERE filter (runtime or static).
+    fn record_passes_filter(
+        &self,
+        id: u64,
+        payload: Option<&serde_json::Value>,
+        ctx: &SequentialAggCtx<'_>,
+        needs_vector_eval: bool,
+        graph_cache: &mut GraphMatchEvalCache,
+    ) -> Result<bool> {
+        if ctx.use_runtime_where_eval {
+            let mut where_ctx = RuntimeWhereCtx {
+                vector_storage: ctx.vector_storage,
+                stmt: ctx.stmt,
+                params: ctx.params,
+                needs_vector_eval,
+                graph_cache,
+            };
+            self.runtime_where_passes(id, payload, &mut where_ctx)
+        } else if let Some(f) = ctx.filter {
+            Ok(Self::payload_passes_filter(f, payload))
+        } else {
+            Ok(true)
+        }
+    }
+
     /// Sequential aggregation with optional runtime WHERE evaluation.
     fn aggregate_sequential(
         &self,
@@ -350,25 +375,9 @@ impl Collection {
 
         for &id in ids {
             let payload = ctx.payload_storage.retrieve(id).ok().flatten();
-
-            let passes = if ctx.use_runtime_where_eval {
-                let mut where_ctx = RuntimeWhereCtx {
-                    vector_storage: ctx.vector_storage,
-                    stmt: ctx.stmt,
-                    params: ctx.params,
-                    needs_vector_eval,
-                    graph_cache: &mut graph_cache,
-                };
-                self.runtime_where_passes(id, payload.as_ref(), &mut where_ctx)?
-            } else if let Some(f) = ctx.filter {
-                Self::payload_passes_filter(f, payload.as_ref())
-            } else {
-                true
-            };
-            if !passes {
+            if !self.record_passes_filter(id, payload.as_ref(), ctx, needs_vector_eval, &mut graph_cache)? {
                 continue;
             }
-
             Self::accumulate_record(
                 &mut aggregator,
                 payload.as_ref(),
