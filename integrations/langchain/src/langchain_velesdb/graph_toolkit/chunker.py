@@ -4,6 +4,8 @@ Provides intelligent text chunking that respects entity boundaries
 for better knowledge graph construction.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import List, Optional, Callable
 
@@ -94,52 +96,7 @@ class SemanticChunker:
             ]
 
         for separator in self.separators:
-            splits = text.split(separator)
-
-            if len(splits) == 1:
-                continue
-
-            chunks = []
-            current_chunk = ""
-            current_offset = offset
-
-            for i, split in enumerate(splits):
-                potential = current_chunk + (separator if current_chunk else "") + split
-
-                if len(potential) <= self.chunk_size:
-                    current_chunk = potential
-                else:
-                    if current_chunk:
-                        chunk_entities = self._find_entities(current_chunk, entities)
-                        if not self._would_split_entity(current_chunk, entities):
-                            chunks.append(
-                                Chunk(
-                                    text=current_chunk,
-                                    start_idx=current_offset,
-                                    end_idx=current_offset + len(current_chunk),
-                                    entities=chunk_entities,
-                                )
-                            )
-                            # Clamp overlap to chunk length to prevent negative offsets
-                            effective_overlap = min(self.chunk_overlap, len(current_chunk))
-                            current_offset += len(current_chunk) - effective_overlap
-                            overlap_text = current_chunk[-effective_overlap:] if effective_overlap > 0 else ""
-                            current_chunk = overlap_text + separator + split
-                        else:
-                            current_chunk = potential
-                    else:
-                        current_chunk = split
-
-            if current_chunk:
-                chunks.append(
-                    Chunk(
-                        text=current_chunk,
-                        start_idx=current_offset,
-                        end_idx=current_offset + len(current_chunk),
-                        entities=self._find_entities(current_chunk, entities),
-                    )
-                )
-
+            chunks = self._try_split_with_separator(text, separator, entities, offset)
             if chunks:
                 return chunks
 
@@ -147,6 +104,70 @@ class SemanticChunker:
         return self._recursive_split(text[:mid], entities, offset) + self._recursive_split(
             text[mid:], entities, offset + mid
         )
+
+    def _try_split_with_separator(
+        self,
+        text: str,
+        separator: str,
+        entities: List[str],
+        offset: int,
+    ) -> List[Chunk]:
+        """Attempt to split text using a single separator, returning chunks or empty list."""
+        splits = text.split(separator)
+        if len(splits) == 1:
+            return []
+
+        chunks: List[Chunk] = []
+        current_chunk = ""
+        current_offset = offset
+
+        for split in splits:
+            current_chunk, current_offset = self._accumulate_split(
+                chunks, current_chunk, current_offset, split,
+                separator, entities,
+            )
+
+        if current_chunk:
+            chunks.append(Chunk(
+                text=current_chunk,
+                start_idx=current_offset,
+                end_idx=current_offset + len(current_chunk),
+                entities=self._find_entities(current_chunk, entities),
+            ))
+
+        return chunks
+
+    def _accumulate_split(
+        self,
+        chunks: List[Chunk],
+        current_chunk: str,
+        current_offset: int,
+        split: str,
+        separator: str,
+        entities: List[str],
+    ) -> tuple[str, int]:
+        """Add a split fragment to the current chunk, flushing when over size."""
+        potential = current_chunk + (separator if current_chunk else "") + split
+
+        if len(potential) <= self.chunk_size:
+            return potential, current_offset
+
+        if not current_chunk:
+            return split, current_offset
+
+        if self._would_split_entity(current_chunk, entities):
+            return potential, current_offset
+
+        chunks.append(Chunk(
+            text=current_chunk,
+            start_idx=current_offset,
+            end_idx=current_offset + len(current_chunk),
+            entities=self._find_entities(current_chunk, entities),
+        ))
+        effective_overlap = min(self.chunk_overlap, len(current_chunk))
+        new_offset = current_offset + len(current_chunk) - effective_overlap
+        overlap_text = current_chunk[-effective_overlap:] if effective_overlap > 0 else ""
+        return overlap_text + separator + split, new_offset
 
     def _find_entities(self, text: str, entities: List[str]) -> List[str]:
         """Find which entities appear in the text."""

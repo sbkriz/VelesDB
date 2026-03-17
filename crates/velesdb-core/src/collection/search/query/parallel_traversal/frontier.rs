@@ -47,57 +47,16 @@ impl FrontierParallelBFS {
         let mut visited = FxHashSet::default();
         visited.insert(start);
 
-        // Include start node at depth 0
         results.push(TraversalResult::new(start, start, Vec::new(), 0));
 
-        // Current frontier: (node_id, path_to_node)
         let mut frontier: Vec<(u64, Vec<u64>)> = vec![(start, Vec::new())];
         let mut depth = 0u32;
 
         while !frontier.is_empty() && depth < self.config.max_depth {
             depth += 1;
 
-            // Expand frontier - parallel or sequential based on size
-            let next_frontier: Vec<(u64, Vec<u64>, u64)> =
-                if self.config.should_parallelize_frontier(frontier.len()) {
-                    // Parallel expansion
-                    frontier
-                        .par_iter()
-                        .flat_map(|(node, path)| {
-                            let neighbors = adjacency(*node);
-                            stats.add_edges_traversed(neighbors.len());
-                            // Adjacency returns (neighbor_id, edge_id)
-                            neighbors
-                                .into_iter()
-                                .map(|(neighbor, edge_id)| {
-                                    let mut new_path = path.clone();
-                                    new_path.push(edge_id);
-                                    (neighbor, new_path, edge_id)
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect()
-                } else {
-                    // Sequential expansion
-                    frontier
-                        .iter()
-                        .flat_map(|(node, path)| {
-                            let neighbors = adjacency(*node);
-                            stats.add_edges_traversed(neighbors.len());
-                            // Adjacency returns (neighbor_id, edge_id)
-                            neighbors
-                                .into_iter()
-                                .map(|(neighbor, edge_id)| {
-                                    let mut new_path = path.clone();
-                                    new_path.push(edge_id);
-                                    (neighbor, new_path, edge_id)
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect()
-                };
+            let next_frontier = self.expand_frontier(&frontier, &adjacency, &stats);
 
-            // Deduplicate and build next frontier
             frontier = Vec::new();
             for (neighbor, path, _edge_id) in next_frontier {
                 if visited.insert(neighbor) {
@@ -106,22 +65,59 @@ impl FrontierParallelBFS {
                     frontier.push((neighbor, path));
 
                     if results.len() >= self.config.limit {
-                        let mut final_stats = stats;
-                        final_stats.start_nodes_count = 1;
-                        final_stats.raw_results = results.len();
-                        final_stats.deduplicated_results = results.len();
-                        return (results, final_stats);
+                        let count = results.len();
+                        return (results, Self::finalize_stats(stats, count));
                     }
                 }
             }
         }
 
-        let mut final_stats = stats;
-        final_stats.start_nodes_count = 1;
-        final_stats.raw_results = results.len();
-        final_stats.deduplicated_results = results.len();
+        let count = results.len();
+        (results, Self::finalize_stats(stats, count))
+    }
 
-        (results, final_stats)
+    /// Expands the frontier (parallel or sequential based on size).
+    fn expand_frontier<F>(
+        &self,
+        frontier: &[(u64, Vec<u64>)],
+        adjacency: &F,
+        stats: &TraversalStats,
+    ) -> Vec<(u64, Vec<u64>, u64)>
+    where
+        F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
+    {
+        let expand_node = |node: &u64, path: &Vec<u64>| {
+            let neighbors = adjacency(*node);
+            stats.add_edges_traversed(neighbors.len());
+            neighbors
+                .into_iter()
+                .map(|(neighbor, edge_id)| {
+                    let mut new_path = path.clone();
+                    new_path.push(edge_id);
+                    (neighbor, new_path, edge_id)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if self.config.should_parallelize_frontier(frontier.len()) {
+            frontier
+                .par_iter()
+                .flat_map(|(node, path)| expand_node(node, path))
+                .collect()
+        } else {
+            frontier
+                .iter()
+                .flat_map(|(node, path)| expand_node(node, path))
+                .collect()
+        }
+    }
+
+    /// Finalizes traversal stats.
+    fn finalize_stats(mut stats: TraversalStats, result_count: usize) -> TraversalStats {
+        stats.start_nodes_count = 1;
+        stats.raw_results = result_count;
+        stats.deduplicated_results = result_count;
+        stats
     }
 }
 

@@ -95,14 +95,29 @@ fn write_cache_metrics(
     metrics: &velesdb_core::cache::PlanCacheMetrics,
     stats: &velesdb_core::cache::LockFreeCacheStats,
 ) -> std::fmt::Result {
+    write_cache_hits(output, metrics)?;
+    write_cache_misses(output, metrics)?;
+    write_cache_size(output, stats)?;
+    write_cache_hit_rate(output, metrics)
+}
+
+fn write_cache_hits(
+    output: &mut String,
+    metrics: &velesdb_core::cache::PlanCacheMetrics,
+) -> std::fmt::Result {
     writeln!(
         output,
         "# HELP velesdb_plan_cache_hits_total Plan cache hits"
     )?;
     writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter")?;
     writeln!(output, "velesdb_plan_cache_hits_total {}", metrics.hits())?;
-    writeln!(output)?;
+    writeln!(output)
+}
 
+fn write_cache_misses(
+    output: &mut String,
+    metrics: &velesdb_core::cache::PlanCacheMetrics,
+) -> std::fmt::Result {
     writeln!(
         output,
         "# HELP velesdb_plan_cache_misses_total Plan cache misses"
@@ -113,8 +128,13 @@ fn write_cache_metrics(
         "velesdb_plan_cache_misses_total {}",
         metrics.misses()
     )?;
-    writeln!(output)?;
+    writeln!(output)
+}
 
+fn write_cache_size(
+    output: &mut String,
+    stats: &velesdb_core::cache::LockFreeCacheStats,
+) -> std::fmt::Result {
     writeln!(
         output,
         "# HELP velesdb_plan_cache_size Current number of cached plans"
@@ -125,8 +145,13 @@ fn write_cache_metrics(
         "velesdb_plan_cache_size {}",
         stats.l1_size + stats.l2_size
     )?;
-    writeln!(output)?;
+    writeln!(output)
+}
 
+fn write_cache_hit_rate(
+    output: &mut String,
+    metrics: &velesdb_core::cache::PlanCacheMetrics,
+) -> std::fmt::Result {
     writeln!(
         output,
         "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate"

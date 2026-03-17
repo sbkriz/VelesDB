@@ -14,6 +14,18 @@ impl ColumnStore {
     /// Performs batch updates with optimized cache locality.
     pub fn batch_update(&mut self, updates: &[BatchUpdate]) -> BatchUpdateResult {
         let mut result = BatchUpdateResult::default();
+        let by_column = self.partition_batch_updates(updates, &mut result);
+        let row_to_pk = self.build_row_to_pk_map(updates);
+        self.apply_column_updates(by_column, &row_to_pk, &mut result);
+        result
+    }
+
+    /// Partitions batch updates by column, rejecting invalid ones into `result.failed`.
+    fn partition_batch_updates<'a>(
+        &self,
+        updates: &'a [BatchUpdate],
+        result: &mut BatchUpdateResult,
+    ) -> HashMap<&'a str, Vec<(usize, ColumnValue)>> {
         let mut by_column: HashMap<&str, Vec<(usize, ColumnValue)>> = HashMap::new();
 
         for update in updates {
@@ -28,31 +40,42 @@ impl ColumnStore {
                 continue;
             }
 
-            if let Some(&row_idx) = self.primary_index.get(&update.pk) {
-                if self.deleted_rows.contains(&row_idx) {
+            match self.primary_index.get(&update.pk) {
+                Some(&row_idx) if !self.deleted_rows.contains(&row_idx) => {
+                    by_column
+                        .entry(update.column.as_str())
+                        .or_default()
+                        .push((row_idx, update.value.clone()));
+                }
+                _ => {
                     result
                         .failed
                         .push((update.pk, ColumnStoreError::RowNotFound(update.pk)));
-                    continue;
                 }
-                by_column
-                    .entry(update.column.as_str())
-                    .or_default()
-                    .push((row_idx, update.value.clone()));
-            } else {
-                result
-                    .failed
-                    .push((update.pk, ColumnStoreError::RowNotFound(update.pk)));
             }
         }
 
+        by_column
+    }
+
+    /// Builds a reverse mapping from row index to primary key.
+    fn build_row_to_pk_map(&self, updates: &[BatchUpdate]) -> HashMap<usize, i64> {
         let mut row_to_pk: HashMap<usize, i64> = HashMap::new();
         for update in updates {
             if let Some(&row_idx) = self.primary_index.get(&update.pk) {
                 row_to_pk.insert(row_idx, update.pk);
             }
         }
+        row_to_pk
+    }
 
+    /// Applies partitioned column updates, recording successes and failures.
+    fn apply_column_updates(
+        &mut self,
+        by_column: HashMap<&str, Vec<(usize, ColumnValue)>>,
+        row_to_pk: &HashMap<usize, i64>,
+        result: &mut BatchUpdateResult,
+    ) {
         for (col_name, col_updates) in by_column {
             if let Some(col) = self.columns.get_mut(col_name) {
                 for (row_idx, value) in col_updates {
@@ -79,8 +102,6 @@ impl ColumnStore {
                 }
             }
         }
-
-        result
     }
 
     /// Batch update with same value for multiple primary keys.
@@ -159,79 +180,113 @@ impl ColumnStore {
         &mut self,
         values: &[(&str, ColumnValue)],
     ) -> Result<UpsertResult, ColumnStoreError> {
-        let Some(ref pk_col) = self.primary_key_column else {
-            return Err(ColumnStoreError::MissingPrimaryKey);
-        };
-
-        let pk_value = values
-            .iter()
-            .find(|(name, _)| *name == pk_col.as_str())
-            .and_then(|(_, value)| {
-                if let ColumnValue::Int(v) = value {
-                    Some(*v)
-                } else {
-                    None
-                }
-            })
+        let pk_col = self
+            .primary_key_column
+            .clone()
             .ok_or(ColumnStoreError::MissingPrimaryKey)?;
 
-        for (col_name, _) in values {
-            if *col_name != pk_col.as_str() && !self.columns.contains_key(*col_name) {
-                return Err(ColumnStoreError::ColumnNotFound((*col_name).to_string()));
-            }
-        }
+        let pk_value = Self::extract_pk_value(values, &pk_col)?;
+        Self::validate_columns_exist(&self.columns, values, &pk_col)?;
 
         if let Some(&row_idx) = self.primary_index.get(&pk_value) {
-            if self.deleted_rows.contains(&row_idx) {
-                for (col_name, value) in values {
-                    if *col_name != pk_col.as_str() {
-                        if let Some(col) = self.columns.get(*col_name) {
-                            if !matches!(value, ColumnValue::Null) {
-                                Self::validate_type_match(col, value)?;
-                            }
-                        }
-                    }
-                }
-                self.deleted_rows.remove(&row_idx);
-                self.row_expiry.remove(&row_idx);
-                let value_map: std::collections::HashMap<&str, &ColumnValue> =
-                    values.iter().map(|(k, v)| (*k, v)).collect();
-                let col_names: Vec<String> = self.columns.keys().cloned().collect();
-                for col_name in col_names {
-                    if col_name != *pk_col {
-                        if let Some(col) = self.columns.get_mut(&col_name) {
-                            if let Some(value) = value_map.get(col_name.as_str()) {
-                                Self::set_column_value(col, row_idx, (*value).clone())?;
-                            } else {
-                                Self::set_column_value(col, row_idx, ColumnValue::Null)?;
-                            }
-                        }
-                    }
-                }
-                return Ok(UpsertResult::Inserted);
-            }
-
-            for (col_name, value) in values {
-                if *col_name != pk_col.as_str() {
-                    if let Some(col) = self.columns.get(*col_name) {
-                        if !matches!(value, ColumnValue::Null) {
-                            Self::validate_type_match(col, value)?;
-                        }
-                    }
-                }
-            }
-            for (col_name, value) in values {
-                if *col_name != pk_col.as_str() {
-                    if let Some(col) = self.columns.get_mut(*col_name) {
-                        Self::set_column_value(col, row_idx, value.clone())?;
-                    }
-                }
-            }
-            Ok(UpsertResult::Updated)
+            self.upsert_existing_row(values, row_idx, &pk_col)
         } else {
             self.insert_row(values)?;
             Ok(UpsertResult::Inserted)
         }
+    }
+
+    /// Validates that all non-pk columns referenced in values actually exist.
+    fn validate_columns_exist(
+        columns: &HashMap<String, TypedColumn>,
+        values: &[(&str, ColumnValue)],
+        pk_col: &str,
+    ) -> Result<(), ColumnStoreError> {
+        for (col_name, _) in values {
+            if *col_name != pk_col && !columns.contains_key(*col_name) {
+                return Err(ColumnStoreError::ColumnNotFound((*col_name).to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles upsert for an existing row (either deleted or live).
+    fn upsert_existing_row(
+        &mut self,
+        values: &[(&str, ColumnValue)],
+        row_idx: usize,
+        pk_col: &str,
+    ) -> Result<UpsertResult, ColumnStoreError> {
+        if self.deleted_rows.contains(&row_idx) {
+            self.validate_non_pk_types(values, pk_col)?;
+            self.deleted_rows.remove(&row_idx);
+            self.row_expiry.remove(&row_idx);
+            self.write_row_values(values, row_idx, pk_col)?;
+            return Ok(UpsertResult::Inserted);
+        }
+
+        self.validate_non_pk_types(values, pk_col)?;
+        self.update_non_pk_values(values, row_idx, pk_col)?;
+        Ok(UpsertResult::Updated)
+    }
+
+    /// Validates types for all non-pk columns in values.
+    fn validate_non_pk_types(
+        &self,
+        values: &[(&str, ColumnValue)],
+        pk_col: &str,
+    ) -> Result<(), ColumnStoreError> {
+        for (col_name, value) in values {
+            if *col_name == pk_col || matches!(value, ColumnValue::Null) {
+                continue;
+            }
+            if let Some(col) = self.columns.get(*col_name) {
+                Self::validate_type_match(col, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes all column values for a row, setting missing non-pk columns to null.
+    fn write_row_values(
+        &mut self,
+        values: &[(&str, ColumnValue)],
+        row_idx: usize,
+        pk_col: &str,
+    ) -> Result<(), ColumnStoreError> {
+        let value_map: std::collections::HashMap<&str, &ColumnValue> =
+            values.iter().map(|(k, v)| (*k, v)).collect();
+        let col_names: Vec<String> = self.columns.keys().cloned().collect();
+        for col_name in col_names {
+            if col_name == pk_col {
+                continue;
+            }
+            if let Some(col) = self.columns.get_mut(&col_name) {
+                let val = value_map
+                    .get(col_name.as_str())
+                    .map_or(ColumnValue::Null, |v| (*v).clone());
+                Self::set_column_value(col, row_idx, val)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Updates only the non-pk columns that are provided in values.
+    fn update_non_pk_values(
+        &mut self,
+        values: &[(&str, ColumnValue)],
+        row_idx: usize,
+        pk_col: &str,
+    ) -> Result<(), ColumnStoreError> {
+        for (col_name, value) in values {
+            if *col_name == pk_col {
+                continue;
+            }
+            if let Some(col) = self.columns.get_mut(*col_name) {
+                Self::set_column_value(col, row_idx, value.clone())?;
+            }
+        }
+        Ok(())
     }
 
     /// Batch upsert: inserts or updates multiple rows.
@@ -295,69 +350,50 @@ impl ColumnStore {
         value: ColumnValue,
     ) -> Result<(), ColumnStoreError> {
         if matches!(value, ColumnValue::Null) {
-            match col {
-                TypedColumn::Int(vec) => {
-                    if row_idx >= vec.len() {
-                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                    }
-                    vec[row_idx] = None;
-                }
-                TypedColumn::Float(vec) => {
-                    if row_idx >= vec.len() {
-                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                    }
-                    vec[row_idx] = None;
-                }
-                TypedColumn::String(vec) => {
-                    if row_idx >= vec.len() {
-                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                    }
-                    vec[row_idx] = None;
-                }
-                TypedColumn::Bool(vec) => {
-                    if row_idx >= vec.len() {
-                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                    }
-                    vec[row_idx] = None;
-                }
-            }
-            return Ok(());
+            return Self::set_column_null(col, row_idx);
         }
 
         match (col, value) {
             (TypedColumn::Int(vec), ColumnValue::Int(v)) => {
-                if row_idx >= vec.len() {
-                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                }
-                vec[row_idx] = Some(v);
-                Ok(())
+                Self::checked_set(vec, row_idx, Some(v))
             }
             (TypedColumn::Float(vec), ColumnValue::Float(v)) => {
-                if row_idx >= vec.len() {
-                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                }
-                vec[row_idx] = Some(v);
-                Ok(())
+                Self::checked_set(vec, row_idx, Some(v))
             }
             (TypedColumn::String(vec), ColumnValue::String(v)) => {
-                if row_idx >= vec.len() {
-                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                }
-                vec[row_idx] = Some(v);
-                Ok(())
+                Self::checked_set(vec, row_idx, Some(v))
             }
             (TypedColumn::Bool(vec), ColumnValue::Bool(v)) => {
-                if row_idx >= vec.len() {
-                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
-                }
-                vec[row_idx] = Some(v);
-                Ok(())
+                Self::checked_set(vec, row_idx, Some(v))
             }
             (col, value) => Err(ColumnStoreError::TypeMismatch {
                 expected: Self::column_type_name(col),
                 actual: Self::value_type_name(&value),
             }),
         }
+    }
+
+    /// Sets a column cell to null at the given row index.
+    fn set_column_null(col: &mut TypedColumn, row_idx: usize) -> Result<(), ColumnStoreError> {
+        match col {
+            TypedColumn::Int(vec) => Self::checked_set(vec, row_idx, None),
+            TypedColumn::Float(vec) => Self::checked_set(vec, row_idx, None),
+            TypedColumn::String(vec) => Self::checked_set(vec, row_idx, None),
+            TypedColumn::Bool(vec) => Self::checked_set(vec, row_idx, None),
+        }
+    }
+
+    /// Sets a value at `row_idx` with bounds checking.
+    fn checked_set<T>(
+        vec: &mut [Option<T>],
+        row_idx: usize,
+        value: Option<T>,
+    ) -> Result<(), ColumnStoreError> {
+        if row_idx >= vec.len() {
+            return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+        }
+        vec[row_idx] = value;
+        Ok(())
     }
 
     pub(super) fn column_type_name(col: &TypedColumn) -> String {

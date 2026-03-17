@@ -98,6 +98,27 @@ impl PartialEq for GroupKey {
 
 impl Eq for GroupKey {}
 
+/// Context for runtime WHERE evaluation during aggregation.
+pub(super) struct RuntimeWhereCtx<'a> {
+    pub(super) vector_storage: &'a dyn VectorStorage,
+    pub(super) stmt: &'a crate::velesql::SelectStatement,
+    pub(super) params: &'a HashMap<String, serde_json::Value>,
+    pub(super) needs_vector_eval: bool,
+    pub(super) graph_cache: &'a mut GraphMatchEvalCache,
+}
+
+/// Context for sequential aggregation over a set of IDs.
+struct SequentialAggCtx<'a> {
+    payload_storage: &'a dyn PayloadStorage,
+    vector_storage: &'a dyn VectorStorage,
+    stmt: &'a crate::velesql::SelectStatement,
+    params: &'a HashMap<String, serde_json::Value>,
+    filter: Option<&'a crate::filter::Filter>,
+    columns_to_aggregate: &'a [String],
+    has_count_star: bool,
+    use_runtime_where_eval: bool,
+}
+
 /// Threshold for switching to parallel aggregation.
 /// Below this, sequential is faster due to overhead.
 const PARALLEL_THRESHOLD: usize = 10_000;
@@ -127,7 +148,6 @@ impl Collection {
     ///
     /// Returns an error when SELECT does not contain aggregations, when HAVING is
     /// used without GROUP BY, or when underlying scan/filter/aggregation operations fail.
-    #[allow(clippy::too_many_lines)]
     pub fn execute_aggregate(
         &self,
         query: &Query,
@@ -135,7 +155,6 @@ impl Collection {
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
 
-        // Extract aggregation functions from SELECT clause
         let aggregations: &[AggregateFunction] = match &stmt.columns {
             SelectColumns::Aggregations(aggs) => aggs,
             SelectColumns::Mixed { aggregations, .. } => aggregations,
@@ -146,7 +165,6 @@ impl Collection {
             }
         };
 
-        // Check if GROUP BY is present
         if let Some(ref group_by) = stmt.group_by {
             return self.execute_grouped_aggregate(
                 query,
@@ -157,216 +175,287 @@ impl Collection {
             );
         }
 
-        // HAVING without GROUP BY is invalid - return error
         if stmt.having.is_some() {
             return Err(crate::error::Error::Config(
                 "HAVING clause requires GROUP BY clause".to_string(),
             ));
         }
 
+        let agg_result = self.run_ungrouped_aggregation(stmt, aggregations, params)?;
+        Ok(Self::build_aggregate_result(aggregations, &agg_result))
+    }
+
+    /// Runs the ungrouped aggregation scan (parallel or sequential).
+    fn run_ungrouped_aggregation(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        aggregations: &[AggregateFunction],
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::AggregateResult> {
         let where_clause = stmt.where_clause.as_ref();
         let use_runtime_where_eval = where_clause.is_some_and(|cond| {
             Self::condition_contains_graph_match(cond) || Self::condition_requires_vector_eval(cond)
         });
-        let needs_vector_eval = where_clause.is_some_and(Self::condition_requires_vector_eval);
 
-        // BUG-5 FIX: Resolve parameter placeholders in WHERE clause before creating filter.
-        // For graph/vector-aware predicates, use runtime evaluator instead.
-        let filter = if use_runtime_where_eval {
-            None
-        } else {
-            where_clause.as_ref().map(|cond| {
-                let resolved = Self::resolve_condition_params(cond, params);
-                crate::filter::Filter::new(crate::filter::Condition::from(resolved))
-            })
-        };
+        let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params);
+        let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
-        // Create aggregator
-        let mut aggregator = Aggregator::new();
-
-        // Determine which columns we need to aggregate (deduplicated)
-        let columns_to_aggregate: std::collections::HashSet<&str> = aggregations
-            .iter()
-            .filter_map(|agg| match &agg.argument {
-                AggregateArg::Column(col) => Some(col.as_str()),
-                AggregateArg::Wildcard => None, // COUNT(*) doesn't need column access
-            })
-            .collect();
-
-        let has_count_star = aggregations
-            .iter()
-            .any(|agg| matches!(agg.argument, AggregateArg::Wildcard));
-
-        // Collect all IDs for parallel processing decision
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
         let ids: Vec<u64> = vector_storage.ids();
-        let total_count = ids.len();
 
-        // Use parallel aggregation for large datasets
-        let agg_result = if total_count >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
-            // PARALLEL: Pre-fetch all payloads (sequential) to avoid lock contention
-            let payloads: Vec<Option<serde_json::Value>> = ids
-                .iter()
-                .map(|&id| payload_storage.retrieve(id).ok().flatten())
-                .collect();
-
-            // Drop the lock before parallel processing
-            drop(payload_storage);
-            drop(vector_storage);
-
-            let columns_vec: Vec<String> = columns_to_aggregate
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect();
-
-            // Parallel aggregation on pre-fetched data (no lock contention)
-            let partial_aggregators: Vec<Aggregator> = payloads
-                .par_chunks(CHUNK_SIZE)
-                .map(|chunk| {
-                    let mut chunk_agg = Aggregator::new();
-                    for payload in chunk {
-                        // Apply filter if present
-                        if let Some(ref f) = filter {
-                            let matches = match payload {
-                                Some(ref p) => f.matches(p),
-                                None => f.matches(&serde_json::Value::Null),
-                            };
-                            if !matches {
-                                continue;
-                            }
-                        }
-
-                        // Process COUNT(*)
-                        if has_count_star {
-                            chunk_agg.process_count();
-                        }
-
-                        // Process column aggregations
-                        if let Some(ref p) = payload {
-                            for col in &columns_vec {
-                                if let Some(value) = Self::get_nested_value(p, col) {
-                                    chunk_agg.process_value(col, value);
-                                }
-                            }
-                        }
-                    }
-                    chunk_agg
-                })
-                .collect();
-
-            // Merge all partial results
-            let mut final_agg = Aggregator::new();
-            for partial in partial_aggregators {
-                final_agg.merge(partial);
-            }
-            final_agg.finalize()
+        if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
+            Ok(Self::run_parallel_path(
+                &ids,
+                &*payload_storage,
+                filter.as_ref(),
+                &columns_vec,
+                has_count_star,
+            ))
         } else {
-            // SEQUENTIAL: Original single-pass for small datasets
-            let mut graph_cache = GraphMatchEvalCache::default();
-            for id in ids {
-                let payload = payload_storage.retrieve(id).ok().flatten();
+            let ctx = SequentialAggCtx {
+                payload_storage: &*payload_storage,
+                vector_storage: &*vector_storage,
+                stmt,
+                params,
+                filter: filter.as_ref(),
+                columns_to_aggregate: &columns_vec,
+                has_count_star,
+                use_runtime_where_eval,
+            };
+            self.aggregate_sequential(&ids, &ctx)
+        }
+    }
 
-                if use_runtime_where_eval {
-                    let vector = if needs_vector_eval {
-                        vector_storage.retrieve(id).ok().flatten()
-                    } else {
-                        None
-                    };
-                    if let Some(cond) = where_clause {
-                        let matches = self.evaluate_where_condition_for_record(
-                            cond,
-                            id,
-                            payload.as_ref(),
-                            vector.as_deref(),
-                            params,
-                            &stmt.from_alias,
-                            &mut graph_cache,
-                        )?;
-                        if !matches {
+    /// Pre-fetches payloads and runs parallel aggregation.
+    fn run_parallel_path(
+        ids: &[u64],
+        payload_storage: &dyn PayloadStorage,
+        filter: Option<&crate::filter::Filter>,
+        columns_vec: &[String],
+        has_count_star: bool,
+    ) -> crate::velesql::AggregateResult {
+        let payloads: Vec<Option<serde_json::Value>> = ids
+            .iter()
+            .map(|&id| payload_storage.retrieve(id).ok().flatten())
+            .collect();
+
+        Self::aggregate_parallel(&payloads, filter, columns_vec, has_count_star)
+    }
+
+    /// Returns true if the payload passes the static filter.
+    pub(super) fn payload_passes_filter(
+        filter: &crate::filter::Filter,
+        payload: Option<&serde_json::Value>,
+    ) -> bool {
+        match payload {
+            Some(p) => filter.matches(p),
+            None => filter.matches(&serde_json::Value::Null),
+        }
+    }
+
+    /// Feeds one record into an aggregator (count-star + per-column values).
+    pub(super) fn accumulate_record(
+        aggregator: &mut Aggregator,
+        payload: Option<&serde_json::Value>,
+        columns_to_aggregate: &[String],
+        has_count_star: bool,
+    ) {
+        if has_count_star {
+            aggregator.process_count();
+        }
+        if let Some(p) = payload {
+            for col in columns_to_aggregate {
+                if let Some(value) = Self::get_nested_value(p, col) {
+                    aggregator.process_value(col, value);
+                }
+            }
+        }
+    }
+
+    /// Parallel aggregation on pre-fetched payloads.
+    fn aggregate_parallel(
+        payloads: &[Option<serde_json::Value>],
+        filter: Option<&crate::filter::Filter>,
+        columns_to_aggregate: &[String],
+        has_count_star: bool,
+    ) -> crate::velesql::AggregateResult {
+        let partial_aggregators: Vec<Aggregator> = payloads
+            .par_chunks(CHUNK_SIZE)
+            .map(|chunk| {
+                let mut chunk_agg = Aggregator::new();
+                for payload in chunk {
+                    if let Some(f) = filter {
+                        if !Self::payload_passes_filter(f, payload.as_ref()) {
                             continue;
                         }
                     }
-                } else if let Some(ref f) = filter {
-                    let matches = match payload {
-                        Some(ref p) => f.matches(p),
-                        None => f.matches(&serde_json::Value::Null),
-                    };
-                    if !matches {
-                        continue;
-                    }
+                    Self::accumulate_record(
+                        &mut chunk_agg,
+                        payload.as_ref(),
+                        columns_to_aggregate,
+                        has_count_star,
+                    );
                 }
+                chunk_agg
+            })
+            .collect();
 
-                // Process COUNT(*)
-                if has_count_star {
-                    aggregator.process_count();
-                }
+        let mut final_agg = Aggregator::new();
+        for partial in partial_aggregators {
+            final_agg.merge(partial);
+        }
+        final_agg.finalize()
+    }
 
-                // Process column aggregations
-                if let Some(ref p) = payload {
-                    for col in &columns_to_aggregate {
-                        if let Some(value) = Self::get_nested_value(p, col) {
-                            aggregator.process_value(col, value);
-                        }
-                    }
-                }
-            }
-            aggregator.finalize()
+    /// Evaluates runtime WHERE for a single record, returning whether it passes.
+    pub(super) fn runtime_where_passes(
+        &self,
+        id: u64,
+        payload: Option<&serde_json::Value>,
+        ctx: &mut RuntimeWhereCtx<'_>,
+    ) -> Result<bool> {
+        let vector = if ctx.needs_vector_eval {
+            ctx.vector_storage.retrieve(id).ok().flatten()
+        } else {
+            None
         };
+        match ctx.stmt.where_clause.as_ref() {
+            Some(cond) => self.evaluate_where_condition_for_record(
+                cond,
+                id,
+                payload,
+                vector.as_deref(),
+                ctx.params,
+                &ctx.stmt.from_alias,
+                ctx.graph_cache,
+            ),
+            None => Ok(true),
+        }
+    }
+
+    /// Checks whether a single record passes the WHERE filter (runtime or static).
+    fn record_passes_filter(
+        &self,
+        id: u64,
+        payload: Option<&serde_json::Value>,
+        ctx: &SequentialAggCtx<'_>,
+        needs_vector_eval: bool,
+        graph_cache: &mut GraphMatchEvalCache,
+    ) -> Result<bool> {
+        if ctx.use_runtime_where_eval {
+            let mut where_ctx = RuntimeWhereCtx {
+                vector_storage: ctx.vector_storage,
+                stmt: ctx.stmt,
+                params: ctx.params,
+                needs_vector_eval,
+                graph_cache,
+            };
+            self.runtime_where_passes(id, payload, &mut where_ctx)
+        } else if let Some(f) = ctx.filter {
+            Ok(Self::payload_passes_filter(f, payload))
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Sequential aggregation with optional runtime WHERE evaluation.
+    fn aggregate_sequential(
+        &self,
+        ids: &[u64],
+        ctx: &SequentialAggCtx<'_>,
+    ) -> Result<crate::velesql::AggregateResult> {
+        let needs_vector_eval = ctx
+            .stmt
+            .where_clause
+            .as_ref()
+            .is_some_and(Self::condition_requires_vector_eval);
+        let mut aggregator = Aggregator::new();
+        let mut graph_cache = GraphMatchEvalCache::default();
+
+        for &id in ids {
+            let payload = ctx.payload_storage.retrieve(id).ok().flatten();
+            if !self.record_passes_filter(id, payload.as_ref(), ctx, needs_vector_eval, &mut graph_cache)? {
+                continue;
+            }
+            Self::accumulate_record(
+                &mut aggregator,
+                payload.as_ref(),
+                ctx.columns_to_aggregate,
+                ctx.has_count_star,
+            );
+        }
+        Ok(aggregator.finalize())
+    }
+
+    /// Builds the JSON result object from aggregation results.
+    fn build_aggregate_result(
+        aggregations: &[AggregateFunction],
+        agg_result: &crate::velesql::AggregateResult,
+    ) -> serde_json::Value {
         let mut result = serde_json::Map::new();
 
-        // Build result based on requested aggregations
         for agg in aggregations {
-            let key = if let Some(ref alias) = agg.alias {
-                alias.clone()
-            } else {
-                match &agg.argument {
-                    AggregateArg::Wildcard => "count".to_string(),
-                    AggregateArg::Column(col) => {
-                        let prefix = match agg.function_type {
-                            AggregateType::Count => "count",
-                            AggregateType::Sum => "sum",
-                            AggregateType::Avg => "avg",
-                            AggregateType::Min => "min",
-                            AggregateType::Max => "max",
-                        };
-                        format!("{prefix}_{col}")
-                    }
-                }
-            };
-
-            let value = match (&agg.function_type, &agg.argument) {
-                (AggregateType::Count, AggregateArg::Wildcard) => {
-                    serde_json::json!(agg_result.count)
-                }
-                (AggregateType::Count, AggregateArg::Column(col)) => {
-                    // COUNT(column) = number of non-null values for this column
-                    let count = agg_result.counts.get(col.as_str()).copied().unwrap_or(0);
-                    serde_json::json!(count)
-                }
-                (AggregateType::Sum, AggregateArg::Column(col)) => agg_result
-                    .sums
-                    .get(col.as_str())
-                    .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-                (AggregateType::Avg, AggregateArg::Column(col)) => agg_result
-                    .avgs
-                    .get(col.as_str())
-                    .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-                (AggregateType::Min, AggregateArg::Column(col)) => agg_result
-                    .mins
-                    .get(col.as_str())
-                    .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-                (AggregateType::Max, AggregateArg::Column(col)) => agg_result
-                    .maxs
-                    .get(col.as_str())
-                    .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-                _ => serde_json::Value::Null,
-            };
-
+            let key = Self::aggregation_result_key_from_fn(agg);
+            let value = Self::aggregation_result_value_from_fn(agg, agg_result);
             result.insert(key, value);
         }
 
-        Ok(serde_json::Value::Object(result))
+        serde_json::Value::Object(result)
+    }
+
+    /// Computes the result key for an aggregation function (used by ungrouped path).
+    fn aggregation_result_key_from_fn(agg: &AggregateFunction) -> String {
+        if let Some(ref alias) = agg.alias {
+            alias.clone()
+        } else {
+            match &agg.argument {
+                AggregateArg::Wildcard => "count".to_string(),
+                AggregateArg::Column(col) => {
+                    let prefix = match agg.function_type {
+                        AggregateType::Count => "count",
+                        AggregateType::Sum => "sum",
+                        AggregateType::Avg => "avg",
+                        AggregateType::Min => "min",
+                        AggregateType::Max => "max",
+                    };
+                    format!("{prefix}_{col}")
+                }
+            }
+        }
+    }
+
+    /// Computes the result value for an aggregation function (used by ungrouped path).
+    fn aggregation_result_value_from_fn(
+        agg: &AggregateFunction,
+        agg_result: &crate::velesql::AggregateResult,
+    ) -> serde_json::Value {
+        match (&agg.function_type, &agg.argument) {
+            (AggregateType::Count, AggregateArg::Wildcard) => {
+                serde_json::json!(agg_result.count)
+            }
+            (AggregateType::Count, AggregateArg::Column(col)) => {
+                let count = agg_result.counts.get(col.as_str()).copied().unwrap_or(0);
+                serde_json::json!(count)
+            }
+            (AggregateType::Sum, AggregateArg::Column(col)) => agg_result
+                .sums
+                .get(col.as_str())
+                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
+            (AggregateType::Avg, AggregateArg::Column(col)) => agg_result
+                .avgs
+                .get(col.as_str())
+                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
+            (AggregateType::Min, AggregateArg::Column(col)) => agg_result
+                .mins
+                .get(col.as_str())
+                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
+            (AggregateType::Max, AggregateArg::Column(col)) => agg_result
+                .maxs
+                .get(col.as_str())
+                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
+            _ => serde_json::Value::Null,
+        }
     }
 
     /// Get a nested value from JSON payload using dot notation.

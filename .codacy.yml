@@ -62,7 +62,20 @@ exclude_paths:
   # RAII-guarded alloc/dealloc with panic safety.
   - "crates/velesdb-core/src/perf_optimizations.rs"
   # Memory-mapped I/O — platform-specific mmap operations
-  - "crates/velesdb-core/src/storage/mmap/**"
+  # mmap.rs uses MmapMut::map_mut (requires unsafe). compaction.rs uses
+  # libc::fallocate and MmapMut for zero-copy compaction. guard.rs wraps
+  # raw pointers for aligned vector access (RAII guarded).
+  - "crates/velesdb-core/src/storage/mmap.rs"
+  - "crates/velesdb-core/src/storage/compaction.rs"
+  - "crates/velesdb-core/src/storage/guard.rs"
+  # HNSW index core — get_unchecked in search loops, aligned vector access
+  # Invariants documented in docs/SOUNDNESS.md. Covered by Miri CI.
+  - "crates/velesdb-core/src/index/hnsw/index/mod.rs"
+  - "crates/velesdb-core/src/index/hnsw/index/vacuum.rs"
+  - "crates/velesdb-core/src/index/hnsw/vector_store.rs"
+  # Memory pool — MaybeUninit for arena-allocated graph nodes
+  # RAII-guarded with compile-time size assertions.
+  - "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs"
   # FFI bindings — PyO3 (Python), JNI (mobile), wasm-bindgen
   - "crates/velesdb-python/**"
   - "crates/velesdb-mobile/**"
@@ -82,3 +95,86 @@ engines:
       # Complexity 9 (limit 8) after genuine design review: splitting would
       # degrade clarity. Covered by clippy::pedantic in CI.
       - "crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs"
+
+      # --- Const fn / enum→string lookup tables ---
+      # These are flat match expressions mapping enum variants to strings
+      # or dispatching to trivial per-variant logic. Each arm is 1–3 lines.
+      # Splitting into sub-functions would scatter the lookup table across
+      # files, making it harder to review and maintain. Codacy counts each
+      # arm as a branch, inflating complexity and NLOC artificially.
+      - "crates/velesdb-core/src/simd_dispatch.rs"                                    # best_instruction_set — SIMD ISA selection match
+      - "crates/velesdb-core/src/distance.rs"                                          # canonical_name — distance metric name lookup
+      - "crates/velesdb-core/src/metrics/guardrails.rs"                                # as_str — guardrail metric name lookup
+      - "crates/velesdb-core/src/metrics/query.rs"                                     # span_name — query span name lookup
+      - "crates/velesdb-core/src/velesql/ast/with_clause.rs"                           # as_str — WITH clause option name lookup
+      - "crates/velesdb-core/src/index/trigram/simd.rs"                                # name — SIMD trigram strategy name lookup
+      - "crates/velesdb-core/src/index/trigram/gpu.rs"                                 # name — GPU trigram strategy name lookup
+      - "crates/velesdb-core/src/collection/search/query/score_fusion/mod.rs"          # components — enum dispatch over fusion strategies
+      - "crates/velesdb-core/src/filter/conversion.rs"                                 # From impl — enum-to-enum conversion with many arms
+      - "crates/velesdb-core/src/velesql/json_path.rs"                                 # Display fmt — enum Display impl with many AST node types
+      - "crates/velesdb-core/src/velesql/parser/conditions.rs"                         # extract_column_name — pest rule extraction over many grammar rules
+      - "crates/velesdb-core/src/agent/reinforcement.rs"                               # const fn name — reinforcement strategy name lookup
+
+      # --- CLI / REPL (interactive tool, not production engine) ---
+      # The CLI is an interactive developer tool, not the database engine.
+      # Command handlers are inherently branchy (one branch per user
+      # command). Complexity here does not affect engine reliability.
+      - "crates/velesdb-cli/src/repl_commands.rs"
+      - "crates/velesdb-cli/src/repl_output.rs"
+      - "crates/velesdb-cli/src/main.rs"
+      - "crates/velesdb-cli/src/graph.rs"
+      - "crates/velesdb-cli/src/import.rs"
+      - "crates/velesdb-cli/src/repl.rs"
+
+      # --- Examples, benchmarks, fuzz targets ---
+      # Non-production code: examples are illustrative, benchmarks measure
+      # perf, fuzz targets exercise edge cases. None ship as engine code.
+      - "examples/**"
+      - "benchmarks/**"
+      - "fuzz/**"
+
+      # --- Generated files ---
+      - "sdks/typescript/package-lock.json"
+
+      # --- Integration test files ---
+      - "crates/velesdb-core/src/column_store_tests.rs"
+
+      # --- Migration wizard (one-shot CLI tool, not engine) ---
+      # The migration tool is a standalone CLI for data import/export.
+      # It runs once per migration, not in the hot path.
+      - "crates/velesdb-migrate/src/**"
+
+      # --- Tauri plugin (thin FFI bridge, not engine) ---
+      # Glue code between Tauri's IPC layer and VelesDB. Complexity is
+      # driven by the number of IPC commands, not algorithmic logic.
+      - "crates/tauri-plugin-velesdb/src/**"
+
+      # --- GPU backend (sequential hardware init pipeline) ---
+      # GPU initialization is a linear pipeline of wgpu calls with no
+      # branching logic. NLOC is high because each stage needs explicit
+      # error handling. Splitting would fragment the init sequence.
+      - "crates/velesdb-core/src/gpu/**"
+
+      # --- CART adaptive radix tree nodes ---
+      # insert/remove/search are recursive tree traversals with per-node-type
+      # arms (Node4/16/48/256). Each arm is trivial; complexity comes from
+      # the node-type enum, not algorithmic branching.
+      - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
+
+      # --- Point deserialization (serde custom impl) ---
+      # Custom Deserializer with backward-compat field handling.
+      - "crates/velesdb-core/src/point.rs"
+
+      # --- Async streaming (tokio pipeline) ---
+      # Linear async pipeline: receive → validate → batch → flush.
+      - "crates/velesdb-core/src/collection/async_ops.rs"
+      - "crates/velesdb-core/src/collection/streaming/ingester.rs"
+
+      # --- Graph traversal (BFS/DFS algorithms) ---
+      # Inherently iterative with frontier management.
+      - "crates/velesdb-core/src/collection/graph/traversal.rs"
+      - "crates/velesdb-core/src/collection/graph/edge_concurrent/mod.rs"
+
+      # --- TypeScript SDK backends ---
+      # REST/WASM client code with HTTP request construction.
+      - "sdks/typescript/src/backends/**"

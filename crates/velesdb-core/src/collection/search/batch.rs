@@ -38,18 +38,14 @@ impl Collection {
             )));
         }
 
-        let config = self.config.read();
-        let dimension = config.dimension;
-        drop(config);
-
-        // Validate all query dimensions
+        let dimension = self.config.read().dimension;
         for query in queries {
             validate_dimension_match(dimension, query.len())?;
         }
 
-        // We need to retrieve more candidates for post-filtering
         let candidates_k = k.saturating_mul(4).max(k + 10);
         let metric = self.config.read().metric;
+        let higher_is_better = metric.higher_is_better();
         let index_results =
             self.index
                 .search_batch_parallel(queries, candidates_k, SearchQuality::Balanced);
@@ -62,58 +58,68 @@ impl Collection {
         for ((query_results, filter_opt), query) in
             index_results.into_iter().zip(filters).zip(queries)
         {
-            // Merge with delta buffer before filtering
             let query_results = self.merge_delta(query_results, query, candidates_k, metric);
-            let mut filtered_results: Vec<SearchResult> = query_results
-                .into_iter()
-                .filter_map(|sr| {
-                    let payload = payload_storage.retrieve(sr.id).ok().flatten();
-
-                    // Apply filter if present
-                    if let Some(ref filter) = filter_opt {
-                        if let Some(ref p) = payload {
-                            if !filter.matches(p) {
-                                return None;
-                            }
-                        } else if !filter.matches(&serde_json::Value::Null) {
-                            return None;
-                        }
-                    }
-
-                    let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                    Some(SearchResult {
-                        point: Point {
-                            id: sr.id,
-                            vector,
-                            payload,
-                            sparse_vectors: None,
-                        },
-                        score: sr.score,
-                    })
-                })
-                .collect();
-
-            // Sort and truncate to k
-            let higher_is_better = self.config.read().metric.higher_is_better();
-            if higher_is_better {
-                filtered_results.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            } else {
-                filtered_results.sort_by(|a, b| {
-                    a.score
-                        .partial_cmp(&b.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
-            filtered_results.truncate(k);
-
-            all_results.push(filtered_results);
+            let mut filtered = Self::filter_and_resolve_batch(
+                &query_results,
+                filter_opt.as_ref(),
+                &*vector_storage,
+                &*payload_storage,
+            );
+            Self::sort_results_by_metric(&mut filtered, higher_is_better);
+            filtered.truncate(k);
+            all_results.push(filtered);
         }
 
         Ok(all_results)
+    }
+
+    /// Filters and resolves a single batch query's results.
+    fn filter_and_resolve_batch(
+        results: &[crate::scored_result::ScoredResult],
+        filter: Option<&crate::filter::Filter>,
+        vector_storage: &dyn VectorStorage,
+        payload_storage: &dyn PayloadStorage,
+    ) -> Vec<SearchResult> {
+        results
+            .iter()
+            .filter_map(|sr| {
+                let payload = payload_storage.retrieve(sr.id).ok().flatten();
+                if let Some(f) = filter {
+                    let matches = match payload.as_ref() {
+                        Some(p) => f.matches(p),
+                        None => f.matches(&serde_json::Value::Null),
+                    };
+                    if !matches {
+                        return None;
+                    }
+                }
+                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
+                Some(SearchResult {
+                    point: Point {
+                        id: sr.id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
+                    score: sr.score,
+                })
+            })
+            .collect()
+    }
+
+    /// Sorts results by score according to metric direction.
+    fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
+        results.sort_by(|a, b| {
+            if higher_is_better {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
     }
 
     /// Performs batch search for multiple query vectors in parallel with a single metadata filter.
@@ -230,7 +236,6 @@ impl Collection {
     /// - Any vector has incorrect dimension
     /// - More than 10 vectors are provided (configurable limit)
     #[allow(clippy::needless_pass_by_value)]
-    #[allow(clippy::too_many_lines)]
     pub fn multi_query_search(
         &self,
         vectors: &[&[f32]],
@@ -238,16 +243,28 @@ impl Collection {
         fusion: crate::fusion::FusionStrategy,
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
+        let metric = self.validate_multi_query_inputs(vectors)?;
+        let overfetch_k = Self::overfetch_factor(top_k);
+
+        let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric);
+        let filtered = self.apply_pre_fusion_filter(batch_results, filter);
+
+        let fused = fusion
+            .fuse(filtered)
+            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
+
+        Ok(self.hydrate_fused_results(fused, top_k))
+    }
+
+    /// Validates inputs for `multi_query_search` and returns the distance metric.
+    fn validate_multi_query_inputs(&self, vectors: &[&[f32]]) -> Result<crate::DistanceMetric> {
         const MAX_VECTORS: usize = 10;
 
-        // Validation: non-empty
         if vectors.is_empty() {
             return Err(Error::Config(
                 "multi_query_search requires at least one vector".into(),
             ));
         }
-
-        // Validation: max vectors limit
         if vectors.len() > MAX_VECTORS {
             return Err(Error::Config(format!(
                 "multi_query_search supports at most {MAX_VECTORS} vectors, got {}",
@@ -255,33 +272,40 @@ impl Collection {
             )));
         }
 
-        // Validation: dimension consistency
         let config = self.config.read();
         let dimension = config.dimension;
+        let metric = config.metric;
         drop(config);
 
         for vector in vectors {
             validate_dimension_match(dimension, vector.len())?;
         }
 
-        // Calculate overfetch factor for better fusion quality
-        let overfetch_k = match top_k {
+        Ok(metric)
+    }
+
+    /// Calculates the overfetch factor for better fusion quality.
+    fn overfetch_factor(top_k: usize) -> usize {
+        match top_k {
             0..=10 => top_k * 20,
             11..=50 => top_k * 10,
             51..=100 => top_k * 5,
             _ => top_k * 2,
-        };
+        }
+    }
 
-        let metric = self.config.read().metric;
-
-        // Execute parallel batch search
+    /// Runs batch index search and merges delta buffer per query.
+    fn search_and_merge_delta(
+        &self,
+        vectors: &[&[f32]],
+        overfetch_k: usize,
+        metric: crate::DistanceMetric,
+    ) -> Vec<Vec<(u64, f32)>> {
         let batch_results =
             self.index
                 .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
 
-        // Merge with delta buffer per query before fusion (C-2: was bypassed).
-        // Convert to tuples for fusion strategy compatibility.
-        let batch_results: Vec<Vec<(u64, f32)>> = batch_results
+        batch_results
             .into_iter()
             .zip(vectors)
             .map(|(query_results, query)| {
@@ -290,58 +314,56 @@ impl Collection {
                     .map(Into::into)
                     .collect()
             })
-            .collect();
+            .collect()
+    }
 
-        // Apply filter if present (pre-fusion filtering)
-        let filtered_results: Vec<Vec<(u64, f32)>> = if let Some(f) = filter {
-            let payload_storage = self.payload_storage.read();
-            batch_results
-                .into_iter()
-                .map(|query_results| {
-                    query_results
-                        .into_iter()
-                        .filter(|(id, _score)| {
-                            if let Ok(Some(payload)) = payload_storage.retrieve(*id) {
-                                f.matches(&payload)
-                            } else {
-                                false
-                            }
-                        })
-                        .collect()
-                })
-                .collect()
-        } else {
-            batch_results
+    /// Applies metadata filter to batch results before fusion.
+    fn apply_pre_fusion_filter(
+        &self,
+        batch_results: Vec<Vec<(u64, f32)>>,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Vec<Vec<(u64, f32)>> {
+        let Some(f) = filter else {
+            return batch_results;
         };
+        let payload_storage = self.payload_storage.read();
+        batch_results
+            .into_iter()
+            .map(|query_results| {
+                query_results
+                    .into_iter()
+                    .filter(|(id, _score)| {
+                        if let Ok(Some(payload)) = payload_storage.retrieve(*id) {
+                            f.matches(&payload)
+                        } else {
+                            false
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 
-        // Fuse results using the specified strategy
-        let fused = fusion
-            .fuse(filtered_results)
-            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
-
-        // Fetch full point data for top_k results
+    /// Fetches full point data for the top-k fused results.
+    fn hydrate_fused_results(&self, fused: Vec<(u64, f32)>, top_k: usize) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        let results: Vec<SearchResult> = fused
+        fused
             .into_iter()
             .take(top_k)
             .filter_map(|(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
-
                 let point = Point {
                     id,
                     vector,
                     payload,
                     sparse_vectors: None,
                 };
-
                 Some(SearchResult::new(point, score))
             })
-            .collect();
-
-        Ok(results)
+            .collect()
     }
 
     /// Performs multi-query search returning only IDs and fused scores.

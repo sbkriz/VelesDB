@@ -41,120 +41,23 @@ pub async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
 ) -> impl IntoResponse {
-    let metric = match req.metric.to_lowercase().as_str() {
-        "cosine" => DistanceMetric::Cosine,
-        "euclidean" | "l2" => DistanceMetric::Euclidean,
-        "dot" | "dotproduct" | "ip" => DistanceMetric::DotProduct,
-        "hamming" => DistanceMetric::Hamming,
-        "jaccard" => DistanceMetric::Jaccard,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
-                        req.metric
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let metric = match parse_distance_metric(&req.metric) {
+        Ok(m) => m,
+        Err(resp) => return resp,
     };
 
-    let storage_mode = match req.storage_mode.to_lowercase().as_str() {
-        "full" | "f32" => StorageMode::Full,
-        "sq8" | "int8" => StorageMode::SQ8,
-        "binary" | "bit" => StorageMode::Binary,
-        "pq" | "product_quantization" => StorageMode::ProductQuantization,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
-                        req.storage_mode
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let storage_mode = match parse_storage_mode(&req.storage_mode) {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
 
-    let result = match req.collection_type.to_lowercase().as_str() {
-        "metadata_only" | "metadata-only" | "metadata" => {
-            state.db.create_metadata_collection(&req.name)
-        }
-        "graph" | "knowledge_graph" | "kg" => {
-            use velesdb_core::GraphSchema;
-            state
-                .db
-                .create_graph_collection(&req.name, GraphSchema::schemaless())
-        }
-        "vector" | "" => {
-            let dimension = match req.dimension {
-                Some(d) => d,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: "dimension is required for vector collections".to_string(),
-                        }),
-                    )
-                        .into_response()
-                }
-            };
-            if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
-                state.db.create_vector_collection_with_hnsw(
-                    &req.name,
-                    dimension,
-                    metric,
-                    storage_mode,
-                    req.hnsw_m,
-                    req.hnsw_ef_construction,
-                )
-            } else {
-                state.db.create_vector_collection_with_options(
-                    &req.name,
-                    dimension,
-                    metric,
-                    storage_mode,
-                )
-            }
-        }
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Invalid collection_type: {}. Valid: vector, graph, metadata_only",
-                        req.collection_type
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let result = match dispatch_create(&state, &req, metric, storage_mode) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     match result {
-        Ok(()) => {
-            let mut warnings = Vec::new();
-            let is_vector = matches!(req.collection_type.to_lowercase().as_str(), "vector" | "");
-            if is_vector {
-                warnings.push("Collection dimension and metric are immutable after creation. If your embedding model changes, create a new collection and reindex data.");
-                warnings.push("For first queries, start without strict filters/thresholds, then tighten progressively.");
-            }
-
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "message": "Collection created",
-                    "name": req.name,
-                    "type": req.collection_type,
-                    "warnings": warnings
-                })),
-            )
-                .into_response()
-        }
+        Ok(()) => create_collection_success_response(&req),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -163,6 +66,138 @@ pub async fn create_collection(
         )
             .into_response(),
     }
+}
+
+/// Parse a distance metric string into the core enum.
+#[allow(clippy::result_large_err)]
+fn parse_distance_metric(raw: &str) -> Result<DistanceMetric, axum::response::Response> {
+    match raw.to_lowercase().as_str() {
+        "cosine" => Ok(DistanceMetric::Cosine),
+        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
+        "dot" | "dotproduct" | "ip" => Ok(DistanceMetric::DotProduct),
+        "hamming" => Ok(DistanceMetric::Hamming),
+        "jaccard" => Ok(DistanceMetric::Jaccard),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
+                    raw
+                ),
+            }),
+        )
+            .into_response()),
+    }
+}
+
+/// Parse a storage mode string into the core enum.
+#[allow(clippy::result_large_err)]
+fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response> {
+    match raw.to_lowercase().as_str() {
+        "full" | "f32" => Ok(StorageMode::Full),
+        "sq8" | "int8" => Ok(StorageMode::SQ8),
+        "binary" | "bit" => Ok(StorageMode::Binary),
+        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
+                    raw
+                ),
+            }),
+        )
+            .into_response()),
+    }
+}
+
+/// Create a vector collection, requiring a dimension in the request.
+#[allow(clippy::result_large_err)]
+fn create_vector_collection(
+    state: &AppState,
+    req: &CreateCollectionRequest,
+    metric: DistanceMetric,
+    storage_mode: StorageMode,
+) -> Result<velesdb_core::error::Result<()>, axum::response::Response> {
+    let dimension = req.dimension.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "dimension is required for vector collections".to_string(),
+            }),
+        )
+            .into_response()
+    })?;
+    if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
+        Ok(state.db.create_vector_collection_with_hnsw(
+            &req.name,
+            dimension,
+            metric,
+            storage_mode,
+            req.hnsw_m,
+            req.hnsw_ef_construction,
+        ))
+    } else {
+        Ok(state.db.create_vector_collection_with_options(
+            &req.name,
+            dimension,
+            metric,
+            storage_mode,
+        ))
+    }
+}
+
+/// Dispatch collection creation based on `collection_type`.
+#[allow(clippy::result_large_err)]
+fn dispatch_create(
+    state: &AppState,
+    req: &CreateCollectionRequest,
+    metric: DistanceMetric,
+    storage_mode: StorageMode,
+) -> Result<velesdb_core::error::Result<()>, axum::response::Response> {
+    match req.collection_type.to_lowercase().as_str() {
+        "metadata_only" | "metadata-only" | "metadata" => {
+            Ok(state.db.create_metadata_collection(&req.name))
+        }
+        "graph" | "knowledge_graph" | "kg" => {
+            use velesdb_core::GraphSchema;
+            Ok(state
+                .db
+                .create_graph_collection(&req.name, GraphSchema::schemaless()))
+        }
+        "vector" | "" => create_vector_collection(state, req, metric, storage_mode),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "Invalid collection_type: {}. Valid: vector, graph, metadata_only",
+                    req.collection_type
+                ),
+            }),
+        )
+            .into_response()),
+    }
+}
+
+/// Build a 201 Created response for successful collection creation.
+fn create_collection_success_response(req: &CreateCollectionRequest) -> axum::response::Response {
+    let mut warnings = Vec::new();
+    let is_vector = matches!(req.collection_type.to_lowercase().as_str(), "vector" | "");
+    if is_vector {
+        warnings.push("Collection dimension and metric are immutable after creation. If your embedding model changes, create a new collection and reindex data.");
+        warnings.push("For first queries, start without strict filters/thresholds, then tighten progressively.");
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "message": "Collection created",
+            "name": req.name,
+            "type": req.collection_type,
+            "warnings": warnings
+        })),
+    )
+        .into_response()
 }
 
 /// Get collection information.

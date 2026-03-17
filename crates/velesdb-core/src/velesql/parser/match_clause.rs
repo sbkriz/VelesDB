@@ -109,34 +109,48 @@ pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
 /// details cannot be parsed.
 pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, ParseError> {
     let input = input.trim();
-    let (direction, is, ie) = if input.starts_with("<-") && input.ends_with('-') {
-        (
+    let (direction, is, ie) = detect_direction_and_brackets(input)?;
+    let mut rel = RelationshipPattern::new(direction);
+
+    validate_bracket_matching(input)?;
+
+    if input.contains('[') && input.contains(']') {
+        parse_bracket_contents(input, is, ie, &mut rel)?;
+    }
+    Ok(rel)
+}
+
+/// Detects relationship direction and returns bracket positions.
+fn detect_direction_and_brackets(input: &str) -> Result<(Direction, usize, usize), ParseError> {
+    if input.starts_with("<-") && input.ends_with('-') {
+        Ok((
             Direction::Incoming,
             input.find('[').unwrap_or(2),
             input.rfind(']').unwrap_or(input.len() - 1),
-        )
+        ))
     } else if input.starts_with('-') && input.ends_with("->") {
-        (
+        Ok((
             Direction::Outgoing,
             input.find('[').unwrap_or(1),
             input.rfind(']').unwrap_or(input.len() - 2),
-        )
+        ))
     } else if input.starts_with('-') && input.ends_with('-') {
-        (
+        Ok((
             Direction::Both,
             input.find('[').unwrap_or(1),
             input.rfind(']').unwrap_or(input.len() - 1),
-        )
+        ))
     } else {
-        return Err(ParseError::syntax(
+        Err(ParseError::syntax(
             0,
             input,
             "Invalid relationship direction",
-        ));
-    };
-    let mut rel = RelationshipPattern::new(direction);
+        ))
+    }
+}
 
-    // Validate bracket matching
+/// Validates that brackets are matched (both present or both absent).
+fn validate_bracket_matching(input: &str) -> Result<(), ParseError> {
     let has_open = input.contains('[');
     let has_close = input.contains(']');
     if has_open != has_close {
@@ -150,28 +164,36 @@ pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, Pa
             },
         ));
     }
+    Ok(())
+}
 
-    if has_open && has_close {
-        if ie <= is {
-            return Err(ParseError::syntax(
-                is,
-                input,
-                "Mismatched brackets in relationship pattern",
-            ));
-        }
-        let inner = input[is + 1..ie].trim();
-        if !inner.is_empty() {
-            if let Some(sp) = inner.find('*') {
-                if let Some((s, e)) = parse_range(&inner[sp + 1..]) {
-                    rel.range = Some((s, e));
-                }
-                parse_rel_details(inner[..sp].trim(), &mut rel)?;
-            } else {
-                parse_rel_details(inner, &mut rel)?;
-            }
-        }
+/// Parses the contents between brackets in a relationship pattern.
+fn parse_bracket_contents(
+    input: &str,
+    is: usize,
+    ie: usize,
+    rel: &mut RelationshipPattern,
+) -> Result<(), ParseError> {
+    if ie <= is {
+        return Err(ParseError::syntax(
+            is,
+            input,
+            "Mismatched brackets in relationship pattern",
+        ));
     }
-    Ok(rel)
+    let inner = input[is + 1..ie].trim();
+    if inner.is_empty() {
+        return Ok(());
+    }
+    if let Some(sp) = inner.find('*') {
+        if let Some((s, e)) = parse_range(&inner[sp + 1..]) {
+            rel.range = Some((s, e));
+        }
+        parse_rel_details(inner[..sp].trim(), rel)?;
+    } else {
+        parse_rel_details(inner, rel)?;
+    }
+    Ok(())
 }
 
 fn parse_rel_details(input: &str, rel: &mut RelationshipPattern) -> Result<(), ParseError> {

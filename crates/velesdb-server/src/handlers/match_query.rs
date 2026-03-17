@@ -126,129 +126,133 @@ pub async fn match_query(
 ) -> Result<Json<MatchQueryResponse>, (StatusCode, Json<MatchQueryError>)> {
     let start = std::time::Instant::now();
 
-    let mk_error = |error: String, code: &str, hint: &str, details: Option<serde_json::Value>| {
-        Json(MatchQueryError {
-            error,
-            code: code.to_string(),
-            hint: Some(hint.to_string()),
-            details,
-        })
-    };
-
     // Get collection
     let collection = state
         .db
         .get_vector_collection(&collection_name)
         .ok_or_else(|| {
-            (
+            mk_match_error(
                 StatusCode::NOT_FOUND,
-                mk_error(
-                    format!("Collection '{}' not found", collection_name),
-                    "COLLECTION_NOT_FOUND",
-                    "Create the collection first or correct the collection name in the route",
-                    Some(serde_json::json!({ "collection": collection_name })),
-                ),
+                format!("Collection '{}' not found", collection_name),
+                "COLLECTION_NOT_FOUND",
+                "Create the collection first or correct the collection name in the route",
+                Some(serde_json::json!({ "collection": collection_name })),
             )
         })?;
 
-    // Parse MATCH query
-    let query = velesdb_core::velesql::Parser::parse(&request.query).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            mk_error(
-                format!("Parse error: {}", e),
-                "PARSE_ERROR",
-                "Check MATCH syntax and bound parameters",
-                None,
-            ),
-        )
-    })?;
+    let match_clause = parse_match_clause(&request.query)?;
+    validate_threshold(request.threshold)?;
 
-    // Verify it's a MATCH query
-    let match_clause = query.match_clause.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            mk_error(
-                "Query is not a MATCH query".to_string(),
-                "NOT_MATCH_QUERY",
-                "Use MATCH (...) RETURN ... or call /query for SELECT statements",
-                None,
-            ),
-        )
-    })?;
+    let results = execute_match(&collection, &match_clause, &request)?;
 
-    // Validate threshold if provided (must be 0.0 to 1.0)
-    if let Some(threshold) = request.threshold {
-        if !(0.0..=1.0).contains(&threshold) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                mk_error(
-                    format!(
-                        "Invalid threshold: {}. Must be between 0.0 and 1.0",
-                        threshold
-                    ),
-                    "INVALID_THRESHOLD",
-                    "Provide threshold in inclusive range [0.0, 1.0]",
-                    Some(serde_json::json!({ "threshold": threshold })),
-                ),
-            ));
-        }
-    }
-
-    // Execute MATCH query - use similarity variant if vector provided (EPIC-058 US-007)
-    let results = if let Some(ref vector) = request.vector {
-        let threshold = request.threshold.unwrap_or(0.0);
-        collection
-            .execute_match_with_similarity(&match_clause, vector, threshold, &request.params)
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    mk_error(
-                        format!("Execution error: {}", e),
-                        "EXECUTION_ERROR",
-                        "Validate graph labels/properties and parameter types for this collection",
-                        None,
-                    ),
-                )
-            })?
-    } else {
-        collection
-            .execute_match(&match_clause, &request.params)
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    mk_error(
-                        format!("Execution error: {}", e),
-                        "EXECUTION_ERROR",
-                        "Validate graph labels/properties and parameter types for this collection",
-                        None,
-                    ),
-                )
-            })?
-    };
-
-    // Convert results - include projected properties (EPIC-058 US-007)
-    let result_items: Vec<MatchQueryResultItem> = results
-        .into_iter()
-        .map(|r| MatchQueryResultItem {
-            bindings: r.bindings,
-            score: r.score,
-            depth: r.depth,
-            projected: r.projected,
-        })
-        .collect();
-
-    let count = result_items.len();
+    let count = results.len();
+    #[allow(clippy::cast_possible_truncation)]
     let took_ms = start.elapsed().as_millis() as u64;
 
     Ok(Json(MatchQueryResponse {
-        results: result_items,
+        results,
         took_ms,
         count,
         meta: MatchQueryMeta {
             velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
         },
     }))
+}
+
+/// Build a match query error tuple.
+fn mk_match_error(
+    status: StatusCode,
+    error: String,
+    code: &str,
+    hint: &str,
+    details: Option<serde_json::Value>,
+) -> (StatusCode, Json<MatchQueryError>) {
+    (
+        status,
+        Json(MatchQueryError {
+            error,
+            code: code.to_string(),
+            hint: Some(hint.to_string()),
+            details,
+        }),
+    )
+}
+
+/// Parse a query string and extract the MATCH clause.
+fn parse_match_clause(
+    query_str: &str,
+) -> Result<velesdb_core::velesql::MatchClause, (StatusCode, Json<MatchQueryError>)> {
+    let query = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
+        mk_match_error(
+            StatusCode::BAD_REQUEST,
+            format!("Parse error: {}", e),
+            "PARSE_ERROR",
+            "Check MATCH syntax and bound parameters",
+            None,
+        )
+    })?;
+
+    query.match_clause.ok_or_else(|| {
+        mk_match_error(
+            StatusCode::BAD_REQUEST,
+            "Query is not a MATCH query".to_string(),
+            "NOT_MATCH_QUERY",
+            "Use MATCH (...) RETURN ... or call /query for SELECT statements",
+            None,
+        )
+    })
+}
+
+/// Validate that threshold (if provided) is in [0.0, 1.0].
+fn validate_threshold(threshold: Option<f32>) -> Result<(), (StatusCode, Json<MatchQueryError>)> {
+    if let Some(t) = threshold {
+        if !(0.0..=1.0).contains(&t) {
+            return Err(mk_match_error(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid threshold: {}. Must be between 0.0 and 1.0", t),
+                "INVALID_THRESHOLD",
+                "Provide threshold in inclusive range [0.0, 1.0]",
+                Some(serde_json::json!({ "threshold": t })),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Execute a MATCH query, dispatching to similarity or plain variant.
+fn execute_match(
+    collection: &velesdb_core::collection::VectorCollection,
+    match_clause: &velesdb_core::velesql::MatchClause,
+    request: &MatchQueryRequest,
+) -> Result<Vec<MatchQueryResultItem>, (StatusCode, Json<MatchQueryError>)> {
+    let raw_results = if let Some(ref vector) = request.vector {
+        let threshold = request.threshold.unwrap_or(0.0);
+        collection.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
+    } else {
+        collection.execute_match(match_clause, &request.params)
+    };
+
+    raw_results
+        .map(|results| {
+            results
+                .into_iter()
+                .map(|r| MatchQueryResultItem {
+                    bindings: r.bindings,
+                    score: r.score,
+                    depth: r.depth,
+                    projected: r.projected,
+                })
+                .collect()
+        })
+        .map_err(|e| {
+            mk_match_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Execution error: {}", e),
+                "EXECUTION_ERROR",
+                "Validate graph labels/properties and parameter types for this collection",
+                None,
+            )
+        })
 }
 
 #[cfg(test)]

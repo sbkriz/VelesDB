@@ -118,26 +118,49 @@ pub async fn query(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
-    let parsed = match velesql::Parser::parse(&req.query) {
+    let parsed = match parse_and_validate(&req.query) {
         Ok(q) => q,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(QueryErrorResponse {
-                    error: QueryErrorDetail {
-                        error_type: format!("{:?}", e.kind),
-                        message: e.message.clone(),
-                        position: e.position,
-                        query: e.fragment.clone(),
-                    },
-                }),
-            )
-                .into_response()
-        }
+        Err(resp) => return resp,
     };
 
-    if let Err(e) = velesql::QueryValidator::validate(&parsed) {
-        return (
+    let collection_name = match resolve_collection_name(&parsed, &req) {
+        Ok(name) => name,
+        Err(resp) => return resp,
+    };
+
+    // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
+    if is_aggregation_query(&parsed.select) {
+        return execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start);
+    }
+
+    let results = match execute_standard_query(&state, &parsed, &collection_name, &req) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+
+    build_query_response(&state, &collection_name, start, results)
+}
+
+/// Parse a VelesQL query string and run validation, returning an error response on failure.
+#[allow(clippy::result_large_err)]
+fn parse_and_validate(query_str: &str) -> Result<Query, axum::response::Response> {
+    let parsed = velesql::Parser::parse(query_str).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(QueryErrorResponse {
+                error: QueryErrorDetail {
+                    error_type: format!("{:?}", e.kind),
+                    message: e.message.clone(),
+                    position: e.position,
+                    query: e.fragment.clone(),
+                },
+            }),
+        )
+            .into_response()
+    })?;
+
+    velesql::QueryValidator::validate(&parsed).map_err(|e| {
+        (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(VelesqlErrorResponse {
                 error: VelesqlErrorDetail {
@@ -148,15 +171,25 @@ pub async fn query(
                 },
             }),
         )
-            .into_response();
-    }
+            .into_response()
+    })?;
 
-    let select = &parsed.select;
-    let collection_name = if parsed.is_match_query() {
-        match req.collection.as_ref().filter(|name| !name.is_empty()) {
-            Some(name) => name.clone(),
-            None => {
-                return (
+    Ok(parsed)
+}
+
+/// Determine the target collection from the parsed query and request body.
+#[allow(clippy::result_large_err)]
+fn resolve_collection_name(
+    parsed: &Query,
+    req: &QueryRequest,
+) -> Result<String, axum::response::Response> {
+    if parsed.is_match_query() {
+        req.collection
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(VelesqlErrorResponse {
                         error: VelesqlErrorDetail {
@@ -173,58 +206,50 @@ pub async fn query(
                     }),
                 )
                     .into_response()
-            }
-        }
+            })
     } else {
-        select.from.clone()
-    };
-
-    // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
-    let is_aggregation = is_aggregation_query(select);
-
-    if is_aggregation {
-        return execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start);
+        Ok(parsed.select.from.clone())
     }
+}
 
-    // Standard query execution:
-    // - top-level MATCH executes in requested collection context
-    // - SELECT executes through database-level dispatcher for cross-collection JOIN support
+/// Execute a standard (non-aggregation) query, dispatching MATCH vs SELECT.
+#[allow(deprecated, clippy::result_large_err)]
+fn execute_standard_query(
+    state: &Arc<AppState>,
+    parsed: &Query,
+    collection_name: &str,
+    req: &QueryRequest,
+) -> Result<Vec<velesdb_core::SearchResult>, axum::response::Response> {
     let execute_result = if parsed.is_match_query() {
-        match state.db.get_collection(&collection_name) {
-            Some(c) => c.execute_query(&parsed, &req.params),
+        match state.db.get_collection(collection_name) {
+            Some(c) => c.execute_query(parsed, &req.params),
             None => Err(velesdb_core::Error::CollectionNotFound(
-                collection_name.clone(),
+                collection_name.to_string(),
             )),
         }
     } else {
-        state.db.execute_query(&parsed, &req.params)
+        state.db.execute_query(parsed, &req.params)
     };
 
-    let results = match execute_result {
-        Ok(r) => r,
-        Err(velesdb_core::Error::CollectionNotFound(name)) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(VelesqlErrorResponse {
-                    error: VelesqlErrorDetail {
-                        code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
-                        message: format!("Collection '{}' not found", name),
-                        hint: "Create the collection first or correct the collection name"
-                            .to_string(),
-                        details: Some(serde_json::json!({
-                            "collection": name
-                        })),
-                    },
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => return (
+    execute_result.map_err(|e| match e {
+        velesdb_core::Error::CollectionNotFound(name) => (
+            StatusCode::NOT_FOUND,
+            Json(VelesqlErrorResponse {
+                error: VelesqlErrorDetail {
+                    code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
+                    message: format!("Collection '{}' not found", name),
+                    hint: "Create the collection first or correct the collection name".to_string(),
+                    details: Some(serde_json::json!({ "collection": name })),
+                },
+            }),
+        )
+            .into_response(),
+        other => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(VelesqlErrorResponse {
                 error: VelesqlErrorDetail {
                     code: "VELESQL_EXECUTION_ERROR".to_string(),
-                    message: e.to_string(),
+                    message: other.to_string(),
                     hint:
                         "Validate query semantics and parameter types against the target collection"
                             .to_string(),
@@ -233,14 +258,23 @@ pub async fn query(
             }),
         )
             .into_response(),
-    };
+    })
+}
 
+/// Build the final query response with timing metrics.
+fn build_query_response(
+    state: &Arc<AppState>,
+    collection_name: &str,
+    start: std::time::Instant,
+    results: Vec<velesdb_core::SearchResult>,
+) -> axum::response::Response {
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    #[allow(clippy::cast_possible_truncation)]
     let took_ms = timing_ms.round() as u64;
     let duration_us = start.elapsed().as_micros();
     #[allow(clippy::cast_possible_truncation)]
     state.db.notify_query(
-        &collection_name,
+        collection_name,
         duration_us.min(u128::from(u64::MAX)) as u64,
     );
     let rows_returned = results.len();
@@ -368,7 +402,6 @@ pub async fn aggregate(
 /// Explain a VelesQL query without executing it (EPIC-058 US-002).
 ///
 /// Returns the query plan, estimated costs, and detected features.
-#[allow(clippy::too_many_lines)]
 #[utoipa::path(
     post,
     path = "/query/explain",
@@ -385,7 +418,6 @@ pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,
 ) -> impl IntoResponse {
-    // Parse the query
     let parsed = match velesql::Parser::parse(&req.query) {
         Ok(q) => q,
         Err(e) => {
@@ -406,7 +438,6 @@ pub async fn explain(
 
     let select = &parsed.select;
 
-    // Check collection exists
     let collection_exists = state.db.get_collection(&select.from).is_some();
     if !collection_exists && !select.from.is_empty() {
         return (
@@ -416,151 +447,16 @@ pub async fn explain(
                     code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
                     message: format!("Collection '{}' not found", select.from),
                     hint: "Create the collection first or correct the FROM collection".to_string(),
-                    details: Some(serde_json::json!({
-                        "collection": select.from
-                    })),
+                    details: Some(serde_json::json!({ "collection": select.from })),
                 },
             }),
         )
             .into_response();
     }
 
-    // Detect query features
-    let has_vector_search = select
-        .where_clause
-        .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
-
-    let has_filter = select.where_clause.is_some() && !has_vector_search;
-
-    let has_aggregation = matches!(
-        &select.columns,
-        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
-    );
-
-    let features = ExplainFeatures {
-        has_vector_search,
-        has_filter,
-        has_order_by: select.order_by.is_some(),
-        has_group_by: select.group_by.is_some(),
-        has_aggregation,
-        has_join: !select.joins.is_empty(),
-        has_fusion: select.fusion_clause.is_some(),
-        limit: select.limit,
-        offset: select.offset,
-    };
-
-    // Build execution plan
-    let mut plan = Vec::new();
-    let mut step_num = 1;
-
-    // Step 1: Source scan or vector search
-    if has_vector_search {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "VectorSearch".to_string(),
-            description: "ANN search using HNSW index with NEAR clause".to_string(),
-            estimated_rows: select.limit.map(|l| l as usize),
-        });
-    } else {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "FullScan".to_string(),
-            description: format!("Scan collection '{}'", select.from),
-            estimated_rows: None,
-        });
-    }
-    step_num += 1;
-
-    // Step 2: Filter (if present and not just vector search)
-    if has_filter {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "Filter".to_string(),
-            description: "Apply WHERE clause predicates".to_string(),
-            estimated_rows: None,
-        });
-        step_num += 1;
-    }
-
-    // Step 3: JOIN (if present)
-    if !select.joins.is_empty() {
-        for join in &select.joins {
-            plan.push(ExplainStep {
-                step: step_num,
-                operation: format!("{:?}Join", join.join_type),
-                description: format!("Join with '{}'", join.table),
-                estimated_rows: None,
-            });
-            step_num += 1;
-        }
-    }
-
-    // Step 4: GROUP BY (if present)
-    if select.group_by.is_some() {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "GroupBy".to_string(),
-            description: "Group rows by specified columns".to_string(),
-            estimated_rows: None,
-        });
-        step_num += 1;
-    }
-
-    // Step 5: Aggregation (if present)
-    if has_aggregation {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "Aggregate".to_string(),
-            description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
-            estimated_rows: None,
-        });
-        step_num += 1;
-    }
-
-    // Step 6: ORDER BY (if present)
-    if select.order_by.is_some() {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "Sort".to_string(),
-            description: "Sort results by ORDER BY clause".to_string(),
-            estimated_rows: None,
-        });
-        step_num += 1;
-    }
-
-    // Step 7: LIMIT/OFFSET (if present)
-    if select.limit.is_some() || select.offset.is_some() {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "Limit".to_string(),
-            description: format!(
-                "Apply LIMIT {} OFFSET {}",
-                select.limit.unwrap_or(0),
-                select.offset.unwrap_or(0)
-            ),
-            estimated_rows: select.limit.map(|l| l as usize),
-        });
-    }
-
-    // Estimate cost
-    let complexity = if has_vector_search {
-        "O(log n)"
-    } else {
-        "O(n)"
-    };
-
-    let estimated_cost = ExplainCost {
-        uses_index: has_vector_search,
-        index_name: if has_vector_search {
-            Some("HNSW".to_string())
-        } else {
-            None
-        },
-        selectivity: if has_vector_search { 0.01 } else { 1.0 },
-        complexity: complexity.to_string(),
-    };
+    let features = detect_explain_features(select);
+    let plan = build_explain_plan(select, &features);
+    let estimated_cost = estimate_cost(features.has_vector_search);
 
     let query_type = if parsed.is_match_query() {
         "MATCH"
@@ -568,7 +464,6 @@ pub async fn explain(
         "SELECT"
     };
 
-    // Call Database::explain_query to get cache status (gracefully fall back to None on error)
     let (cache_hit, plan_reuse_count) = state
         .db
         .explain_query(&parsed)
@@ -586,6 +481,171 @@ pub async fn explain(
         plan_reuse_count,
     })
     .into_response()
+}
+
+/// Detect query features from a SELECT statement for EXPLAIN output.
+fn detect_explain_features(select: &velesdb_core::velesql::SelectStatement) -> ExplainFeatures {
+    let has_vector_search = select
+        .where_clause
+        .as_ref()
+        .map(condition_has_vector_search)
+        .unwrap_or(false);
+
+    ExplainFeatures {
+        has_vector_search,
+        has_filter: select.where_clause.is_some() && !has_vector_search,
+        has_order_by: select.order_by.is_some(),
+        has_group_by: select.group_by.is_some(),
+        has_aggregation: matches!(
+            &select.columns,
+            SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
+        ),
+        has_join: !select.joins.is_empty(),
+        has_fusion: select.fusion_clause.is_some(),
+        limit: select.limit,
+        offset: select.offset,
+    }
+}
+
+/// Build the execution plan steps for an EXPLAIN response.
+fn build_explain_plan(
+    select: &velesdb_core::velesql::SelectStatement,
+    features: &ExplainFeatures,
+) -> Vec<ExplainStep> {
+    let mut plan = Vec::new();
+    let mut step_num = 1;
+
+    plan.push(build_source_step(select, features, step_num));
+    step_num += 1;
+
+    append_filter_and_join_steps(select, features, &mut plan, &mut step_num);
+    append_aggregation_steps(features, &mut plan, &mut step_num);
+    append_pagination_step(select, &mut plan, step_num);
+
+    plan
+}
+
+fn build_source_step(
+    select: &velesdb_core::velesql::SelectStatement,
+    features: &ExplainFeatures,
+    step_num: usize,
+) -> ExplainStep {
+    if features.has_vector_search {
+        ExplainStep {
+            step: step_num,
+            operation: "VectorSearch".to_string(),
+            description: "ANN search using HNSW index with NEAR clause".to_string(),
+            estimated_rows: select.limit.map(|l| l as usize),
+        }
+    } else {
+        ExplainStep {
+            step: step_num,
+            operation: "FullScan".to_string(),
+            description: format!("Scan collection '{}'", select.from),
+            estimated_rows: None,
+        }
+    }
+}
+
+fn append_filter_and_join_steps(
+    select: &velesdb_core::velesql::SelectStatement,
+    features: &ExplainFeatures,
+    plan: &mut Vec<ExplainStep>,
+    step_num: &mut usize,
+) {
+    if features.has_filter {
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "Filter".to_string(),
+            description: "Apply WHERE clause predicates".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
+    }
+
+    for join in &select.joins {
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: format!("{:?}Join", join.join_type),
+            description: format!("Join with '{}'", join.table),
+            estimated_rows: None,
+        });
+        *step_num += 1;
+    }
+}
+
+fn append_aggregation_steps(
+    features: &ExplainFeatures,
+    plan: &mut Vec<ExplainStep>,
+    step_num: &mut usize,
+) {
+    if features.has_group_by {
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "GroupBy".to_string(),
+            description: "Group rows by specified columns".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
+    }
+
+    if features.has_aggregation {
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "Aggregate".to_string(),
+            description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
+    }
+
+    if features.has_order_by {
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "Sort".to_string(),
+            description: "Sort results by ORDER BY clause".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
+    }
+}
+
+fn append_pagination_step(
+    select: &velesdb_core::velesql::SelectStatement,
+    plan: &mut Vec<ExplainStep>,
+    step_num: usize,
+) {
+    if select.limit.is_some() || select.offset.is_some() {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "Limit".to_string(),
+            description: format!(
+                "Apply LIMIT {} OFFSET {}",
+                select.limit.unwrap_or(0),
+                select.offset.unwrap_or(0)
+            ),
+            estimated_rows: select.limit.map(|l| l as usize),
+        });
+    }
+}
+
+/// Estimate execution cost based on query features.
+fn estimate_cost(has_vector_search: bool) -> ExplainCost {
+    ExplainCost {
+        uses_index: has_vector_search,
+        index_name: if has_vector_search {
+            Some("HNSW".to_string())
+        } else {
+            None
+        },
+        selectivity: if has_vector_search { 0.01 } else { 1.0 },
+        complexity: if has_vector_search {
+            "O(log n)"
+        } else {
+            "O(n)"
+        }
+        .to_string(),
+    }
 }
 
 /// Check if a condition contains vector search.

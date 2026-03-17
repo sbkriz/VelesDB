@@ -200,18 +200,36 @@ pub fn create_snapshot(state: &MemoryState) -> Vec<u8> {
 ///
 /// Returns error if snapshot is invalid or corrupted.
 pub fn load_snapshot(data: &[u8]) -> Result<MemoryState, SnapshotError> {
-    const MIN_SIZE: usize = 4 + 1 + 8 + 8 + 8 + 8 + 4; // magic + version + 4 lengths + crc
+    validate_snapshot_header(data)?;
+
+    let mut offset = 5; // skip magic (4) + version (1)
+    let payload_end = data.len() - 4; // exclude trailing CRC
+
+    let semantic = read_section(data, &mut offset, payload_end, "Semantic")?;
+    let episodic = read_section(data, &mut offset, payload_end, "Episodic")?;
+    let procedural = read_section(data, &mut offset, payload_end, "Procedural")?;
+    let ttl = read_section(data, &mut offset, payload_end, "TTL")?;
+
+    Ok(MemoryState {
+        semantic,
+        episodic,
+        procedural,
+        ttl,
+    })
+}
+
+/// Validates magic bytes, version, and CRC32 checksum of a snapshot.
+fn validate_snapshot_header(data: &[u8]) -> Result<(), SnapshotError> {
+    const MIN_SIZE: usize = 4 + 1 + 8 + 8 + 8 + 8 + 4;
 
     if data.len() < MIN_SIZE {
         return Err(SnapshotError::CorruptedData(
             "Snapshot too small".to_string(),
         ));
     }
-
     if &data[0..4] != SNAPSHOT_MAGIC {
         return Err(SnapshotError::InvalidMagic);
     }
-
     let version = data[4];
     if version != SNAPSHOT_VERSION {
         return Err(SnapshotError::UnsupportedVersion(version));
@@ -223,61 +241,32 @@ pub fn load_snapshot(data: &[u8]) -> Result<MemoryState, SnapshotError> {
             .map_err(|_| SnapshotError::CorruptedData("Invalid CRC bytes".to_string()))?,
     );
     let computed_crc = crc32_hash(&data[..data.len() - 4]);
-
     if stored_crc != computed_crc {
         return Err(SnapshotError::ChecksumMismatch {
             expected: stored_crc,
             actual: computed_crc,
         });
     }
+    Ok(())
+}
 
-    let mut offset = 5;
-
-    let semantic_len = read_u64(&data[offset..])? as usize;
-    offset += 8;
-    if offset + semantic_len > data.len() - 4 {
-        return Err(SnapshotError::CorruptedData(
-            "Semantic data truncated".to_string(),
-        ));
+/// Reads a length-prefixed section from the snapshot data.
+fn read_section(
+    data: &[u8],
+    offset: &mut usize,
+    payload_end: usize,
+    label: &str,
+) -> Result<Vec<u8>, SnapshotError> {
+    let section_len = read_u64(&data[*offset..])? as usize;
+    *offset += 8;
+    if *offset + section_len > payload_end {
+        return Err(SnapshotError::CorruptedData(format!(
+            "{label} data truncated"
+        )));
     }
-    let semantic = data[offset..offset + semantic_len].to_vec();
-    offset += semantic_len;
-
-    let episodic_len = read_u64(&data[offset..])? as usize;
-    offset += 8;
-    if offset + episodic_len > data.len() - 4 {
-        return Err(SnapshotError::CorruptedData(
-            "Episodic data truncated".to_string(),
-        ));
-    }
-    let episodic = data[offset..offset + episodic_len].to_vec();
-    offset += episodic_len;
-
-    let procedural_len = read_u64(&data[offset..])? as usize;
-    offset += 8;
-    if offset + procedural_len > data.len() - 4 {
-        return Err(SnapshotError::CorruptedData(
-            "Procedural data truncated".to_string(),
-        ));
-    }
-    let procedural = data[offset..offset + procedural_len].to_vec();
-    offset += procedural_len;
-
-    let ttl_len = read_u64(&data[offset..])? as usize;
-    offset += 8;
-    if offset + ttl_len > data.len() - 4 {
-        return Err(SnapshotError::CorruptedData(
-            "TTL data truncated".to_string(),
-        ));
-    }
-    let ttl = data[offset..offset + ttl_len].to_vec();
-
-    Ok(MemoryState {
-        semantic,
-        episodic,
-        procedural,
-        ttl,
-    })
+    let section = data[*offset..*offset + section_len].to_vec();
+    *offset += section_len;
+    Ok(section)
 }
 
 /// Saves a snapshot to a file.

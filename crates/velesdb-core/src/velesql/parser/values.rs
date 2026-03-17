@@ -278,9 +278,24 @@ impl Parser {
     pub(crate) fn parse_subquery_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Subquery, ParseError> {
+        let select = Self::parse_subquery_select(pair)?;
+
+        // EPIC-039 US-003: Detect correlated columns in WHERE clause
+        let correlations =
+            Self::detect_correlated_columns(select.where_clause.as_ref(), &select.from);
+
+        Ok(Subquery {
+            select,
+            correlations,
+        })
+    }
+
+    /// Parses the SELECT components of a subquery into a `SelectStatement`.
+    fn parse_subquery_select(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<crate::velesql::ast::SelectStatement, ParseError> {
         use crate::velesql::ast::{GroupByClause, SelectColumns, SelectStatement};
 
-        let inner = pair.into_inner();
         let mut columns = SelectColumns::All;
         let mut from = String::new();
         let mut where_clause = None;
@@ -288,18 +303,11 @@ impl Parser {
         let mut having = None;
         let mut limit = None;
 
-        // Parse each component of the subquery
-        for sub_pair in inner {
+        for sub_pair in pair.into_inner() {
             match sub_pair.as_rule() {
-                Rule::select_list => {
-                    columns = Self::parse_select_list(sub_pair)?;
-                }
-                Rule::identifier => {
-                    from = super::extract_identifier(&sub_pair);
-                }
-                Rule::where_clause => {
-                    where_clause = Some(Self::parse_where_clause(sub_pair)?);
-                }
+                Rule::select_list => columns = Self::parse_select_list(sub_pair)?,
+                Rule::identifier => from = super::extract_identifier(&sub_pair),
+                Rule::where_clause => where_clause = Some(Self::parse_where_clause(sub_pair)?),
                 Rule::group_by_clause => {
                     let cols: Vec<String> = sub_pair
                         .into_inner()
@@ -309,17 +317,13 @@ impl Parser {
                         .collect();
                     group_by = Some(GroupByClause { columns: cols });
                 }
-                Rule::having_clause => {
-                    having = Some(Self::parse_having_clause(sub_pair)?);
-                }
-                Rule::limit_clause => {
-                    limit = Some(Self::parse_limit_clause(sub_pair)?);
-                }
+                Rule::having_clause => having = Some(Self::parse_having_clause(sub_pair)?),
+                Rule::limit_clause => limit = Some(Self::parse_limit_clause(sub_pair)?),
                 _ => {}
             }
         }
 
-        let select = SelectStatement {
+        Ok(SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns,
             from,
@@ -333,15 +337,6 @@ impl Parser {
             group_by,
             having,
             fusion_clause: None,
-        };
-
-        // EPIC-039 US-003: Detect correlated columns in WHERE clause
-        let correlations =
-            Self::detect_correlated_columns(select.where_clause.as_ref(), &select.from);
-
-        Ok(Subquery {
-            select,
-            correlations,
         })
     }
 

@@ -242,66 +242,84 @@ impl Bm25Index {
         let total_length = *self.total_doc_length.read();
         let avgdl = total_length as f32 / doc_count as f32;
 
-        // Perf: Single lock acquisition for IDF cache, candidates, AND document data
-        // This avoids multiple lock acquisitions and allows efficient scoring.
+        let mut scores = self.score_candidates(&query_terms, doc_count, avgdl);
+        Self::top_k_sort(&mut scores, k);
+        scores
+    }
+
+    /// Scores all candidate documents for the given query terms.
+    #[allow(clippy::cast_precision_loss)]
+    fn score_candidates(
+        &self,
+        query_terms: &[String],
+        doc_count: usize,
+        avgdl: f32,
+    ) -> Vec<(u64, f32)> {
         let k1 = self.params.k1;
         let b = self.params.b;
 
-        let mut scores: Vec<(u64, f32)> = {
-            let inv_idx = self.inverted_index.read();
-            let docs = self.documents.read();
-            let doc_to_point = self.doc_to_point.read();
-            let n = doc_count as f32;
+        let inv_idx = self.inverted_index.read();
+        let docs = self.documents.read();
+        let doc_to_point = self.doc_to_point.read();
+        let n = doc_count as f32;
 
-            // Build IDF cache
-            let idf_cache: FxHashMap<&str, f32> = query_terms
-                .iter()
-                .map(|term| {
-                    let df = inv_idx.get(term).map_or(0, PostingList::len);
-                    let idf_val = if df == 0 {
-                        0.0
-                    } else {
-                        let df_f = df as f32;
-                        ((n - df_f + 0.5) / (df_f + 0.5) + 1.0).ln()
-                    };
-                    (term.as_str(), idf_val)
-                })
-                .collect();
+        let idf_cache = Self::build_idf_cache(query_terms, &inv_idx, n);
+        let candidate_union = Self::build_candidate_union(query_terms, &inv_idx);
 
-            // Collect candidates using PostingList union (efficient for Roaring)
-            let mut candidate_union = PostingList::new();
-            for term in &query_terms {
-                if let Some(posting_list) = inv_idx.get(term) {
-                    candidate_union = candidate_union.union(posting_list);
-                }
+        candidate_union
+            .iter()
+            .filter_map(|doc_id_u32| {
+                let doc_id = *doc_to_point.get(&doc_id_u32)?;
+                let doc = docs.get(&doc_id)?;
+                let score = Self::score_document_fast(doc, query_terms, &idf_cache, k1, b, avgdl);
+                (score > 0.0).then_some((doc_id, score))
+            })
+            .collect()
+    }
+
+    /// Builds an IDF cache for each query term.
+    #[allow(clippy::cast_precision_loss)]
+    fn build_idf_cache<'a>(
+        query_terms: &'a [String],
+        inv_idx: &FxHashMap<String, PostingList>,
+        n: f32,
+    ) -> FxHashMap<&'a str, f32> {
+        query_terms
+            .iter()
+            .map(|term| {
+                let df = inv_idx.get(term).map_or(0, PostingList::len);
+                let idf_val = if df == 0 {
+                    0.0
+                } else {
+                    let df_f = df as f32;
+                    ((n - df_f + 0.5) / (df_f + 0.5) + 1.0).ln()
+                };
+                (term.as_str(), idf_val)
+            })
+            .collect()
+    }
+
+    /// Builds a union of posting lists for all query terms.
+    fn build_candidate_union(
+        query_terms: &[String],
+        inv_idx: &FxHashMap<String, PostingList>,
+    ) -> PostingList {
+        let mut candidate_union = PostingList::new();
+        for term in query_terms {
+            if let Some(posting_list) = inv_idx.get(term) {
+                candidate_union = candidate_union.union(posting_list);
             }
+        }
+        candidate_union
+    }
 
-            candidate_union
-                .iter()
-                .filter_map(|doc_id_u32| {
-                    let doc_id = *doc_to_point.get(&doc_id_u32)?;
-                    let doc = docs.get(&doc_id)?;
-                    let score =
-                        Self::score_document_fast(doc, &query_terms, &idf_cache, k1, b, avgdl);
-                    if score > 0.0 {
-                        Some((doc_id, score))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        // Perf: Use partial_sort for top-k instead of full sort
+    /// Partial sort + truncate for top-k results.
+    fn top_k_sort(scores: &mut Vec<(u64, f32)>, k: usize) {
         if scores.len() > k {
             scores.select_nth_unstable_by(k, |a, b| b.1.total_cmp(&a.1));
             scores.truncate(k);
-            scores.sort_by(|a, b| b.1.total_cmp(&a.1));
-        } else {
-            scores.sort_by(|a, b| b.1.total_cmp(&a.1));
         }
-
-        scores
+        scores.sort_by(|a, b| b.1.total_cmp(&a.1));
     }
 
     /// Fast BM25 scoring with pre-computed IDF cache.

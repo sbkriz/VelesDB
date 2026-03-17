@@ -93,71 +93,90 @@ impl MatchQueryPlanner {
     pub fn plan(match_clause: &MatchClause, stats: &CollectionStats) -> MatchExecutionStrategy {
         let has_similarity = Self::has_similarity_condition(match_clause.where_clause.as_ref());
         let similarity_info = Self::extract_similarity_info(match_clause.where_clause.as_ref());
-
-        // Check if similarity is on start node
-        let start_alias = match_clause
-            .patterns
-            .first()
-            .and_then(|p| p.nodes.first())
-            .and_then(|n| n.alias.as_ref())
-            .cloned();
-
-        let similarity_on_start = similarity_info
-            .as_ref()
-            .is_some_and(|(alias, _, _)| Some(alias) == start_alias.as_ref());
-
-        // Get start labels for graph-first
-        let start_labels: Vec<String> = match_clause
-            .patterns
-            .first()
-            .map(|p| {
-                p.nodes
-                    .first()
-                    .map(|n| n.labels.clone())
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
-
-        // Count traversal depth
+        let similarity_on_start =
+            Self::is_similarity_on_start(match_clause, similarity_info.as_ref());
+        let start_labels = Self::extract_start_labels(match_clause);
         let max_depth = Self::count_hops(match_clause);
 
-        // Decision logic based on heuristics
         if has_similarity && similarity_on_start {
-            // Similarity condition on start node → Vector-first is optimal
-            let (alias, threshold, _) = similarity_info.unwrap_or_default();
-            let top_k = Self::estimate_top_k(match_clause, stats, threshold);
-
-            MatchExecutionStrategy::VectorFirst {
-                similarity_alias: alias,
-                top_k,
-                threshold,
-            }
+            Self::plan_vector_first(match_clause, stats, similarity_info)
         } else if !has_similarity {
-            // Pure graph query → Graph-first
             MatchExecutionStrategy::GraphFirst {
                 start_labels,
                 max_depth,
             }
         } else if Self::should_use_parallel(stats, similarity_info.as_ref()) {
-            // Both selective → Parallel execution
-            let (alias, threshold, _) = similarity_info.unwrap_or_default();
-            MatchExecutionStrategy::Parallel {
-                graph_hint: Box::new(MatchExecutionStrategy::GraphFirst {
-                    start_labels: start_labels.clone(),
-                    max_depth,
-                }),
-                vector_hint: Box::new(MatchExecutionStrategy::VectorFirst {
-                    similarity_alias: alias,
-                    top_k: Self::estimate_top_k(match_clause, stats, threshold),
-                    threshold,
-                }),
-            }
+            Self::plan_parallel(
+                match_clause,
+                stats,
+                similarity_info,
+                start_labels,
+                max_depth,
+            )
         } else {
-            // Similarity on intermediate/end node → Graph-first then filter
             MatchExecutionStrategy::GraphFirst {
                 start_labels,
                 max_depth,
             }
+        }
+    }
+
+    /// Checks if the similarity condition targets the start node.
+    fn is_similarity_on_start(
+        match_clause: &MatchClause,
+        similarity_info: Option<&(String, f32, String)>,
+    ) -> bool {
+        let start_alias = match_clause
+            .patterns
+            .first()
+            .and_then(|p| p.nodes.first())
+            .and_then(|n| n.alias.as_ref());
+        similarity_info.is_some_and(|(alias, _, _)| Some(alias) == start_alias)
+    }
+
+    /// Extracts start labels from the first pattern node.
+    fn extract_start_labels(match_clause: &MatchClause) -> Vec<String> {
+        match_clause
+            .patterns
+            .first()
+            .and_then(|p| p.nodes.first())
+            .map(|n| n.labels.clone())
+            .unwrap_or_default()
+    }
+
+    /// Plans a vector-first strategy.
+    fn plan_vector_first(
+        match_clause: &MatchClause,
+        stats: &CollectionStats,
+        similarity_info: Option<(String, f32, String)>,
+    ) -> MatchExecutionStrategy {
+        let (alias, threshold, _) = similarity_info.unwrap_or_default();
+        MatchExecutionStrategy::VectorFirst {
+            similarity_alias: alias,
+            top_k: Self::estimate_top_k(match_clause, stats, threshold),
+            threshold,
+        }
+    }
+
+    /// Plans a parallel (graph + vector) strategy.
+    fn plan_parallel(
+        match_clause: &MatchClause,
+        stats: &CollectionStats,
+        similarity_info: Option<(String, f32, String)>,
+        start_labels: Vec<String>,
+        max_depth: u32,
+    ) -> MatchExecutionStrategy {
+        let (alias, threshold, _) = similarity_info.unwrap_or_default();
+        MatchExecutionStrategy::Parallel {
+            graph_hint: Box::new(MatchExecutionStrategy::GraphFirst {
+                start_labels,
+                max_depth,
+            }),
+            vector_hint: Box::new(MatchExecutionStrategy::VectorFirst {
+                similarity_alias: alias,
+                top_k: Self::estimate_top_k(match_clause, stats, threshold),
+                threshold,
+            }),
         }
     }
 

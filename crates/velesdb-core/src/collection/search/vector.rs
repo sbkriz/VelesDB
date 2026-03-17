@@ -99,6 +99,21 @@ impl Collection {
     }
 }
 
+/// Sorts search results by score (ascending or descending based on metric).
+fn sort_search_results(results: &mut [SearchResult], higher_is_better: bool) {
+    results.sort_by(|a, b| {
+        if higher_is_better {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
+}
+
 /// Sorts scored results by score (ascending or descending based on metric).
 fn sort_by_score(results: &mut [ScoredResult], higher_is_better: bool) {
     results.sort_by(|a, b| {
@@ -284,28 +299,21 @@ impl Collection {
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
-
         validate_dimension_match(config.dimension, query.len())?;
+        let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
-        // Post-filtering strategy: retrieve more candidates than k, then filter
-        // Heuristic: retrieve 4x candidates to account for filtered-out results
         let candidates_k = k.saturating_mul(4).max(k + 10);
         let index_results = self.search_ids_with_adc_if_pq(query, candidates_k);
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        // Map index results to SearchResult with full point data, applying filter
-        // FIX: Consistent null payload handling - match null if no payload (same as execute_query)
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|sr| {
                 let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
-
-                // Apply filter - check if filter matches payload or null
-                // This matches the behavior in execute_query for consistency
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),
@@ -313,40 +321,20 @@ impl Collection {
                 if !matches {
                     return None;
                 }
-
-                let point = Point {
-                    id: sr.id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-
-                Some(SearchResult::new(point, sr.score))
+                Some(SearchResult::new(
+                    Point {
+                        id: sr.id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
+                    sr.score,
+                ))
             })
             .collect();
 
-        // Sort results by similarity (most similar first)
-        // For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar → DESC
-        // For distance metrics (Euclidean, Hamming): lower score = more similar → ASC
-        let config = self.config.read();
-        let higher_is_better = config.metric.higher_is_better();
-        drop(config);
-
-        results.sort_by(|a, b| {
-            if higher_is_better {
-                // Similarity: descending (highest first)
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                // Distance: ascending (lowest first)
-                a.score
-                    .partial_cmp(&b.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
-        });
+        sort_search_results(&mut results, higher_is_better);
         results.truncate(k);
-
         Ok(results)
     }
 }

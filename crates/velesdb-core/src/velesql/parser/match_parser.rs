@@ -27,64 +27,60 @@ impl Parser {
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
-                Rule::graph_pattern => {
-                    patterns.push(Self::parse_graph_pattern(inner_pair)?);
-                }
-                Rule::where_clause => {
-                    where_clause = Some(Self::parse_where_clause(inner_pair)?);
-                }
-                Rule::return_clause => {
-                    return_clause = Self::parse_return_clause(inner_pair)?;
-                }
+                Rule::graph_pattern => patterns.push(Self::parse_graph_pattern(inner_pair)?),
+                Rule::where_clause => where_clause = Some(Self::parse_where_clause(inner_pair)?),
+                Rule::return_clause => return_clause = Self::parse_return_clause(inner_pair)?,
                 Rule::order_by_clause => {
-                    // EPIC-045 US-005: Parse ORDER BY for MATCH queries
-                    let order_by = Self::parse_order_by_clause(inner_pair)?;
-                    // Convert SelectOrderBy to graph_pattern::OrderByItem
-                    return_clause.order_by = Some(
-                        order_by
-                            .into_iter()
-                            .map(|ob| crate::velesql::graph_pattern::OrderByItem {
-                                expression: match ob.expr {
-                                    OrderByExpr::Field(f) => f,
-                                    OrderByExpr::Similarity(s) => {
-                                        let vec_str = match &s.vector {
-                                            crate::velesql::ast::VectorExpr::Parameter(name) => {
-                                                format!("${name}")
-                                            }
-                                            crate::velesql::ast::VectorExpr::Literal(vals) => {
-                                                format!("{vals:?}")
-                                            }
-                                        };
-                                        format!("similarity({}, {vec_str})", s.field)
-                                    }
-                                    OrderByExpr::Aggregate(a) => format!("{:?}()", a.function_type),
-                                },
-                                descending: ob.descending,
-                            })
-                            .collect(),
-                    );
+                    return_clause.order_by = Some(Self::convert_order_by_to_match(inner_pair)?);
                 }
-                Rule::limit_clause => {
-                    for lp in inner_pair.into_inner() {
-                        if lp.as_rule() == Rule::integer {
-                            limit = lp.as_str().parse().ok();
-                        }
-                    }
-                }
+                Rule::limit_clause => limit = Self::extract_limit_integer(inner_pair),
                 _ => {}
             }
         }
 
-        // Apply limit to return_clause
         return_clause.limit = limit;
 
-        let match_clause = MatchClause {
+        Ok(Query::new_match(MatchClause {
             patterns,
             where_clause,
             return_clause,
-        };
+        }))
+    }
 
-        Ok(Query::new_match(match_clause))
+    /// Converts a parsed ORDER BY clause into MATCH-compatible `OrderByItem`s.
+    fn convert_order_by_to_match(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Vec<crate::velesql::graph_pattern::OrderByItem>, ParseError> {
+        let order_by = Self::parse_order_by_clause(pair)?;
+        Ok(order_by
+            .into_iter()
+            .map(|ob| crate::velesql::graph_pattern::OrderByItem {
+                expression: Self::order_by_expr_to_string(ob.expr),
+                descending: ob.descending,
+            })
+            .collect())
+    }
+
+    /// Converts an `OrderByExpr` into its string representation.
+    fn order_by_expr_to_string(expr: OrderByExpr) -> String {
+        match expr {
+            OrderByExpr::Field(f) => f,
+            OrderByExpr::Similarity(s) => {
+                let vec_str = match &s.vector {
+                    crate::velesql::ast::VectorExpr::Parameter(name) => format!("${name}"),
+                    crate::velesql::ast::VectorExpr::Literal(vals) => format!("{vals:?}"),
+                };
+                format!("similarity({}, {vec_str})", s.field)
+            }
+            OrderByExpr::Aggregate(a) => format!("{:?}()", a.function_type),
+        }
+    }
+
+    /// Extracts the integer value from a limit clause pair.
+    fn extract_limit_integer(pair: pest::iterators::Pair<Rule>) -> Option<u64> {
+        pair.into_inner()
+            .find(|lp| lp.as_rule() == Rule::integer)
+            .and_then(|lp| lp.as_str().parse().ok())
     }
 
     /// Parse a graph pattern (EPIC-045 US-001).

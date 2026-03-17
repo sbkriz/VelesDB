@@ -242,25 +242,34 @@ impl SemanticMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let existing_ids = collection.all_ids();
-        if !existing_ids.is_empty() {
-            collection
-                .delete(&existing_ids)
-                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-        }
-
-        {
-            let mut ids = self.stored_ids.write();
-            ids.clear();
-            for point in &points {
-                ids.insert(point.id);
-            }
-        }
+        Self::clear_existing_points(&collection)?;
+        self.rebuild_stored_ids(&points);
 
         collection
             .upsert(points)
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Removes all existing points from the collection.
+    #[allow(deprecated)]
+    fn clear_existing_points(collection: &crate::Collection) -> Result<(), AgentMemoryError> {
+        let existing_ids = collection.all_ids();
+        if !existing_ids.is_empty() {
+            collection
+                .delete(&existing_ids)
+                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Clears and rebuilds `stored_ids` from a set of deserialized points.
+    fn rebuild_stored_ids(&self, points: &[Point]) {
+        let mut ids = self.stored_ids.write();
+        ids.clear();
+        for point in points {
+            ids.insert(point.id);
+        }
     }
 }

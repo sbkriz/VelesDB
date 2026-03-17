@@ -333,23 +333,25 @@ class GraphRetriever(BaseRetriever):
             results.append(nws)
 
         if graph_available:
-            remaining = self._expand_k - len(results)
-            neighbor_ids = [
-                nid for nid in expanded_ids if nid not in seed_map
-            ][:remaining]
-            for neighbor_id in neighbor_ids:
-                try:
-                    neighbor_node = self._fetch_node(neighbor_id)
-                    if neighbor_node:
-                        neighbor_node.metadata["graph_depth"] = 1
-                        neighbor_node.metadata["retrieval_mode"] = "graph_expanded"
-                        results.append(NodeWithScore(node=neighbor_node, score=0.5))
-                except Exception as exc:
-                    logger.debug(
-                        "Failed to fetch neighbour node %s: %s", neighbor_id, exc
-                    )
+            self._append_neighbor_nodes(results, expanded_ids, seed_map)
 
         return results[: self._expand_k]
+
+    def _append_neighbor_nodes(
+        self, results: List[NodeWithScore], expanded_ids: set, seed_map: dict
+    ) -> None:
+        """Fetch and append expanded neighbor nodes to the result list."""
+        remaining = self._expand_k - len(results)
+        neighbor_ids = [nid for nid in expanded_ids if nid not in seed_map][:remaining]
+        for neighbor_id in neighbor_ids:
+            try:
+                neighbor_node = self._fetch_node(neighbor_id)
+                if neighbor_node:
+                    neighbor_node.metadata["graph_depth"] = 1
+                    neighbor_node.metadata["retrieval_mode"] = "graph_expanded"
+                    results.append(NodeWithScore(node=neighbor_node, score=0.5))
+            except Exception as exc:
+                logger.debug("Failed to fetch neighbour node %s: %s", neighbor_id, exc)
 
     def _extract_node_id(self, node: Any) -> Optional[int]:
         """Extract numeric node ID from a LlamaIndex node."""

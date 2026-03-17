@@ -113,9 +113,6 @@ impl Collection {
 
     /// Evaluate WHERE condition for one record.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_lines)]
-    // Reason: Recursive AST dispatch with 7 contextual params — extraction
-    // would require a wrapper struct and add more lines than it removes.
     pub(crate) fn evaluate_where_condition_for_record(
         &self,
         condition: &Condition,
@@ -131,102 +128,130 @@ impl Collection {
                 let ids = graph_cache.get_or_compute(self, predicate, params, from_aliases)?;
                 Ok(ids.contains(&id))
             }
-            Condition::And(left, right) => Ok(self.evaluate_where_condition_for_record(
-                left,
-                id,
-                payload,
-                vector,
-                params,
-                from_aliases,
-                graph_cache,
-            )? && self.evaluate_where_condition_for_record(
-                right,
-                id,
-                payload,
-                vector,
-                params,
-                from_aliases,
-                graph_cache,
-            )?),
-            Condition::Or(left, right) => Ok(self.evaluate_where_condition_for_record(
-                left,
-                id,
-                payload,
-                vector,
-                params,
-                from_aliases,
-                graph_cache,
-            )? || self.evaluate_where_condition_for_record(
-                right,
-                id,
-                payload,
-                vector,
-                params,
-                from_aliases,
-                graph_cache,
-            )?),
-            Condition::Not(inner) => Ok(!self.evaluate_where_condition_for_record(
-                inner,
-                id,
-                payload,
-                vector,
-                params,
-                from_aliases,
-                graph_cache,
-            )?),
-            Condition::Group(inner) => self.evaluate_where_condition_for_record(
-                inner,
-                id,
-                payload,
-                vector,
-                params,
-                from_aliases,
-                graph_cache,
-            ),
-            Condition::Similarity(sim) => {
-                let Some(record_vector) = vector else {
+            Condition::And(left, right) => {
+                let l = self.evaluate_where_condition_for_record(
+                    left,
+                    id,
+                    payload,
+                    vector,
+                    params,
+                    from_aliases,
+                    graph_cache,
+                )?;
+                if !l {
                     return Ok(false);
-                };
-                let query_vec = Self::resolve_vector(&sim.vector, params)?;
-                let score = self.compute_metric_score(record_vector, &query_vec);
-                let metric = self.config.read().metric;
-                #[allow(clippy::cast_possible_truncation)]
-                // Reason: similarity thresholds are approximate floating bounds.
-                let threshold = sim.threshold as f32;
-
-                let is_match = if metric.higher_is_better() {
-                    match sim.operator {
-                        CompareOp::Gt => score > threshold,
-                        CompareOp::Gte => score >= threshold,
-                        CompareOp::Lt => score < threshold,
-                        CompareOp::Lte => score <= threshold,
-                        CompareOp::Eq => (score - threshold).abs() < 0.001,
-                        CompareOp::NotEq => (score - threshold).abs() >= 0.001,
-                    }
+                }
+                self.evaluate_where_condition_for_record(
+                    right,
+                    id,
+                    payload,
+                    vector,
+                    params,
+                    from_aliases,
+                    graph_cache,
+                )
+            }
+            Condition::Or(left, right) => {
+                let l = self.evaluate_where_condition_for_record(
+                    left,
+                    id,
+                    payload,
+                    vector,
+                    params,
+                    from_aliases,
+                    graph_cache,
+                )?;
+                if l {
+                    return Ok(true);
+                }
+                self.evaluate_where_condition_for_record(
+                    right,
+                    id,
+                    payload,
+                    vector,
+                    params,
+                    from_aliases,
+                    graph_cache,
+                )
+            }
+            Condition::Not(inner) | Condition::Group(inner) => {
+                let val = self.evaluate_where_condition_for_record(
+                    inner,
+                    id,
+                    payload,
+                    vector,
+                    params,
+                    from_aliases,
+                    graph_cache,
+                )?;
+                Ok(if matches!(condition, Condition::Not(_)) {
+                    !val
                 } else {
-                    match sim.operator {
-                        CompareOp::Gt => score < threshold,
-                        CompareOp::Gte => score <= threshold,
-                        CompareOp::Lt => score > threshold,
-                        CompareOp::Lte => score >= threshold,
-                        CompareOp::Eq => (score - threshold).abs() < 0.001,
-                        CompareOp::NotEq => (score - threshold).abs() >= 0.001,
-                    }
-                };
-                Ok(is_match)
-            }
-            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => {
-                // Candidate generation already enforced these predicates upstream.
-                Ok(true)
-            }
-            other => {
-                let filter =
-                    crate::filter::Filter::new(crate::filter::Condition::from(other.clone()));
-                Ok(match payload {
-                    Some(p) => filter.matches(p),
-                    None => filter.matches(&serde_json::Value::Null),
+                    val
                 })
             }
+            Condition::Similarity(sim) => self.evaluate_similarity(sim, vector, params),
+            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
+            other => Ok(Self::evaluate_metadata_filter(other, payload)),
+        }
+    }
+
+    /// Evaluates a similarity condition against a record's vector.
+    fn evaluate_similarity(
+        &self,
+        sim: &crate::velesql::SimilarityCondition,
+        vector: Option<&[f32]>,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        let Some(record_vector) = vector else {
+            return Ok(false);
+        };
+        let query_vec = Self::resolve_vector(&sim.vector, params)?;
+        let score = self.compute_metric_score(record_vector, &query_vec);
+        let metric = self.config.read().metric;
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: similarity thresholds are approximate floating bounds.
+        let threshold = sim.threshold as f32;
+        Ok(Self::compare_score(
+            score,
+            threshold,
+            sim.operator,
+            metric.higher_is_better(),
+        ))
+    }
+
+    /// Compares a score against a threshold using the given operator and metric direction.
+    fn compare_score(score: f32, threshold: f32, op: CompareOp, higher_is_better: bool) -> bool {
+        if higher_is_better {
+            match op {
+                CompareOp::Gt => score > threshold,
+                CompareOp::Gte => score >= threshold,
+                CompareOp::Lt => score < threshold,
+                CompareOp::Lte => score <= threshold,
+                CompareOp::Eq => (score - threshold).abs() < 0.001,
+                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
+            }
+        } else {
+            match op {
+                CompareOp::Gt => score < threshold,
+                CompareOp::Gte => score <= threshold,
+                CompareOp::Lt => score > threshold,
+                CompareOp::Lte => score >= threshold,
+                CompareOp::Eq => (score - threshold).abs() < 0.001,
+                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
+            }
+        }
+    }
+
+    /// Evaluates a metadata-only condition via the filter engine.
+    fn evaluate_metadata_filter(
+        condition: &Condition,
+        payload: Option<&serde_json::Value>,
+    ) -> bool {
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(condition.clone()));
+        match payload {
+            Some(p) => filter.matches(p),
+            None => filter.matches(&serde_json::Value::Null),
         }
     }
 }

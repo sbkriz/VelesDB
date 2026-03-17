@@ -201,72 +201,23 @@ impl QueryPlan {
         stmt: &SelectStatement,
         indexed_fields: &HashSet<String>,
     ) -> Self {
-        let mut nodes = Vec::new();
         let mut has_vector_search = false;
         let mut filter_conditions = Vec::new();
-        let mut filter_strategy = FilterStrategy::None;
-        let mut index_used = None;
         let mut index_lookup = None;
 
-        // Analyze WHERE clause
         if let Some(ref condition) = stmt.where_clause {
             Self::analyze_condition(condition, &mut has_vector_search, &mut filter_conditions);
             index_lookup = Self::extract_index_lookup(condition, indexed_fields);
         }
 
-        // Build plan nodes
-        if has_vector_search {
-            index_used = Some(IndexType::Hnsw);
-            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
-            nodes.push(PlanNode::VectorSearch(VectorSearchPlan {
-                collection: stmt.from.clone(),
-                ef_search: 100, // Default HNSW parameter
-                candidates,
-            }));
-        } else if let Some((property, value)) = index_lookup {
-            index_used = Some(IndexType::Property);
-            nodes.push(PlanNode::IndexLookup(IndexLookupPlan {
-                label: stmt.from.clone(),
-                property,
-                value,
-            }));
-        } else {
-            nodes.push(PlanNode::TableScan(TableScanPlan {
-                collection: stmt.from.clone(),
-            }));
-        }
-
-        // Add filter if needed
-        if !filter_conditions.is_empty() {
-            let selectivity = Self::estimate_selectivity(&filter_conditions);
-            filter_strategy = if selectivity > 0.1 {
-                FilterStrategy::PostFilter
-            } else {
-                FilterStrategy::PreFilter
-            };
-
-            nodes.push(PlanNode::Filter(FilterPlan {
-                conditions: filter_conditions.join(" AND "),
-                selectivity,
-            }));
-        }
-
-        // Add offset before limit
-        if let Some(offset) = stmt.offset {
-            nodes.push(PlanNode::Offset(OffsetPlan { count: offset }));
-        }
-
-        // Add limit
-        if let Some(limit) = stmt.limit {
-            nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
-        }
+        let (mut nodes, index_used) = Self::build_scan_node(stmt, has_vector_search, index_lookup);
+        let filter_strategy = Self::append_filter_nodes(&mut nodes, &filter_conditions, stmt);
 
         let root = if nodes.len() == 1 {
             nodes.swap_remove(0)
         } else {
             PlanNode::Sequence(nodes)
         };
-
         let estimated_cost_ms = Self::estimate_cost(&root, has_vector_search);
 
         Self {
@@ -277,6 +228,71 @@ impl QueryPlan {
             cache_hit: None,
             plan_reuse_count: None,
         }
+    }
+
+    /// Builds the primary scan node based on search type.
+    fn build_scan_node(
+        stmt: &SelectStatement,
+        has_vector_search: bool,
+        index_lookup: Option<(String, String)>,
+    ) -> (Vec<PlanNode>, Option<IndexType>) {
+        let mut nodes = Vec::new();
+        let index_used;
+
+        if has_vector_search {
+            index_used = Some(IndexType::Hnsw);
+            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+            nodes.push(PlanNode::VectorSearch(VectorSearchPlan {
+                collection: stmt.from.clone(),
+                ef_search: 100,
+                candidates,
+            }));
+        } else if let Some((property, value)) = index_lookup {
+            index_used = Some(IndexType::Property);
+            nodes.push(PlanNode::IndexLookup(IndexLookupPlan {
+                label: stmt.from.clone(),
+                property,
+                value,
+            }));
+        } else {
+            index_used = None;
+            nodes.push(PlanNode::TableScan(TableScanPlan {
+                collection: stmt.from.clone(),
+            }));
+        }
+
+        (nodes, index_used)
+    }
+
+    /// Appends filter, offset, and limit nodes; returns the filter strategy.
+    fn append_filter_nodes(
+        nodes: &mut Vec<PlanNode>,
+        filter_conditions: &[String],
+        stmt: &SelectStatement,
+    ) -> FilterStrategy {
+        let mut filter_strategy = FilterStrategy::None;
+
+        if !filter_conditions.is_empty() {
+            let selectivity = Self::estimate_selectivity(filter_conditions);
+            filter_strategy = if selectivity > 0.1 {
+                FilterStrategy::PostFilter
+            } else {
+                FilterStrategy::PreFilter
+            };
+            nodes.push(PlanNode::Filter(FilterPlan {
+                conditions: filter_conditions.join(" AND "),
+                selectivity,
+            }));
+        }
+
+        if let Some(offset) = stmt.offset {
+            nodes.push(PlanNode::Offset(OffsetPlan { count: offset }));
+        }
+        if let Some(limit) = stmt.limit {
+            nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
+        }
+
+        filter_strategy
     }
 
     /// Analyzes a condition to extract vector search and filter info.
@@ -384,8 +400,54 @@ impl QueryPlan {
         let strategy = MatchQueryPlanner::plan(match_clause, stats);
         let strategy_explanation = MatchQueryPlanner::explain(&strategy);
 
-        // Extract info from strategy
-        let (start_labels, max_depth, has_similarity, similarity_threshold) = match &strategy {
+        let (start_labels, max_depth, has_similarity, similarity_threshold) =
+            Self::extract_strategy_info(&strategy);
+
+        let relationship_count = match_clause
+            .patterns
+            .first()
+            .map_or(0, |p| p.relationships.len());
+
+        let traversal = PlanNode::MatchTraversal(MatchTraversalPlan {
+            strategy: strategy_explanation,
+            start_labels,
+            max_depth,
+            relationship_count,
+            has_similarity,
+            similarity_threshold,
+        });
+
+        let mut nodes = vec![traversal];
+        if let Some(limit) = match_clause.return_clause.limit {
+            nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
+        }
+
+        let root = if nodes.len() == 1 {
+            nodes.swap_remove(0)
+        } else {
+            PlanNode::Sequence(nodes)
+        };
+        let estimated_cost_ms = Self::estimate_cost(&root, has_similarity);
+
+        Self {
+            root,
+            estimated_cost_ms,
+            index_used: if has_similarity {
+                Some(IndexType::Hnsw)
+            } else {
+                None
+            },
+            filter_strategy: FilterStrategy::None,
+            cache_hit: None,
+            plan_reuse_count: None,
+        }
+    }
+
+    /// Extracts traversal parameters from a `MatchExecutionStrategy`.
+    fn extract_strategy_info(
+        strategy: &MatchExecutionStrategy,
+    ) -> (Vec<String>, u32, bool, Option<f32>) {
+        match strategy {
             MatchExecutionStrategy::GraphFirst {
                 start_labels,
                 max_depth,
@@ -410,51 +472,6 @@ impl QueryPlan {
                 };
                 (labels, depth, true, threshold)
             }
-        };
-
-        // Count relationships
-        let relationship_count = match_clause
-            .patterns
-            .first()
-            .map_or(0, |p| p.relationships.len());
-
-        let mut nodes = Vec::new();
-
-        // Main MATCH traversal node
-        nodes.push(PlanNode::MatchTraversal(MatchTraversalPlan {
-            strategy: strategy_explanation,
-            start_labels,
-            max_depth,
-            relationship_count,
-            has_similarity,
-            similarity_threshold,
-        }));
-
-        // Add limit if present
-        if let Some(limit) = match_clause.return_clause.limit {
-            nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
-        }
-
-        let root = if nodes.len() == 1 {
-            nodes.swap_remove(0)
-        } else {
-            PlanNode::Sequence(nodes)
-        };
-
-        let estimated_cost_ms = Self::estimate_cost(&root, has_similarity);
-        let index_used = if has_similarity {
-            Some(IndexType::Hnsw)
-        } else {
-            None
-        };
-
-        Self {
-            root,
-            estimated_cost_ms,
-            index_used,
-            filter_strategy: FilterStrategy::None,
-            cache_hit: None,
-            plan_reuse_count: None,
         }
     }
 }

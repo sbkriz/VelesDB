@@ -58,6 +58,29 @@ def _stable_hash_id(value: str) -> int:
     return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
+def _flush_stream_batches(collection: Any, points: list, batch_size: int) -> None:
+    """Send points to a collection in batches via stream_insert."""
+    for start in range(0, len(points), batch_size):
+        collection.stream_insert(points[start : start + batch_size])
+
+
+def _build_point(
+    int_id: int,
+    text: str,
+    embedding: List[float],
+    metadata: Optional[dict] = None,
+    sparse_vector: Optional[dict] = None,
+) -> dict:
+    """Build a single VelesDB point dict."""
+    payload: dict = {"text": text}
+    if metadata is not None:
+        payload.update(metadata)
+    point: dict = {"id": int_id, "vector": embedding, "payload": payload}
+    if sparse_vector is not None:
+        point["sparse_vector"] = sparse_vector
+    return point
+
+
 class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
     """VelesDB vector store for LangChain.
 
@@ -173,6 +196,47 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         point_id = _stable_hash_id(token)
         return str(point_id), point_id
 
+    def _validate_texts_and_sparse(
+        self,
+        texts_list: List[str],
+        sparse_vectors: Optional[List[dict]] = None,
+    ) -> None:
+        """Validate batch size, text content, and optional sparse vectors."""
+        validate_batch_size(len(texts_list))
+        for text in texts_list:
+            validate_text(text)
+        if sparse_vectors is not None:
+            for sv in sparse_vectors:
+                validate_sparse_vector(sv)
+
+    def _texts_to_points(
+        self,
+        texts_list: List[str],
+        embeddings: List[List[float]],
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        sparse_vectors: Optional[List[dict]] = None,
+    ) -> tuple[List[str], list]:
+        """Convert texts and embeddings into (result_ids, points) lists."""
+        result_ids: List[str] = []
+        points: list = []
+        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
+            doc_id, int_id = self._resolve_point_id(ids, i)
+            result_ids.append(doc_id)
+            sv = sparse_vectors[i] if sparse_vectors is not None and i < len(sparse_vectors) else None
+            meta = metadatas[i] if metadatas and i < len(metadatas) else None
+            points.append(_build_point(int_id, text, embedding, metadata=meta, sparse_vector=sv))
+        return result_ids, points
+
+    def _resolve_point_id(
+        self, ids: Optional[List[str]], index: int
+    ) -> tuple[str, int]:
+        """Return (doc_id, int_id) from explicit ids or auto-generate."""
+        if ids and index < len(ids):
+            doc_id = ids[index]
+            return doc_id, self._to_point_id(doc_id)
+        return self._generate_auto_id()
+
     def _to_document(self, result: dict) -> Document:
         """Convert a VelesDB search result into a LangChain Document."""
         payload = result.get("payload", {})
@@ -206,49 +270,16 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         if not texts_list:
             return []
 
-        validate_batch_size(len(texts_list))
-
-        for text in texts_list:
-            validate_text(text)
-
-        if sparse_vectors is not None:
-            for sv in sparse_vectors:
-                validate_sparse_vector(sv)
+        self._validate_texts_and_sparse(texts_list, sparse_vectors)
 
         embeddings = self._embedding.embed_documents(texts_list)
-        dimension = len(embeddings[0])
+        collection = self._get_collection(len(embeddings[0]))
 
-        collection = self._get_collection(dimension)
-
-        result_ids: List[str] = []
-        points = []
-
-        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
-            if ids and i < len(ids):
-                doc_id = ids[i]
-                int_id = self._to_point_id(doc_id)
-            else:
-                doc_id, int_id = self._generate_auto_id()
-
-            result_ids.append(doc_id)
-
-            payload = {"text": text}
-            if metadatas and i < len(metadatas):
-                payload.update(metadatas[i])
-
-            point: dict = {
-                "id": int_id,
-                "vector": embedding,
-                "payload": payload,
-            }
-
-            if sparse_vectors is not None and i < len(sparse_vectors):
-                point["sparse_vector"] = sparse_vectors[i]
-
-            points.append(point)
+        result_ids, points = self._texts_to_points(
+            texts_list, embeddings, metadatas, ids, sparse_vectors,
+        )
 
         collection.upsert(points)
-
         return result_ids
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
@@ -496,41 +527,14 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         if not texts_list:
             return 0
 
-        validate_batch_size(len(texts_list))
-        for text in texts_list:
-            validate_text(text)
-
-        if sparse_vectors is not None:
-            for sv in sparse_vectors:
-                validate_sparse_vector(sv)
+        self._validate_texts_and_sparse(texts_list, sparse_vectors)
 
         embeddings = self._embedding.embed_documents(texts_list)
-        dimension = len(embeddings[0])
+        collection = self._get_collection(len(embeddings[0]))
 
-        collection = self._get_collection(dimension)
-
-        points = []
-        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
-            if ids and i < len(ids):
-                doc_id = ids[i]
-                int_id = self._to_point_id(doc_id)
-            else:
-                _doc_id, int_id = self._generate_auto_id()
-
-            payload = {"text": text}
-            if metadatas and i < len(metadatas):
-                payload.update(metadatas[i])
-
-            point: dict = {
-                "id": int_id,
-                "vector": embedding,
-                "payload": payload,
-            }
-
-            if sparse_vectors is not None and i < len(sparse_vectors):
-                point["sparse_vector"] = sparse_vectors[i]
-
-            points.append(point)
+        _result_ids, points = self._texts_to_points(
+            texts_list, embeddings, metadatas, ids, sparse_vectors,
+        )
 
         collection.stream_insert(points)
         return len(points)
@@ -578,37 +582,10 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         if not embeddings:
             return []
 
-        dimension = len(embeddings[0])
-        collection = self._get_collection(dimension)
+        collection = self._get_collection(len(embeddings[0]))
+        result_ids, points = self._texts_to_points(texts_list, embeddings, metadatas, ids)
 
-        result_ids: List[str] = []
-        batch: list = []
-
-        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
-            if ids and i < len(ids):
-                doc_id = ids[i]
-                int_id = self._to_point_id(doc_id)
-            else:
-                doc_id, int_id = self._generate_auto_id()
-
-            result_ids.append(doc_id)
-
-            payload: dict = {"text": text}
-            if metadatas and i < len(metadatas):
-                payload.update(metadatas[i])
-
-            batch.append({
-                "id": int_id,
-                "vector": embedding,
-                "payload": payload,
-            })
-
-            if len(batch) >= batch_size:
-                collection.stream_insert(batch)
-                batch = []
-
-        if batch:
-            collection.stream_insert(batch)
+        _flush_stream_batches(collection, points, batch_size)
 
         return result_ids
 

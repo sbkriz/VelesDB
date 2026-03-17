@@ -34,8 +34,6 @@ impl Collection {
         threshold: f64,
         limit: usize,
     ) -> Vec<SearchResult> {
-        use crate::velesql::CompareOp;
-
         let config = self.config.read();
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
@@ -49,19 +47,15 @@ impl Collection {
             .into_iter()
             .filter_map(|mut r| {
                 // Multi-vector support (P1-A): use named payload vector if field != "vector".
-                // For the primary "vector" field, use the pre-loaded r.point.vector.
                 let candidate_vec: std::borrow::Cow<[f32]> = if field == "vector" {
                     std::borrow::Cow::Borrowed(&r.point.vector)
                 } else {
-                    // Retrieve named vector from payload — skip on missing, warn on error.
                     match self.get_vector_for_field(r.point.id, field) {
                         Ok(Some(v)) => std::borrow::Cow::Owned(v),
                         Ok(None) => return None,
                         Err(e) => {
                             tracing::warn!(
-                                point_id = r.point.id,
-                                field = field,
-                                error = %e,
+                                point_id = r.point.id, field = field, error = %e,
                                 "filter_by_similarity: failed to retrieve named vector field; point skipped"
                             );
                             return None;
@@ -70,38 +64,11 @@ impl Collection {
                 };
 
                 // BUG-2 FIX: Recompute similarity using the similarity() vector, not NEAR scores
-                // This ensures correct filtering when NEAR and similarity() use different vectors
                 let score = self.compute_metric_score(&candidate_vec, query_vec);
-
-                // For distance metrics, invert comparisons so "similarity > X" means "distance < X"
-                let passes = if higher_is_better {
-                    // Similarity metrics: direct comparison
-                    match op {
-                        CompareOp::Gt => score > threshold_f32,
-                        CompareOp::Gte => score >= threshold_f32,
-                        CompareOp::Lt => score < threshold_f32,
-                        CompareOp::Lte => score <= threshold_f32,
-                        CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
-                        CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
-                    }
-                } else {
-                    // Distance metrics: inverted comparison
-                    // "similarity > X" means "more similar than X" = "distance < X"
-                    match op {
-                        CompareOp::Gt => score < threshold_f32, // more similar = lower distance
-                        CompareOp::Gte => score <= threshold_f32,
-                        CompareOp::Lt => score > threshold_f32, // less similar = higher distance
-                        CompareOp::Lte => score >= threshold_f32,
-                        CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
-                        CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
-                    }
-                };
+                let passes = Self::compare_similarity(score, threshold_f32, op, higher_is_better);
 
                 if passes {
                     // EPIC-044 US-001: Update score to reflect THIS similarity filter's score.
-                    // When multiple similarity() conditions are used (cascade filtering),
-                    // the final score will be from the LAST filter applied.
-                    // This is intentional: each filter re-scores against its vector.
                     r.score = score;
                     Some(r)
                 } else {
@@ -120,25 +87,124 @@ impl Collection {
     ///
     /// **Performance Warning**: This requires scanning ALL documents.
     /// Always use with LIMIT for acceptable performance.
-    #[allow(clippy::too_many_lines)] // Reason: function is 81 lines, 1 over limit; extraction would split tightly coupled scan+filter logic
     pub(crate) fn execute_not_similarity_query(
         &self,
         condition: &crate::velesql::Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        // Extract the NOT similarity condition
         let (sim_field, sim_vec, sim_op, sim_threshold) =
             self.extract_not_similarity_condition(condition, params)?;
 
-        // Multi-vector (P1-A): field may be "vector" or a named payload vector.
-        // get_vector_for_field handles both cases; named fields are validated per-point below.
+        Self::warn_large_scan(self.vector_storage.read().ids().len(), limit);
 
-        // Log performance warning for large collections
-        let vector_storage = self.vector_storage.read();
-        let total_count = vector_storage.ids().len();
-        drop(vector_storage);
+        let metadata_filter = Self::extract_metadata_filter(condition);
+        let filter = metadata_filter
+            .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
 
+        let higher_is_better = self.config.read().metric.higher_is_better();
+
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let threshold_f32 = sim_threshold as f32;
+        let mut results = Vec::new();
+        let all_ids: Vec<u64> = self.vector_storage.read().ids().into_iter().collect();
+
+        for id in all_ids {
+            let Some(vector) = self.retrieve_vector_for_scan(id, &sim_field) else {
+                continue;
+            };
+            let score = self.compute_metric_score(&vector, &sim_vec);
+
+            let excluded = Self::compare_similarity(score, threshold_f32, sim_op, higher_is_better);
+            if excluded {
+                continue;
+            }
+
+            let payload = self.payload_storage.read().retrieve(id).ok().flatten();
+            if !Self::passes_metadata_filter(filter.as_ref(), payload.as_ref()) {
+                continue;
+            }
+
+            results.push(SearchResult::new(
+                Point {
+                    id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                },
+                score,
+            ));
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Compares a similarity score against a threshold using the given operator.
+    ///
+    /// For similarity metrics (`higher_is_better=true`), comparisons are direct.
+    /// For distance metrics, comparisons are inverted so "similarity > X" means "distance < X".
+    fn compare_similarity(
+        score: f32,
+        threshold: f32,
+        op: crate::velesql::CompareOp,
+        higher_is_better: bool,
+    ) -> bool {
+        use crate::velesql::CompareOp;
+        if higher_is_better {
+            match op {
+                CompareOp::Gt => score > threshold,
+                CompareOp::Gte => score >= threshold,
+                CompareOp::Lt => score < threshold,
+                CompareOp::Lte => score <= threshold,
+                CompareOp::Eq => (score - threshold).abs() < 0.001,
+                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
+            }
+        } else {
+            match op {
+                CompareOp::Gt => score < threshold,
+                CompareOp::Gte => score <= threshold,
+                CompareOp::Lt => score > threshold,
+                CompareOp::Lte => score >= threshold,
+                CompareOp::Eq => (score - threshold).abs() < 0.001,
+                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
+            }
+        }
+    }
+
+    /// Retrieves a vector for a given field, logging warnings on failure.
+    fn retrieve_vector_for_scan(&self, id: u64, field: &str) -> Option<Vec<f32>> {
+        match self.get_vector_for_field(id, field) {
+            Ok(Some(v)) => Some(v),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    point_id = id, field = %field, error = %e,
+                    "failed to retrieve vector field; point skipped"
+                );
+                None
+            }
+        }
+    }
+
+    /// Checks if a payload passes an optional metadata filter.
+    fn passes_metadata_filter(
+        filter: Option<&crate::filter::Filter>,
+        payload: Option<&serde_json::Value>,
+    ) -> bool {
+        match filter {
+            Some(f) => match payload {
+                Some(p) => f.matches(p),
+                None => f.matches(&serde_json::Value::Null),
+            },
+            None => true,
+        }
+    }
+
+    /// Emits a performance warning for large NOT-similarity scans.
+    fn warn_large_scan(total_count: usize, limit: usize) {
         if total_count > 10_000 && limit > 1000 {
             tracing::warn!(
                 "NOT similarity() query scanning {} documents with LIMIT {}. \
@@ -147,103 +213,6 @@ impl Collection {
                 limit
             );
         }
-
-        // PR #120 Review Fix: Extract metadata filter for AND conditions
-        // e.g., WHERE NOT similarity(v, $v) > 0.8 AND category = 'tech'
-        let metadata_filter = Self::extract_metadata_filter(condition);
-        let filter = metadata_filter
-            .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
-
-        // Full scan with similarity exclusion + metadata filter.
-        // For named payload vectors we must not hold vector_storage while calling
-        // get_vector_for_field (which acquires payload_storage internally), so we
-        // collect the IDs first, then drop the lock before iterating.
-        let config = self.config.read();
-        let higher_is_better = config.metric.higher_is_better();
-        drop(config);
-
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        // Reason: sim_threshold is a user-provided f64 similarity score in [0.0, 1.0] range;
-        // precision loss and truncation to f32 are acceptable for comparison purposes.
-        let threshold_f32 = sim_threshold as f32;
-        let mut results = Vec::new();
-
-        // Collect all IDs upfront so we hold no read locks during the main loop.
-        // get_vector_for_field and payload_storage.retrieve both acquire their own locks,
-        // so we must not hold any of those guards here.
-        let all_ids: Vec<u64> = self.vector_storage.read().ids().into_iter().collect();
-
-        for id in all_ids {
-            // Multi-vector (P1-A): use get_vector_for_field for both "vector" and named fields.
-            let candidate_vec: Vec<f32> = match self.get_vector_for_field(id, &sim_field) {
-                Ok(Some(v)) => v,
-                Ok(None) => continue,
-                Err(e) => {
-                    tracing::warn!(
-                        point_id = id,
-                        field = %sim_field,
-                        error = %e,
-                        "execute_not_similarity_query: failed to retrieve vector field; point skipped"
-                    );
-                    continue;
-                }
-            };
-            let vector = candidate_vec;
-            // Compute similarity score
-            let score = self.compute_metric_score(&vector, &sim_vec);
-
-            // Invert the condition: NOT (similarity > threshold) = similarity <= threshold
-            let excluded = if higher_is_better {
-                match sim_op {
-                    crate::velesql::CompareOp::Gt => score > threshold_f32,
-                    crate::velesql::CompareOp::Gte => score >= threshold_f32,
-                    crate::velesql::CompareOp::Lt => score < threshold_f32,
-                    crate::velesql::CompareOp::Lte => score <= threshold_f32,
-                    crate::velesql::CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
-                    crate::velesql::CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
-                }
-            } else {
-                // Distance metrics: inverted
-                match sim_op {
-                    crate::velesql::CompareOp::Gt => score < threshold_f32,
-                    crate::velesql::CompareOp::Gte => score <= threshold_f32,
-                    crate::velesql::CompareOp::Lt => score > threshold_f32,
-                    crate::velesql::CompareOp::Lte => score >= threshold_f32,
-                    crate::velesql::CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
-                    crate::velesql::CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
-                }
-            };
-
-            // Include if NOT excluded by similarity
-            if !excluded {
-                let payload = self.payload_storage.read().retrieve(id).ok().flatten();
-
-                // PR #120 Review Fix: Apply metadata filter if present
-                let matches_metadata = match (&filter, &payload) {
-                    (Some(f), Some(p)) => f.matches(p),
-                    (Some(f), None) => f.matches(&serde_json::Value::Null),
-                    (None, _) => true, // No metadata filter = match all
-                };
-
-                if matches_metadata {
-                    results.push(SearchResult::new(
-                        Point {
-                            id,
-                            vector,
-                            payload,
-                            sparse_vectors: None,
-                        },
-                        score,
-                    ));
-
-                    if results.len() >= limit {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(results)
     }
 
     /// Extract similarity condition from inside a NOT clause.
