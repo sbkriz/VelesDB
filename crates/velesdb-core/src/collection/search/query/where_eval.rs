@@ -138,7 +138,10 @@ impl Collection {
                     from_aliases,
                     graph_cache,
                 )?;
-                let r = self.evaluate_where_condition_for_record(
+                if !l {
+                    return Ok(false);
+                }
+                self.evaluate_where_condition_for_record(
                     right,
                     id,
                     payload,
@@ -146,8 +149,7 @@ impl Collection {
                     params,
                     from_aliases,
                     graph_cache,
-                )?;
-                Ok(l && r)
+                )
             }
             Condition::Or(left, right) => {
                 let l = self.evaluate_where_condition_for_record(
@@ -159,7 +161,10 @@ impl Collection {
                     from_aliases,
                     graph_cache,
                 )?;
-                let r = self.evaluate_where_condition_for_record(
+                if l {
+                    return Ok(true);
+                }
+                self.evaluate_where_condition_for_record(
                     right,
                     id,
                     payload,
@@ -167,8 +172,7 @@ impl Collection {
                     params,
                     from_aliases,
                     graph_cache,
-                )?;
-                Ok(l || r)
+                )
             }
             Condition::Not(inner) | Condition::Group(inner) => {
                 let val = self.evaluate_where_condition_for_record(
