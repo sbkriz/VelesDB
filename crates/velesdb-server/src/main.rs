@@ -21,7 +21,9 @@ use velesdb_core::Database;
 #[cfg(feature = "swagger-ui")]
 use velesdb_server::ApiDoc;
 use velesdb_server::{
-    add_edge, aggregate, analyze_collection, batch_search, collection_sanity,
+    add_edge, aggregate, analyze_collection,
+    auth::{auth_middleware, AuthState},
+    batch_search, collection_sanity,
     config::{parse_api_keys_env, CliOverrides, ServerConfig},
     create_collection, create_index, delete_collection, delete_index, delete_point, explain,
     flush_collection, get_collection, get_collection_config, get_collection_stats, get_edges,
@@ -96,8 +98,8 @@ fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
     }))
 }
 
-fn build_router(state: Arc<AppState>) -> Router {
-    let api_router = Router::new()
+fn api_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/health", get(health_check))
         .route(
             "/collections",
@@ -160,7 +162,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
-        );
+        )
+}
+
+fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
+    let api_router = api_routes();
 
     #[cfg(feature = "prometheus")]
     let api_router = {
@@ -178,6 +184,10 @@ fn build_router(state: Arc<AppState>) -> Router {
     };
 
     api_router
+        .layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            auth_middleware,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
@@ -220,7 +230,8 @@ async fn main() -> anyhow::Result<()> {
     log_startup(&cfg);
 
     let state = init_app_state(&cfg.data_dir)?;
-    let app = build_router(state);
+    let auth_state = AuthState::new(cfg.api_keys.clone());
+    let app = build_router(state, auth_state);
 
     serve(&cfg.host, cfg.port, app).await
 }
