@@ -337,7 +337,7 @@ impl Collection {
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
         let mut storage = self.payload_storage.write();
-        storage.store(node_id, payload).map_err(Error::Io)?;
+        storage.store(node_id, payload)?;
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
         self.write_generation
@@ -351,10 +351,7 @@ impl Collection {
     ///
     /// Returns an error if retrieval fails.
     pub fn get_node_payload(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
-        self.payload_storage
-            .read()
-            .retrieve(node_id)
-            .map_err(Error::Io)
+        Ok(self.payload_storage.read().retrieve(node_id)?)
     }
 
     // -------------------------------------------------------------------------

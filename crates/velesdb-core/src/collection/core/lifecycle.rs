@@ -111,10 +111,10 @@ impl Collection {
         hnsw_params: Option<crate::index::hnsw::HnswParams>,
     ) -> Result<CollectionParts> {
         let vector_storage = Arc::new(RwLock::new(
-            MmapStorage::new(&path, config.dimension).map_err(Error::Io)?,
+            MmapStorage::new(&path, config.dimension)?,
         ));
         let payload_storage = Arc::new(RwLock::new(
-            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+            LogPayloadStorage::new(&path)?,
         ));
         let index = if let Some(params) = hnsw_params {
             Arc::new(HnswIndex::with_params(
@@ -365,10 +365,10 @@ impl Collection {
 
         // Open persistent storages
         let vector_storage = Arc::new(RwLock::new(
-            MmapStorage::new(&path, config.dimension).map_err(Error::Io)?,
+            MmapStorage::new(&path, config.dimension)?,
         ));
         let payload_storage = Arc::new(RwLock::new(
-            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+            LogPayloadStorage::new(&path)?,
         ));
 
         // Load HNSW index if it exists, otherwise create new (empty).
@@ -448,7 +448,7 @@ impl Collection {
         config: &CollectionConfig,
     ) -> Result<Arc<HnswIndex>> {
         if path.join("hnsw.bin").exists() {
-            let idx = HnswIndex::load(path, config.dimension, config.metric).map_err(Error::Io)?;
+            let idx = HnswIndex::load(path, config.dimension, config.metric)?;
             Ok(Arc::new(idx))
         } else if let Some(params) = config.hnsw_params {
             Ok(Arc::new(HnswIndex::with_params(
@@ -596,31 +596,28 @@ impl Collection {
     /// Returns an error if storage operations fail.
     pub fn flush(&self) -> Result<()> {
         self.save_config()?;
-        self.vector_storage.write().flush().map_err(Error::Io)?;
-        self.payload_storage.write().flush().map_err(Error::Io)?;
-        self.index.save(&self.path).map_err(Error::Io)?;
+        self.vector_storage.write().flush()?;
+        self.payload_storage.write().flush()?;
+        self.index.save(&self.path)?;
 
         // Save PropertyIndex (EPIC-009 US-005)
         let property_index_path = self.path.join("property_index.bin");
         self.property_index
             .read()
-            .save_to_file(&property_index_path)
-            .map_err(Error::Io)?;
+            .save_to_file(&property_index_path)?;
 
         // Save RangeIndex (EPIC-009 US-005)
         let range_index_path = self.path.join("range_index.bin");
         self.range_index
             .read()
-            .save_to_file(&range_index_path)
-            .map_err(Error::Io)?;
+            .save_to_file(&range_index_path)?;
 
         // Save EdgeStore for graph collections (BUG-1: was never persisted)
         if self.config.read().graph_schema.is_some() {
             let edge_store_path = self.path.join("edge_store.bin");
             self.edge_store
                 .read()
-                .save_to_file(&edge_store_path)
-                .map_err(Error::Io)?;
+                .save_to_file(&edge_store_path)?;
         }
 
         // Compact all named sparse indexes to disk (EPIC-062 / SPARSE-04)

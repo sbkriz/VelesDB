@@ -68,9 +68,7 @@ impl Collection {
 
         for point in points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            vector_storage
-                .store(point.id, &point.vector)
-                .map_err(Error::Io)?;
+            vector_storage.store(point.id, &point.vector)?;
 
             self.cache_quantized_vector(
                 &point,
@@ -81,9 +79,7 @@ impl Collection {
             );
 
             if let Some(payload) = &point.payload {
-                payload_storage
-                    .store(point.id, payload)
-                    .map_err(Error::Io)?;
+                payload_storage.store(point.id, payload)?;
             } else {
                 let _ = payload_storage.delete(point.id);
             }
@@ -116,8 +112,8 @@ impl Collection {
         // LOCK ORDER: flush while vector_storage(2) + payload_storage(3) still held,
         // then drop both before acquiring config(1) alone to avoid inversion.
         let point_count = vector_storage.len();
-        vector_storage.flush().map_err(Error::Io)?;
-        payload_storage.flush().map_err(Error::Io)?;
+        vector_storage.flush()?;
+        payload_storage.flush()?;
         drop(vector_storage);
         drop(payload_storage);
 
@@ -126,7 +122,7 @@ impl Collection {
         config.point_count = point_count;
         drop(config);
 
-        self.index.save(&self.path).map_err(Error::Io)?;
+        self.index.save(&self.path)?;
 
         // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
         if !sparse_batch.is_empty() {
@@ -183,9 +179,7 @@ impl Collection {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             // Store Payload (metadata-only points must have payload)
             if let Some(payload) = &point.payload {
-                payload_storage
-                    .store(point.id, payload)
-                    .map_err(Error::Io)?;
+                payload_storage.store(point.id, payload)?;
 
                 // Update BM25 Text Index for full-text search
                 let text = Self::extract_text_from_payload(payload);
@@ -206,7 +200,7 @@ impl Collection {
 
         // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
         let point_count = payload_storage.ids().len();
-        payload_storage.flush().map_err(Error::Io)?;
+        payload_storage.flush()?;
         drop(payload_storage);
 
         // config(1) only — all higher-numbered locks released above.
@@ -280,11 +274,9 @@ impl Collection {
 
         {
             let mut vector_storage = self.vector_storage.write();
-            vector_storage
-                .store_batch(&vectors_for_storage)
-                .map_err(Error::Io)?;
+            vector_storage.store_batch(&vectors_for_storage)?;
             // Perf: Flush while lock is already held — avoids a second write() acquisition
-            vector_storage.flush().map_err(Error::Io)?;
+            vector_storage.flush()?;
         }
 
         // Store payloads and update BM25 (still sequential for now)
@@ -292,9 +284,7 @@ impl Collection {
             let mut payload_storage = self.payload_storage.write();
             for point in points {
                 if let Some(payload) = &point.payload {
-                    payload_storage
-                        .store(point.id, payload)
-                        .map_err(Error::Io)?;
+                    payload_storage.store(point.id, payload)?;
 
                     // Update BM25 text index
                     let text = Self::extract_text_from_payload(payload);
@@ -304,7 +294,7 @@ impl Collection {
                 }
             }
             // Perf: Flush while lock is already held — avoids a second write() acquisition
-            payload_storage.flush().map_err(Error::Io)?;
+            payload_storage.flush()?;
         }
 
         // Perf: Parallel HNSW insertion (CPU bound - benefits from parallelism)
@@ -418,7 +408,7 @@ impl Collection {
             // For metadata-only collections, only delete from payload storage
             for &id in ids {
                 let old_payload = payload_storage.retrieve(id).ok().flatten();
-                payload_storage.delete(id).map_err(Error::Io)?;
+                payload_storage.delete(id)?;
                 self.text_index.remove_document(id);
                 self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
@@ -440,8 +430,8 @@ impl Collection {
 
             for &id in ids {
                 let old_payload = payload_storage.retrieve(id).ok().flatten();
-                vector_storage.delete(id).map_err(Error::Io)?;
-                payload_storage.delete(id).map_err(Error::Io)?;
+                vector_storage.delete(id)?;
+                payload_storage.delete(id)?;
                 self.index.remove(id);
                 sq8_cache.remove(&id);
                 binary_cache.remove(&id);
