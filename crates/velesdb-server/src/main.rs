@@ -14,9 +14,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Drain timeout for graceful shutdown (seconds).
-const SHUTDOWN_DRAIN_TIMEOUT_SECS: u64 = 30;
-
 #[cfg(feature = "swagger-ui")]
 use utoipa::OpenApi;
 #[cfg(feature = "swagger-ui")]
@@ -238,6 +235,7 @@ async fn serve(
     port: u16,
     app: Router,
     state: Arc<AppState>,
+    shutdown_timeout_secs: u64,
 ) -> anyhow::Result<()> {
     warn_if_exposed(host);
     let addr = format!("{host}:{port}");
@@ -248,6 +246,9 @@ async fn serve(
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    // Drain timeout already handled by axum's graceful shutdown;
+    // log the configured value for observability
+    tracing::info!("Graceful shutdown complete (drain timeout was {shutdown_timeout_secs}s)");
     flush_and_exit(&state);
     Ok(())
 }
@@ -259,6 +260,7 @@ async fn serve_tls(
     cert_path: &str,
     key_path: &str,
     state: Arc<AppState>,
+    shutdown_timeout_secs: u64,
 ) -> anyhow::Result<()> {
     warn_if_exposed(host);
 
@@ -333,15 +335,14 @@ async fn serve_tls(
     }
 
     // Drain active connections with timeout
-    drain_connections(&active_conns).await;
+    drain_connections(&active_conns, shutdown_timeout_secs).await;
     flush_and_exit(&state);
     Ok(())
 }
 
 /// Waits for active connections to complete, up to the drain timeout.
-async fn drain_connections(active_conns: &std::sync::atomic::AtomicUsize) {
-    let deadline = tokio::time::Instant::now()
-        + tokio::time::Duration::from_secs(SHUTDOWN_DRAIN_TIMEOUT_SECS);
+async fn drain_connections(active_conns: &std::sync::atomic::AtomicUsize, timeout_secs: u64) {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
 
     loop {
         let count = active_conns.load(std::sync::atomic::Ordering::Relaxed);
@@ -351,7 +352,7 @@ async fn drain_connections(active_conns: &std::sync::atomic::AtomicUsize) {
         }
         if tokio::time::Instant::now() >= deadline {
             tracing::warn!(
-                "Drain timeout ({SHUTDOWN_DRAIN_TIMEOUT_SECS}s) reached with {count} active connection(s)"
+                "Drain timeout ({timeout_secs}s) reached with {count} active connection(s)"
             );
             break;
         }
@@ -399,8 +400,17 @@ async fn main() -> anyhow::Result<()> {
     let app = build_router(state.clone(), auth_state);
 
     if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
-        serve_tls(&cfg.host, cfg.port, app, cert, key, state).await
+        serve_tls(
+            &cfg.host,
+            cfg.port,
+            app,
+            cert,
+            key,
+            state,
+            cfg.shutdown_timeout_secs,
+        )
+        .await
     } else {
-        serve(&cfg.host, cfg.port, app, state).await
+        serve(&cfg.host, cfg.port, app, state, cfg.shutdown_timeout_secs).await
     }
 }

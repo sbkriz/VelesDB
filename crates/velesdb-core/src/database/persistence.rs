@@ -125,21 +125,20 @@ impl Database {
         }
     }
 
-    /// Flushes all WALs across every collection registry (legacy, vector, graph, metadata).
+    /// Flushes all WALs across the typed collection registries.
     ///
     /// Best-effort: logs warnings for individual flush failures but continues
     /// flushing remaining collections. Returns the count of failures.
+    ///
+    /// Note: the legacy `collections` registry is intentionally skipped because
+    /// it shares the same `Arc`'d storage as the typed registries — flushing it
+    /// would double-flush every collection.
     #[allow(deprecated)]
     pub fn flush_all(&self) -> usize {
         let mut failures: usize = 0;
 
-        // Legacy collections
-        for (name, coll) in self.collections.read().iter() {
-            if let Err(e) = coll.flush() {
-                tracing::warn!(error = %e, collection = %name, "Failed to flush legacy collection");
-                failures += 1;
-            }
-        }
+        // Typed registries only — legacy `collections` shares the same Arc'd
+        // storage, so flushing it would double-flush every collection.
 
         // Vector collections
         for (name, coll) in self.vector_colls.read().iter() {

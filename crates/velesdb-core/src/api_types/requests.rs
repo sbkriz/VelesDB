@@ -79,13 +79,9 @@ impl SparseVectorInput {
     ///
     /// Returns a descriptive error string on mismatched lengths, non-finite values,
     /// or dict keys that cannot be parsed as `u32`.
-    pub fn into_sparse_vector(
-        self,
-    ) -> Result<crate::sparse_index::SparseVector, String> {
+    pub fn into_sparse_vector(self) -> Result<crate::sparse_index::SparseVector, String> {
         match self {
-            Self::Parallel { indices, values } => {
-                Self::convert_parallel(indices, values)
-            }
+            Self::Parallel { indices, values } => Self::convert_parallel(indices, values),
             Self::Dict(map) => Self::convert_dict(map),
         }
     }
@@ -108,8 +104,7 @@ impl SparseVectorInput {
                 ));
             }
         }
-        let pairs: Vec<(u32, f32)> =
-            indices.into_iter().zip(values).collect();
+        let pairs: Vec<(u32, f32)> = indices.into_iter().zip(values).collect();
         Ok(crate::sparse_index::SparseVector::new(pairs))
     }
 
@@ -123,11 +118,9 @@ impl SparseVectorInput {
                     "Sparse vector value for key '{key}' is not finite: {value}"
                 ));
             }
-            let idx: u32 = key.parse().map_err(|_| {
-                format!(
-                    "Sparse vector key '{key}' is not a valid u32 term ID"
-                )
-            })?;
+            let idx: u32 = key
+                .parse()
+                .map_err(|_| format!("Sparse vector key '{key}' is not a valid u32 term ID"))?;
             pairs.push((idx, value));
         }
         Ok(crate::sparse_index::SparseVector::new(pairs))

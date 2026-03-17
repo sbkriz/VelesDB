@@ -76,11 +76,11 @@ pub async fn auth_middleware(
 
     match auth_header {
         Some(value) => match extract_bearer_token(value) {
-            Some(token) if state.api_keys.contains(&token.to_string()) => {
-                next.run(request).await
-            }
+            Some(token) if state.api_keys.contains(&token.to_string()) => next.run(request).await,
             Some(_) => unauthorized_response("invalid API key"),
-            None => unauthorized_response("invalid Authorization header format, expected: Bearer <key>"),
+            None => {
+                unauthorized_response("invalid Authorization header format, expected: Bearer <key>")
+            }
         },
         None => unauthorized_response("missing Authorization header"),
     }
@@ -140,10 +140,7 @@ mod tests {
         assert_eq!(extract_bearer_token("Bearer my-key"), Some("my-key"));
         assert_eq!(extract_bearer_token("bearer my-key"), Some("my-key"));
         assert_eq!(extract_bearer_token("BEARER my-key"), Some("my-key"));
-        assert_eq!(
-            extract_bearer_token("  Bearer  my-key  "),
-            Some("my-key")
-        );
+        assert_eq!(extract_bearer_token("  Bearer  my-key  "), Some("my-key"));
     }
 
     #[test]

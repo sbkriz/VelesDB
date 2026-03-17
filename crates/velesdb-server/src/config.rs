@@ -198,16 +198,11 @@ fn load_toml_file(path: &Option<PathBuf>) -> anyhow::Result<FileConfig> {
         }
     };
 
-    let contents = std::fs::read_to_string(&candidate).map_err(|e| {
-        anyhow::anyhow!("failed to read config file {}: {e}", candidate.display())
-    })?;
+    let contents = std::fs::read_to_string(&candidate)
+        .map_err(|e| anyhow::anyhow!("failed to read config file {}: {e}", candidate.display()))?;
 
-    let cfg: FileConfig = toml::from_str(&contents).map_err(|e| {
-        anyhow::anyhow!(
-            "failed to parse config file {}: {e}",
-            candidate.display()
-        )
-    })?;
+    let cfg: FileConfig = toml::from_str(&contents)
+        .map_err(|e| anyhow::anyhow!("failed to parse config file {}: {e}", candidate.display()))?;
 
     Ok(cfg)
 }
@@ -218,12 +213,17 @@ fn load_toml_file(path: &Option<PathBuf>) -> anyhow::Result<FileConfig> {
 
 /// Parse `VELESDB_API_KEYS` env var (comma-separated) into a `Vec<String>`.
 pub fn parse_api_keys_env() -> Option<Vec<String>> {
-    std::env::var("VELESDB_API_KEYS").ok().map(|val| {
-        val.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    })
+    let val = std::env::var("VELESDB_API_KEYS").ok()?;
+    let keys: Vec<String> = val
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if keys.is_empty() {
+        None
+    } else {
+        Some(keys)
+    }
 }
 
 // ============================================================================

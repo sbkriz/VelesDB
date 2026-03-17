@@ -86,8 +86,7 @@ impl LogPayloadStorage {
 
         let wal = Self::open_wal_writer(&log_path)?;
         let (reader, wal_len) = Self::open_wal_reader(&log_path)?;
-        let (index, last_snapshot_wal_pos) =
-            Self::load_or_replay_index(&path, &log_path, wal_len)?;
+        let (index, last_snapshot_wal_pos) = Self::load_or_replay_index(&path, &log_path, wal_len)?;
 
         Ok(Self {
             path,
@@ -131,8 +130,7 @@ impl LogPayloadStorage {
     ) -> io::Result<(FxHashMap<u64, u64>, u64)> {
         let snapshot_path = dir.join("payloads.snapshot");
         if let Ok((snapshot_index, snapshot_wal_pos)) = snapshot::load_snapshot(&snapshot_path) {
-            let index =
-                Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
+            let index = Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
             Ok((index, snapshot_wal_pos))
         } else {
             let index = Self::replay_wal_from(log_path, FxHashMap::default(), 0, wal_len)?;

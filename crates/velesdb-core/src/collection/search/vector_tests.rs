@@ -46,9 +46,7 @@ fn test_search_ids_product_quantization_cosine_scores_stay_in_similarity_domain(
     // ASSERT
     assert!(!results.is_empty(), "search should return candidates");
     assert!(
-        results
-            .iter()
-            .all(|sr| (-1.0..=1.0).contains(&sr.score)),
+        results.iter().all(|sr| (-1.0..=1.0).contains(&sr.score)),
         "cosine metric scores must remain in similarity domain [-1, 1]"
     );
 }

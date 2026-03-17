@@ -9,6 +9,7 @@ Last verification: 2026-03-04.
 | Route | Runtime | README |
 |---|---|---|
 | `/health` | yes | yes |
+| `/ready` | yes | yes |
 | `/collections` | yes | yes |
 | `/collections/{name}` | yes | yes |
 | `/collections/{name}/empty` | yes | yes |

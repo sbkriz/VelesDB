@@ -61,9 +61,9 @@
 #[cfg(feature = "persistence")]
 pub mod agent;
 pub mod alloc_guard;
-pub mod api_types;
 #[cfg(test)]
 mod alloc_guard_tests;
+pub mod api_types;
 pub mod cache;
 #[cfg(feature = "persistence")]
 pub mod collection;
@@ -188,15 +188,13 @@ pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use perf_optimizations::pad_to_simd_width;
 pub use point::{Point, SearchResult};
-pub use scored_result::ScoredResult;
-pub use validation::{
-    validate_dimension, validate_dimension_match, MAX_DIMENSION, MIN_DIMENSION,
-};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
     BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode,
 };
+pub use scored_result::ScoredResult;
+pub use validation::{validate_dimension, validate_dimension_match, MAX_DIMENSION, MIN_DIMENSION};
 
 #[cfg(feature = "persistence")]
 pub use column_store::{

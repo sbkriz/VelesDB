@@ -101,8 +101,14 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
     let (combined, mut a_ptr, mut b_ptr) = unsafe {
         crate::simd_4acc_dot_loop!(
-            a.as_ptr(), b.as_ptr(), end_main,
-            vdupq_n_f32(0.0), vld1q_f32, neon_fma_compat, vaddq_f32, 4
+            a.as_ptr(),
+            b.as_ptr(),
+            end_main,
+            vdupq_n_f32(0.0),
+            vld1q_f32,
+            neon_fma_compat,
+            vaddq_f32,
+            4
         )
     };
 
@@ -269,12 +275,24 @@ unsafe fn cosine_fused_neon_main_loop(
     // - Condition 1: NEON is always present on aarch64.
     // - Condition 2: Immediate 0.0 is valid.
     // Reason: Initialise 12 accumulators (3 products x 4-way ILP).
-    let (mut d0, mut d1, mut d2, mut d3) =
-        (vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0));
-    let (mut na0, mut na1, mut na2, mut na3) =
-        (vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0));
-    let (mut nb0, mut nb1, mut nb2, mut nb3) =
-        (vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+    let (mut d0, mut d1, mut d2, mut d3) = (
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+    );
+    let (mut na0, mut na1, mut na2, mut na3) = (
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+    );
+    let (mut nb0, mut nb1, mut nb2, mut nb3) = (
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+        vdupq_n_f32(0.0),
+    );
 
     while a_ptr < end_main {
         // SAFETY: Loop condition guarantees 16 elements remain before `end_main`.

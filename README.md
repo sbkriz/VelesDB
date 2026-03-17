@@ -650,6 +650,7 @@ SELECT * FROM active UNION SELECT * FROM archived
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | `GET` | Health check |
+| `/ready` | `GET` | Readiness check |
 | `/metrics` | `GET` | Prometheus metrics endpoint |
 
 ### Request/Response Examples

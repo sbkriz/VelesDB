@@ -197,7 +197,12 @@ impl HnswIndex {
     ///
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
-    pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_k: usize) -> Vec<ScoredResult> {
+    pub fn search_with_rerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        rerank_k: usize,
+    ) -> Vec<ScoredResult> {
         let ef_search = SearchQuality::Accurate.ef_search(rerank_k);
         let adaptive_rerank_k = self
             .should_two_stage_rerank(SearchQuality::Accurate, k, ef_search)

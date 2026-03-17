@@ -22,10 +22,10 @@ mod collection_ops;
 mod graph_ops;
 mod metadata_ops;
 mod persistence;
-mod vector_ops;
 mod query_engine;
 mod stats;
 mod training;
+mod vector_ops;
 
 #[cfg(feature = "persistence")]
 mod database_helpers;

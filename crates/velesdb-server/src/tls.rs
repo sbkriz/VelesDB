@@ -63,10 +63,7 @@ mod tests {
         std::fs::write(&cert_path, "").unwrap();
         std::fs::write(&key_path, "").unwrap();
 
-        match load_tls_config(
-            &cert_path.to_string_lossy(),
-            &key_path.to_string_lossy(),
-        ) {
+        match load_tls_config(&cert_path.to_string_lossy(), &key_path.to_string_lossy()) {
             Err(e) => assert!(e.to_string().contains("no certificates")),
             Ok(_) => panic!("should fail for empty cert"),
         }
@@ -81,11 +78,7 @@ mod tests {
         std::fs::write(&key_path, "not a real key").unwrap();
 
         assert!(
-            load_tls_config(
-                &cert_path.to_string_lossy(),
-                &key_path.to_string_lossy(),
-            )
-            .is_err(),
+            load_tls_config(&cert_path.to_string_lossy(), &key_path.to_string_lossy(),).is_err(),
             "should fail for invalid PEM"
         );
     }

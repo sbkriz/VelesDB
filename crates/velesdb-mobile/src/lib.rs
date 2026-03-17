@@ -279,7 +279,10 @@ impl VelesCollection {
 
         Ok(results
             .into_iter()
-            .map(|sr| SearchResult { id: sr.id, score: sr.score })
+            .map(|sr| SearchResult {
+                id: sr.id,
+                score: sr.score,
+            })
             .collect())
     }
 

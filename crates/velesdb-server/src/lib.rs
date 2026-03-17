@@ -26,8 +26,8 @@
 
 pub mod auth;
 pub mod config;
-pub mod tls;
 mod handlers;
+pub mod tls;
 mod types;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -396,7 +396,10 @@ mod tests {
     fn test_openapi_has_license() {
         let openapi = ApiDoc::openapi();
         let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
-        assert!(json.contains("ELv2"), "Should have ELv2 license");
+        assert!(
+            json.contains("VelesDB Core License 1.0"),
+            "Should have VelesDB Core License 1.0"
+        );
     }
 
     #[test]

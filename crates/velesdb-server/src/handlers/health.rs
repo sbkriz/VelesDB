@@ -32,9 +32,7 @@ pub async fn health_check() -> impl IntoResponse {
         (status = 503, description = "Server is not yet ready", body = Object)
     )
 )]
-pub async fn readiness_check(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn readiness_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if state.ready.load(Ordering::Relaxed) {
         (
             StatusCode::OK,

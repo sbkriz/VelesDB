@@ -339,7 +339,11 @@ impl VectorCollection {
     /// # Errors
     ///
     /// - Returns an error if the query dimension does not match the collection.
-    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<crate::scored_result::ScoredResult>> {
+    pub fn search_ids(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> Result<Vec<crate::scored_result::ScoredResult>> {
         self.inner.search_ids(query, k)
     }
 

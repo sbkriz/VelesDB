@@ -122,7 +122,6 @@ impl BinaryQuantizedVector {
         let distance = self.hamming_distance(other);
         1.0 - (distance as f32 / self.dimension as f32)
     }
-
 }
 
 impl QuantizationCodec for BinaryQuantizedVector {

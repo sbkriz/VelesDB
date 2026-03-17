@@ -109,8 +109,14 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
     let (mut acc, mut a_p, mut b_p) = simd_4acc_dot_loop!(
-        a_ptr, b_ptr, end_main,
-        _mm512_setzero_ps(), _mm512_loadu_ps, _mm512_fmadd_ps, _mm512_add_ps, 16
+        a_ptr,
+        b_ptr,
+        end_main,
+        _mm512_setzero_ps(),
+        _mm512_loadu_ps,
+        _mm512_fmadd_ps,
+        _mm512_add_ps,
+        16
     );
 
     // Process remaining 16-element chunks with same accumulator
@@ -164,8 +170,15 @@ pub(crate) unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
     let (mut acc, mut a_p, mut b_p) = simd_4acc_l2_loop!(
-        a_ptr, b_ptr, end_main,
-        _mm512_setzero_ps(), _mm512_loadu_ps, _mm512_sub_ps, _mm512_fmadd_ps, _mm512_add_ps, 16
+        a_ptr,
+        b_ptr,
+        end_main,
+        _mm512_setzero_ps(),
+        _mm512_loadu_ps,
+        _mm512_sub_ps,
+        _mm512_fmadd_ps,
+        _mm512_add_ps,
+        16
     );
 
     // Process remaining 16-element chunks
