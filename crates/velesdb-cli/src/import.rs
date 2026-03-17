@@ -347,7 +347,7 @@ fn create_progress_bar(total: usize, show: bool) -> ProgressBar {
                 .template(
                     "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
                 )
-                .unwrap()
+                .expect("hardcoded progress bar template is valid")
                 .progress_chars("#>-"),
         );
         pb

@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 /// A graph node for knowledge graph construction.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MobileGraphNode {
@@ -45,10 +47,10 @@ pub struct TraversalResult {
 /// In-memory graph store for mobile knowledge graphs.
 #[derive(uniffi::Object)]
 pub struct MobileGraphStore {
-    nodes: std::sync::RwLock<HashMap<u64, MobileGraphNode>>,
-    edges: std::sync::RwLock<HashMap<u64, MobileGraphEdge>>,
-    outgoing: std::sync::RwLock<HashMap<u64, Vec<u64>>>,
-    incoming: std::sync::RwLock<HashMap<u64, Vec<u64>>>,
+    nodes: RwLock<HashMap<u64, MobileGraphNode>>,
+    edges: RwLock<HashMap<u64, MobileGraphEdge>>,
+    outgoing: RwLock<HashMap<u64, Vec<u64>>>,
+    incoming: RwLock<HashMap<u64, Vec<u64>>>,
 }
 
 #[uniffi::export]
@@ -57,16 +59,16 @@ impl MobileGraphStore {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            nodes: std::sync::RwLock::new(HashMap::new()),
-            edges: std::sync::RwLock::new(HashMap::new()),
-            outgoing: std::sync::RwLock::new(HashMap::new()),
-            incoming: std::sync::RwLock::new(HashMap::new()),
+            nodes: RwLock::new(HashMap::new()),
+            edges: RwLock::new(HashMap::new()),
+            outgoing: RwLock::new(HashMap::new()),
+            incoming: RwLock::new(HashMap::new()),
         })
     }
 
     /// Adds a node to the graph.
     pub fn add_node(&self, node: MobileGraphNode) {
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write();
         nodes.insert(node.id, node);
     }
 
@@ -81,9 +83,9 @@ impl MobileGraphStore {
         // CRITICAL FIX: Acquire all locks BEFORE any mutation
         // and hold them until the operation is complete.
         // Lock order: edges → outgoing → incoming (consistent with remove_node)
-        let mut edges = self.edges.write().unwrap();
-        let mut outgoing = self.outgoing.write().unwrap();
-        let mut incoming = self.incoming.write().unwrap();
+        let mut edges = self.edges.write();
+        let mut outgoing = self.outgoing.write();
+        let mut incoming = self.incoming.write();
 
         if edges.contains_key(&edge.id) {
             return Err(crate::VelesError::Database {
@@ -106,25 +108,25 @@ impl MobileGraphStore {
 
     /// Gets a node by ID.
     pub fn get_node(&self, id: u64) -> Option<MobileGraphNode> {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read();
         nodes.get(&id).cloned()
     }
 
     /// Gets an edge by ID.
     pub fn get_edge(&self, id: u64) -> Option<MobileGraphEdge> {
-        let edges = self.edges.read().unwrap();
+        let edges = self.edges.read();
         edges.get(&id).cloned()
     }
 
     /// Returns the number of nodes.
     pub fn node_count(&self) -> u64 {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read();
         nodes.len() as u64
     }
 
     /// Returns the number of edges.
     pub fn edge_count(&self) -> u64 {
-        let edges = self.edges.read().unwrap();
+        let edges = self.edges.read();
         edges.len() as u64
     }
 
@@ -136,8 +138,8 @@ impl MobileGraphStore {
     /// to prevent ABBA deadlock with write operations.
     pub fn get_outgoing(&self, node_id: u64) -> Vec<MobileGraphEdge> {
         // CRITICAL: Lock order must match write operations (edges → outgoing → incoming)
-        let edges = self.edges.read().unwrap();
-        let outgoing = self.outgoing.read().unwrap();
+        let edges = self.edges.read();
+        let outgoing = self.outgoing.read();
 
         outgoing
             .get(&node_id)
@@ -153,8 +155,8 @@ impl MobileGraphStore {
     /// to prevent ABBA deadlock with write operations.
     pub fn get_incoming(&self, node_id: u64) -> Vec<MobileGraphEdge> {
         // CRITICAL: Lock order must match write operations (edges → outgoing → incoming)
-        let edges = self.edges.read().unwrap();
-        let incoming = self.incoming.read().unwrap();
+        let edges = self.edges.read();
+        let incoming = self.incoming.read();
 
         incoming
             .get(&node_id)
@@ -226,10 +228,10 @@ impl MobileGraphStore {
     pub fn remove_node(&self, node_id: u64) {
         // CRITICAL: Acquire locks in consistent order (edges → outgoing → incoming → nodes)
         // to prevent deadlock with add_edge() which uses (edges → outgoing → incoming)
-        let mut edges = self.edges.write().unwrap();
-        let mut outgoing = self.outgoing.write().unwrap();
-        let mut incoming = self.incoming.write().unwrap();
-        let mut nodes = self.nodes.write().unwrap();
+        let mut edges = self.edges.write();
+        let mut outgoing = self.outgoing.write();
+        let mut incoming = self.incoming.write();
+        let mut nodes = self.nodes.write();
 
         nodes.remove(&node_id);
 
@@ -260,9 +262,9 @@ impl MobileGraphStore {
     /// WITHOUT dropping between operations to ensure atomicity.
     pub fn remove_edge(&self, edge_id: u64) {
         // CRITICAL FIX: Acquire all locks BEFORE any mutation
-        let mut edges = self.edges.write().unwrap();
-        let mut outgoing = self.outgoing.write().unwrap();
-        let mut incoming = self.incoming.write().unwrap();
+        let mut edges = self.edges.write();
+        let mut outgoing = self.outgoing.write();
+        let mut incoming = self.incoming.write();
 
         if let Some(edge) = edges.remove(&edge_id) {
             if let Some(ids) = outgoing.get_mut(&edge.source) {
@@ -282,10 +284,10 @@ impl MobileGraphStore {
     /// Acquires locks in consistent order: edges → outgoing → incoming → nodes
     pub fn clear(&self) {
         // Consistent lock order: edges → outgoing → incoming → nodes
-        let mut edges = self.edges.write().unwrap();
-        let mut outgoing = self.outgoing.write().unwrap();
-        let mut incoming = self.incoming.write().unwrap();
-        let mut nodes = self.nodes.write().unwrap();
+        let mut edges = self.edges.write();
+        let mut outgoing = self.outgoing.write();
+        let mut incoming = self.incoming.write();
+        let mut nodes = self.nodes.write();
 
         edges.clear();
         outgoing.clear();
@@ -339,20 +341,20 @@ impl MobileGraphStore {
 
     /// Checks if a node exists.
     pub fn has_node(&self, id: u64) -> bool {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read();
         nodes.contains_key(&id)
     }
 
     /// Checks if an edge exists.
     pub fn has_edge(&self, id: u64) -> bool {
-        let edges = self.edges.read().unwrap();
+        let edges = self.edges.read();
         edges.contains_key(&id)
     }
 
     /// Gets the out-degree (number of outgoing edges) of a node.
     #[allow(clippy::cast_possible_truncation)]
     pub fn out_degree(&self, node_id: u64) -> u32 {
-        let outgoing = self.outgoing.read().unwrap();
+        let outgoing = self.outgoing.read();
         // Safe: graph degree unlikely to exceed u32::MAX (4 billion edges from one node)
         outgoing.get(&node_id).map_or(0, |v| v.len() as u32)
     }
@@ -360,14 +362,14 @@ impl MobileGraphStore {
     /// Gets the in-degree (number of incoming edges) of a node.
     #[allow(clippy::cast_possible_truncation)]
     pub fn in_degree(&self, node_id: u64) -> u32 {
-        let incoming = self.incoming.read().unwrap();
+        let incoming = self.incoming.read();
         // Safe: graph degree unlikely to exceed u32::MAX (4 billion edges to one node)
         incoming.get(&node_id).map_or(0, |v| v.len() as u32)
     }
 
     /// Gets all nodes with a specific label.
     pub fn get_nodes_by_label(&self, label: String) -> Vec<MobileGraphNode> {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read();
         nodes
             .values()
             .filter(|n| n.label == label)
@@ -377,7 +379,7 @@ impl MobileGraphStore {
 
     /// Gets all edges with a specific label.
     pub fn get_edges_by_label(&self, label: String) -> Vec<MobileGraphEdge> {
-        let edges = self.edges.read().unwrap();
+        let edges = self.edges.read();
         edges
             .values()
             .filter(|e| e.label == label)
@@ -389,10 +391,10 @@ impl MobileGraphStore {
 impl Default for MobileGraphStore {
     fn default() -> Self {
         Self {
-            nodes: std::sync::RwLock::new(HashMap::new()),
-            edges: std::sync::RwLock::new(HashMap::new()),
-            outgoing: std::sync::RwLock::new(HashMap::new()),
-            incoming: std::sync::RwLock::new(HashMap::new()),
+            nodes: RwLock::new(HashMap::new()),
+            edges: RwLock::new(HashMap::new()),
+            outgoing: RwLock::new(HashMap::new()),
+            incoming: RwLock::new(HashMap::new()),
         }
     }
 }

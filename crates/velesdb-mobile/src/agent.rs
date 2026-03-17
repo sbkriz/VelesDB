@@ -2,6 +2,8 @@
 //!
 //! Provides semantic memory for AI agents on iOS/Android.
 
+use parking_lot::RwLock;
+
 use super::{DistanceMetric, VelesCollection, VelesDatabase, VelesError, VelesPoint};
 
 /// Result from semantic memory query.
@@ -29,7 +31,7 @@ pub struct SemanticResult {
 #[derive(uniffi::Object)]
 pub struct VelesSemanticMemory {
     collection: std::sync::Arc<VelesCollection>,
-    contents: std::sync::RwLock<std::collections::HashMap<u64, String>>,
+    contents: RwLock<std::collections::HashMap<u64, String>>,
 }
 
 #[uniffi::export]
@@ -58,7 +60,7 @@ impl VelesSemanticMemory {
 
         Ok(Self {
             collection,
-            contents: std::sync::RwLock::new(std::collections::HashMap::new()),
+            contents: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -70,12 +72,7 @@ impl VelesSemanticMemory {
             payload: None,
         };
         self.collection.upsert(point)?;
-        self.contents
-            .write()
-            .map_err(|e| VelesError::Database {
-                message: format!("Lock error: {e}"),
-            })?
-            .insert(id, content);
+        self.contents.write().insert(id, content);
         Ok(())
     }
 
@@ -83,9 +80,7 @@ impl VelesSemanticMemory {
     pub fn query(&self, embedding: Vec<f32>, top_k: u32) -> Result<Vec<SemanticResult>, VelesError> {
         let results = self.collection.search(embedding, top_k)?;
 
-        let contents = self.contents.read().map_err(|e| VelesError::Database {
-            message: format!("Lock error: {e}"),
-        })?;
+        let contents = self.contents.read();
 
         Ok(results
             .into_iter()
@@ -99,9 +94,7 @@ impl VelesSemanticMemory {
 
     /// Returns the number of stored knowledge facts.
     pub fn len(&self) -> Result<u64, VelesError> {
-        let contents = self.contents.read().map_err(|e| VelesError::Database {
-            message: format!("Lock error: {e}"),
-        })?;
+        let contents = self.contents.read();
         Ok(contents.len() as u64)
     }
 
@@ -113,9 +106,7 @@ impl VelesSemanticMemory {
     /// Removes a knowledge fact by ID.
     pub fn remove(&self, id: u64) -> Result<bool, VelesError> {
         self.collection.delete(id)?;
-        let mut contents = self.contents.write().map_err(|e| VelesError::Database {
-            message: format!("Lock error: {e}"),
-        })?;
+        let mut contents = self.contents.write();
         Ok(contents.remove(&id).is_some())
     }
 
@@ -128,17 +119,13 @@ impl VelesSemanticMemory {
     /// content map).
     pub fn clear(&self) -> Result<(), VelesError> {
         let ids: Vec<u64> = {
-            let contents = self.contents.read().map_err(|e| VelesError::Database {
-                message: format!("Lock error: {e}"),
-            })?;
+            let contents = self.contents.read();
             contents.keys().copied().collect()
         };
 
         // Clear the in-memory map first to avoid desync on partial delete failure
         {
-            let mut contents = self.contents.write().map_err(|e| VelesError::Database {
-                message: format!("Lock error: {e}"),
-            })?;
+            let mut contents = self.contents.write();
             contents.clear();
         }
 

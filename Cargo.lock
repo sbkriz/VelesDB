@@ -6859,6 +6859,7 @@ dependencies = [
 name = "velesdb-mobile"
 version = "1.5.1"
 dependencies = [
+ "parking_lot",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
