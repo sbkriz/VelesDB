@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features
+
+- **API Key Authentication** (US-01) — Optional Bearer token auth for `velesdb-server`. Configure via `VELESDB_API_KEYS` env var or `[auth]` section in `velesdb.toml`. Multiple keys supported. Auth disabled by default (local dev mode). `/health` and `/ready` always bypass auth.
+- **TLS Support** (US-02) — HTTPS via rustls. Configure with `VELESDB_TLS_CERT` / `VELESDB_TLS_KEY` or `[tls]` section in `velesdb.toml`. Plain HTTP remains the default.
+- **Graceful Shutdown** (US-03) — SIGTERM/SIGINT triggers connection drain (30s timeout) + WAL flush before exit. Guarantees no data loss on clean shutdown.
+- **Server Configuration Module** (US-04) — Unified `ServerConfig` loading from TOML + CLI + env with priority chain (CLI > env > TOML > defaults). Startup validation with clear error messages.
+- **Readiness Endpoint** (US-05) — `GET /ready` returns 200 when DB is loaded, 503 during startup. `GET /health` now includes version field. Both bypass auth.
+- **OpenAPI Security Scheme** (US-08) — OpenAPI spec now documents Bearer authentication via `securitySchemes`.
+
+### Documentation
+
+- **Server Security Guide** (US-06) — `docs/guides/SERVER_SECURITY.md` covering authentication, TLS, graceful shutdown, and health endpoints.
+- **Configuration Reference Update** (US-07) — `docs/guides/CONFIGURATION.md` updated with auth, TLS, and shutdown options (env vars, CLI flags, TOML keys).
+- **Python SDK** (US-08) — README updated with server connection example using API key auth.
+
 ### License
 
 - **Upgrade to VelesDB Core License 1.0** — replaces the previous ELv2-based license with a purpose-built license adapted for VelesDB's multi-model architecture.

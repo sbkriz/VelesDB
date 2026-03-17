@@ -70,10 +70,16 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         title = "VelesDB API",
         version = env!("CARGO_PKG_VERSION"),
         description = "High-performance vector database for AI applications. \
-            Supports semantic search, HNSW indexing, and multiple distance metrics.",
-        license(name = "ELv2", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
+            Supports semantic search, HNSW indexing, and multiple distance metrics. \
+            Authentication is optional — when API keys are configured via VELESDB_API_KEYS, \
+            all endpoints except /health and /ready require a valid Bearer token.",
+        license(name = "VelesDB Core License 1.0", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
         contact(name = "VelesDB Team", url = "https://github.com/cyberlife-coder/VelesDB")
     ),
+    security(
+        ("bearer_auth" = [])
+    ),
+    modifiers(&SecurityAddon),
     servers(
         (url = "/", description = "Local server")
     ),
@@ -186,6 +192,24 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
     )
 )]
 pub struct ApiDoc;
+
+/// Adds the Bearer authentication security scheme to the OpenAPI spec.
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearer_auth",
+                utoipa::openapi::security::SecurityScheme::Http(
+                    utoipa::openapi::security::Http::new(
+                        utoipa::openapi::security::HttpAuthScheme::Bearer,
+                    ),
+                ),
+            );
+        }
+    }
+}
 
 // ============================================================================
 // Application State
