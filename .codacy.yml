@@ -41,6 +41,12 @@ exclude_paths:
   - "sdks/**/tests/**"
   - "sdks/**/__tests__/**"
 
+  # --- Idiomatic Rust patterns (legitimate complexity) ---
+  # Pattern matching on enum variants is inherently branchy in Rust.
+  # evaluate_where_condition dispatches over Condition enum arms —
+  # this is the idiomatic, most readable form. Splitting would degrade clarity.
+  - "crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs"
+
   # --- Audited unsafe code (false positive suppression) ---
   # Codacy's "unsafe detected" rule cannot distinguish documented from
   # undocumented unsafe. VelesDB enforces // SAFETY: comments on ALL

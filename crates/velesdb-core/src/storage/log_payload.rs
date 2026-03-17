@@ -56,6 +56,81 @@ pub struct LogPayloadStorage {
     write_offset: RwLock<u64>,
 }
 
+// ---------------------------------------------------------------------------
+// WAL entry domain type — separates parsing from application
+// ---------------------------------------------------------------------------
+
+/// A parsed WAL entry with its file position context.
+struct WalEntry {
+    op: WalOp,
+    /// File position after the marker + ID header (start of payload length for Store).
+    pos_after_header: u64,
+}
+
+/// The two WAL operations: store (upsert) or delete.
+enum WalOp {
+    Store { id: u64 },
+    Delete { id: u64 },
+}
+
+impl WalEntry {
+    /// Reads one WAL entry from the reader. Returns `None` on EOF.
+    fn read(reader: &mut BufReader<File>, pos: u64) -> io::Result<Option<Self>> {
+        let mut marker = [0u8; 1];
+        if reader.read_exact(&mut marker).is_err() {
+            return Ok(None); // EOF
+        }
+
+        let mut id_bytes = [0u8; 8];
+        reader.read_exact(&mut id_bytes)?;
+        let id = u64::from_le_bytes(id_bytes);
+        let pos_after_header = pos + 1 + 8;
+
+        let op = match marker[0] {
+            1 => WalOp::Store { id },
+            2 => WalOp::Delete { id },
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Unknown WAL marker",
+                ))
+            }
+        };
+
+        Ok(Some(Self {
+            op,
+            pos_after_header,
+        }))
+    }
+
+    /// Applies this entry to the index, returning the new file position.
+    fn apply(
+        self,
+        index: &mut FxHashMap<u64, u64>,
+        reader: &mut BufReader<File>,
+    ) -> io::Result<u64> {
+        match self.op {
+            WalOp::Store { id } => {
+                let len_offset = self.pos_after_header;
+                let mut len_bytes = [0u8; 4];
+                reader.read_exact(&mut len_bytes)?;
+                let payload_len = u64::from(u32::from_le_bytes(len_bytes));
+
+                index.insert(id, len_offset);
+
+                let skip = i64::try_from(payload_len)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
+                reader.seek(SeekFrom::Current(skip))?;
+                Ok(self.pos_after_header + 4 + payload_len)
+            }
+            WalOp::Delete { id } => {
+                index.remove(&id);
+                Ok(self.pos_after_header)
+            }
+        }
+    }
+}
+
 impl LogPayloadStorage {
     /// Creates a new `LogPayloadStorage` with the default durability mode (`Fsync`).
     ///
@@ -170,67 +245,13 @@ impl LogPayloadStorage {
 
         let mut pos = start_pos;
         while pos < end_pos {
-            match Self::replay_single_entry(&mut reader_buf, &mut index, pos)? {
-                Some(new_pos) => pos = new_pos,
-                None => break,
-            }
+            let Some(entry) = WalEntry::read(&mut reader_buf, pos)? else {
+                break;
+            };
+            pos = entry.apply(&mut index, &mut reader_buf)?;
         }
 
         Ok(index)
-    }
-
-    /// Replays a single WAL entry, returning the updated file position.
-    ///
-    /// Returns `Ok(None)` on EOF (partial read of marker byte), signalling
-    /// the caller to stop replay.
-    fn replay_single_entry(
-        reader: &mut BufReader<File>,
-        index: &mut FxHashMap<u64, u64>,
-        pos: u64,
-    ) -> io::Result<Option<u64>> {
-        let mut marker = [0u8; 1];
-        if reader.read_exact(&mut marker).is_err() {
-            return Ok(None);
-        }
-        let pos = pos + 1;
-
-        let mut id_bytes = [0u8; 8];
-        reader.read_exact(&mut id_bytes)?;
-        let id = u64::from_le_bytes(id_bytes);
-        let pos = pos + 8;
-
-        Self::apply_wal_entry(reader, index, marker[0], id, pos)
-    }
-
-    /// Applies a single WAL store or delete entry, returning the new position.
-    fn apply_wal_entry(
-        reader: &mut BufReader<File>,
-        index: &mut FxHashMap<u64, u64>,
-        marker: u8,
-        id: u64,
-        pos: u64,
-    ) -> io::Result<Option<u64>> {
-        if marker == 1 {
-            // Store operation
-            let len_offset = pos;
-            let mut len_bytes = [0u8; 4];
-            reader.read_exact(&mut len_bytes)?;
-            let payload_len = u64::from(u32::from_le_bytes(len_bytes));
-            let pos = pos + 4;
-
-            index.insert(id, len_offset);
-
-            let skip = i64::try_from(payload_len)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
-            reader.seek(SeekFrom::Current(skip))?;
-            Ok(Some(pos + payload_len))
-        } else if marker == 2 {
-            // Delete operation
-            index.remove(&id);
-            Ok(Some(pos))
-        } else {
-            Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown marker"))
-        }
     }
 
     /// Creates a snapshot of the current index state.
