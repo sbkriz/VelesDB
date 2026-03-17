@@ -170,6 +170,47 @@ Report which examples were validated and which were skipped (with reason).
 
 ---
 
+### Phase 5b: Benchmark and Metrics Refresh
+
+**Purpose:** ensure all published performance data is current and reproducible.
+
+**5b-1. Run smoke benchmarks locally:**
+```bash
+cargo bench -p velesdb-core --bench smoke_test -- --noplot
+python3 scripts/export_smoke_criterion.py
+python3 scripts/compare_perf.py \
+  --current benchmarks/results/latest.json \
+  --baseline benchmarks/baseline.json \
+  --threshold 15
+```
+
+**5b-2. Verify threshold consistency:**
+- `benchmarks/baseline.json` → `threshold_percent` must match
+- `.github/workflows/ci.yml` → `--threshold` must match
+- `docs/reference/PERFORMANCE_SLO.md` → documented threshold must match
+- ALL THREE must agree. If they don't, fix the discrepancy.
+
+**5b-3. Check benchmark docs freshness:**
+- Read `docs/BENCHMARKS.md` — if metrics are older than 30 days, re-run:
+  ```bash
+  cargo bench -p velesdb-core --bench simd_benchmark -- --noplot
+  ```
+- Read `docs/reference/PERFORMANCE_SLO.md` — update baseline version to `$0`
+  if new baselines were recorded
+- Read `benchmarks/baseline.json` — update `version` field if re-baselined
+- Run `python3 scripts/benchmark_visualization.py` to regenerate charts if data changed
+- Run `python3 scripts/generate-performance-proofpack.py` if SLO data changed
+
+**5b-4. If benchmarks cannot run** (missing hardware, OS-specific):
+ASK the user: "Cannot run benchmark X locally. Options:
+  a) Keep existing metrics with current date
+  b) Remove metrics section until CI re-runs
+  c) Skip and note in release"
+
+**5b-5. Update `benchmarks/machine-config.json`** if running on different hardware.
+
+---
+
 ### Phase 6: Local CI Validation
 
 Run the full local CI suite to catch issues before pushing:
