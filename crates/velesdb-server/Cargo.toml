@@ -36,6 +36,13 @@ clap = { version = "4.4", features = ["derive", "env"] }
 toml = { workspace = true }
 parking_lot = "0.12"
 
+# TLS support via rustls
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
+
 # OpenAPI/Swagger documentation
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }

@@ -9,6 +9,7 @@ use axum::{
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -192,18 +193,67 @@ fn build_router(state: Arc<AppState>, auth_state: AuthState) -> Router {
         .layer(TraceLayer::new_for_http())
 }
 
-async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
+fn warn_if_exposed(host: &str) {
     if host != "127.0.0.1" && host != "localhost" {
         tracing::warn!(
             "VelesDB server exposed on network ({host}). \
              Consider using 127.0.0.1 for local-first usage."
         );
     }
+}
+
+async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
+    warn_if_exposed(host);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn serve_tls(
+    host: &str,
+    port: u16,
+    app: Router,
+    cert_path: &str,
+    key_path: &str,
+) -> anyhow::Result<()> {
+    warn_if_exposed(host);
+
+    let tls_acceptor = velesdb_server::tls::load_tls_config(cert_path, key_path)?;
+    let addr = format!("{host}:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("VelesDB server listening on https://{}", addr);
+
+    loop {
+        let (stream, _peer_addr) = listener.accept().await?;
+        let acceptor = tls_acceptor.clone();
+        let tower_service = app.clone();
+
+        tokio::spawn(async move {
+            let Ok(tls_stream) = acceptor.accept(stream).await else {
+                tracing::debug!("TLS handshake failed");
+                return;
+            };
+
+            let io = hyper_util::rt::TokioIo::new(tls_stream);
+            let hyper_service = hyper::service::service_fn(move |request| {
+                let clone = tower_service.clone();
+                async move {
+                    clone.oneshot(request).await
+                }
+            });
+
+            if let Err(err) = hyper_util::server::conn::auto::Builder::new(
+                hyper_util::rt::TokioExecutor::new(),
+            )
+            .serve_connection_with_upgrades(io, hyper_service)
+            .await
+            {
+                tracing::debug!("TLS connection error: {err}");
+            }
+        });
+    }
 }
 
 fn build_cli_overrides(args: Args) -> CliOverrides {
@@ -233,5 +283,9 @@ async fn main() -> anyhow::Result<()> {
     let auth_state = AuthState::new(cfg.api_keys.clone());
     let app = build_router(state, auth_state);
 
-    serve(&cfg.host, cfg.port, app).await
+    if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
+        serve_tls(&cfg.host, cfg.port, app, cert, key).await
+    } else {
+        serve(&cfg.host, cfg.port, app).await
+    }
 }
