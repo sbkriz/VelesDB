@@ -141,6 +141,7 @@ pub mod storage;
 pub mod sync;
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub mod update_check;
+pub mod validation;
 pub mod vector_ref;
 #[cfg(test)]
 mod vector_ref_tests;
@@ -180,15 +181,15 @@ pub use collection::{
     TraversalResult,
     ValueType,
     VectorCollection,
-    // Dimension validation bounds (VELES-032)
-    MAX_DIMENSION,
-    MIN_DIMENSION,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use perf_optimizations::pad_to_simd_width;
 pub use point::{Point, SearchResult};
+pub use validation::{
+    validate_dimension, validate_dimension_match, MAX_DIMENSION, MIN_DIMENSION,
+};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,

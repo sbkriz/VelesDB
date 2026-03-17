@@ -2,9 +2,10 @@
 
 use super::OrderedFloat;
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 
 impl Collection {
     /// Performs full-text search using BM25.
@@ -130,12 +131,7 @@ impl Collection {
         use std::collections::BinaryHeap;
 
         let config = self.config.read();
-        if vector_query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: vector_query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, vector_query.len())?;
         let metric = config.metric;
         drop(config);
 
@@ -243,12 +239,7 @@ impl Collection {
         use crate::index::VectorIndex;
 
         let config = self.config.read();
-        if vector_query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: vector_query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, vector_query.len())?;
         let metric = config.metric;
         drop(config);
 

@@ -9,6 +9,7 @@ use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
 use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension;
 use crate::velesql::{QueryCache, QueryPlanner};
 
 use crate::index::sparse::SparseInvertedIndex;
@@ -18,29 +19,6 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
-
-/// Minimum valid vector dimension.
-pub const MIN_DIMENSION: usize = 1;
-
-/// Maximum valid vector dimension (65,536 — covers all known embedding models).
-pub const MAX_DIMENSION: usize = 65_536;
-
-/// Validates that a vector dimension is within the allowed range.
-///
-/// # Errors
-///
-/// Returns [`Error::InvalidDimension`] if `dimension` is outside
-/// `[MIN_DIMENSION, MAX_DIMENSION]`.
-fn validate_dimension(dimension: usize) -> Result<()> {
-    if !(MIN_DIMENSION..=MAX_DIMENSION).contains(&dimension) {
-        return Err(Error::InvalidDimension {
-            dimension,
-            min: MIN_DIMENSION,
-            max: MAX_DIMENSION,
-        });
-    }
-    Ok(())
-}
 
 /// Pre-built components needed to assemble a [`Collection`].
 ///

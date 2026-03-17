@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 use crate::index::SearchQuality;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 
 impl Collection {
     /// Performs batch search for multiple query vectors in parallel with metadata filtering.
@@ -43,12 +44,7 @@ impl Collection {
 
         // Validate all query dimensions
         for query in queries {
-            if query.len() != dimension {
-                return Err(Error::DimensionMismatch {
-                    expected: dimension,
-                    actual: query.len(),
-                });
-            }
+            validate_dimension_match(dimension, query.len())?;
         }
 
         // We need to retrieve more candidates for post-filtering
@@ -168,12 +164,7 @@ impl Collection {
 
         // Validate all query dimensions first
         for query in queries {
-            if query.len() != dimension {
-                return Err(Error::DimensionMismatch {
-                    expected: dimension,
-                    actual: query.len(),
-                });
-            }
+            validate_dimension_match(dimension, query.len())?;
         }
 
         // Perf: Use parallel HNSW search (P0 optimization)
@@ -270,12 +261,7 @@ impl Collection {
         drop(config);
 
         for vector in vectors {
-            if vector.len() != dimension {
-                return Err(Error::DimensionMismatch {
-                    expected: dimension,
-                    actual: vector.len(),
-                });
-            }
+            validate_dimension_match(dimension, vector.len())?;
         }
 
         // Calculate overfetch factor for better fusion quality
@@ -399,12 +385,7 @@ impl Collection {
         drop(config);
 
         for vector in vectors {
-            if vector.len() != dimension {
-                return Err(Error::DimensionMismatch {
-                    expected: dimension,
-                    actual: vector.len(),
-                });
-            }
+            validate_dimension_match(dimension, vector.len())?;
         }
 
         let overfetch_k = match top_k {

@@ -7,6 +7,7 @@ use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::quantization::{distance_pq_l2, PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 
 impl Collection {
     fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
@@ -141,12 +142,7 @@ impl Collection {
             return Err(Error::SearchNotSupported(config.name.clone()));
         }
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Use HNSW index for fast ANN search
@@ -193,12 +189,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Convert ef_search to SearchQuality
@@ -256,12 +247,7 @@ impl Collection {
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         let config = self.config.read();
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Perf: Direct HNSW search without vector/payload retrieval
@@ -291,12 +277,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Post-filtering strategy: retrieve more candidates than k, then filter

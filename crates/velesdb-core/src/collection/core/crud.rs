@@ -8,6 +8,7 @@ use crate::index::VectorIndex;
 use crate::point::Point;
 use crate::quantization::StorageMode;
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 
 use std::collections::BTreeMap;
 
@@ -41,12 +42,7 @@ impl Collection {
         drop(config);
 
         for point in &points {
-            if point.dimension() != dimension {
-                return Err(Error::DimensionMismatch {
-                    expected: dimension,
-                    actual: point.dimension(),
-                });
-            }
+            validate_dimension_match(dimension, point.dimension())?;
         }
 
         // Buffer sparse data for batch insert after storage locks are released.
@@ -253,12 +249,7 @@ impl Collection {
         drop(config);
 
         for point in points {
-            if point.dimension() != dimension {
-                return Err(Error::DimensionMismatch {
-                    expected: dimension,
-                    actual: point.dimension(),
-                });
-            }
+            validate_dimension_match(dimension, point.dimension())?;
         }
 
         // Perf: Collect vectors for parallel HNSW insertion (needed for clone anyway)
