@@ -401,7 +401,11 @@ impl CompactionContext<'_> {
         // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
         self.index.replace_all(new_index);
-        self.next_offset.store(new_offset, Ordering::Relaxed);
+        // Reason: Release ordering pairs with the Acquire loads in
+        // `should_compact` and `compact` to ensure readers on ARM/weak-memory
+        // architectures observe the updated mmap and index before seeing the
+        // new offset value.
+        self.next_offset.store(new_offset, Ordering::Release);
 
         // 8. Write compaction marker to WAL
         {
