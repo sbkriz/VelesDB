@@ -78,6 +78,16 @@ use std::collections::HashSet;
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 const MAX_LIMIT: usize = 100_000;
 
+/// Context for early-return query paths (NOT-similarity, union).
+struct EarlyReturnCtx<'a> {
+    stmt: &'a crate::velesql::SelectStatement,
+    params: &'a std::collections::HashMap<String, serde_json::Value>,
+    cond: &'a crate::velesql::Condition,
+    has_graph_predicates: bool,
+    limit: usize,
+    ctx: &'a crate::guardrails::QueryContext,
+}
+
 /// Extracted query components from the WHERE clause.
 struct ExtractedComponents {
     vector_search: Option<Vec<f32>>,
@@ -335,16 +345,20 @@ impl Collection {
             limit
         };
 
+        let early_ctx = EarlyReturnCtx {
+            stmt,
+            params,
+            cond,
+            has_graph_predicates,
+            limit,
+            ctx,
+        };
+
         // EPIC-044 US-003: NOT similarity() requires full scan
         if extracted.is_not_similarity_query {
             let results = self.execute_early_return_query(
                 |s| s.execute_not_similarity_query(cond, params, execution_limit),
-                stmt,
-                params,
-                cond,
-                has_graph_predicates,
-                limit,
-                ctx,
+                &early_ctx,
             )?;
             return Ok(Some(results));
         }
@@ -352,41 +366,35 @@ impl Collection {
         // EPIC-044 US-002: Union mode for similarity() OR metadata
         let results = self.execute_early_return_query(
             |s| s.execute_union_query(cond, params, execution_limit),
-            stmt,
-            params,
-            cond,
-            has_graph_predicates,
-            limit,
-            ctx,
+            &early_ctx,
         )?;
         Ok(Some(results))
     }
 
     /// Executes an early-return query path with guard-rail checks and post-processing.
-    #[allow(clippy::too_many_arguments)]
     fn execute_early_return_query(
         &self,
         execute_fn: impl FnOnce(&Self) -> Result<Vec<SearchResult>>,
-        stmt: &crate::velesql::SelectStatement,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        cond: &crate::velesql::Condition,
-        has_graph_predicates: bool,
-        limit: usize,
-        ctx: &crate::guardrails::QueryContext,
+        early: &EarlyReturnCtx<'_>,
     ) -> Result<Vec<SearchResult>> {
         let mut results =
             execute_fn(self).inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-        if has_graph_predicates {
+        if early.has_graph_predicates {
             results = self
-                .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
+                .apply_where_condition_to_results(
+                    results,
+                    early.cond,
+                    early.params,
+                    &early.stmt.from_alias,
+                )
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         }
-        if let Some(ref order_by) = stmt.order_by {
-            self.apply_order_by(&mut results, order_by, params)
+        if let Some(ref order_by) = early.stmt.order_by {
+            self.apply_order_by(&mut results, order_by, early.params)
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         }
-        results.truncate(limit);
-        self.check_guardrails_and_record(ctx, results.len())?;
+        results.truncate(early.limit);
+        self.check_guardrails_and_record(early.ctx, results.len())?;
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
@@ -507,6 +515,25 @@ impl Collection {
             })
     }
 
+    /// Computes the CBO execution strategy and over-fetch factor for the query.
+    fn compute_cbo_strategy(
+        &self,
+        filter_condition: Option<&crate::velesql::Condition>,
+        limit: usize,
+    ) -> (crate::velesql::ExecutionStrategy, usize) {
+        let col_stats = self.get_stats();
+        let result = self.query_planner.choose_strategy_with_cbo_and_overfetch(
+            &col_stats,
+            filter_condition,
+            limit,
+        );
+        tracing::debug!(
+            strategy = ?result.0, over_fetch = result.1,
+            "CBO selected execution strategy"
+        );
+        result
+    }
+
     /// Dispatches the main SELECT query path (vector, similarity, metadata).
     fn dispatch_main_select(
         &self,
@@ -532,19 +559,8 @@ impl Collection {
             .as_ref()
             .and_then(crate::velesql::WithClause::get_ef_search);
         let first_similarity = extracted.similarity_conditions.first().cloned();
-
-        let (cbo_strategy, cbo_over_fetch) = {
-            let col_stats = self.get_stats();
-            self.query_planner.choose_strategy_with_cbo_and_overfetch(
-                &col_stats,
-                extracted.filter_condition.as_ref(),
-                limit,
-            )
-        };
-        tracing::debug!(
-            strategy = ?cbo_strategy, over_fetch = cbo_over_fetch,
-            "CBO selected execution strategy"
-        );
+        let (cbo_strategy, cbo_over_fetch) =
+            self.compute_cbo_strategy(extracted.filter_condition.as_ref(), limit);
 
         let mut results = self
             .dispatch_vector_query(

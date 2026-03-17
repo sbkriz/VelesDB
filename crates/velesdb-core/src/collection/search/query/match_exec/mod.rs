@@ -91,6 +91,15 @@ pub fn parse_property_path(expression: &str) -> Option<(&str, &str)> {
     Some((alias, property))
 }
 
+/// Context for collecting single-node pattern results (no relationships).
+struct SingleNodeCtx<'a> {
+    match_clause: &'a MatchClause,
+    params: &'a HashMap<String, serde_json::Value>,
+    seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
+    all_results: &'a mut Vec<MatchResult>,
+    limit: usize,
+}
+
 impl Collection {
     /// Executes a MATCH query on this collection (EPIC-045 US-002).
     ///
@@ -173,14 +182,14 @@ impl Collection {
             }
 
             if pattern.relationships.is_empty() {
-                self.collect_single_node_results(
-                    &start_nodes,
+                let mut ctx = SingleNodeCtx {
                     match_clause,
                     params,
-                    &mut seen_pairs,
-                    &mut all_results,
+                    seen_pairs: &mut seen_pairs,
+                    all_results: &mut all_results,
                     limit,
-                )?;
+                };
+                self.collect_single_node_results(&start_nodes, &mut ctx)?;
                 continue;
             }
 
@@ -249,30 +258,31 @@ impl Collection {
     fn collect_single_node_results(
         &self,
         start_nodes: &[(u64, HashMap<String, u64>)],
-        match_clause: &MatchClause,
-        params: &HashMap<String, serde_json::Value>,
-        seen_pairs: &mut std::collections::HashSet<(u64, u64)>,
-        all_results: &mut Vec<MatchResult>,
-        limit: usize,
+        ctx: &mut SingleNodeCtx<'_>,
     ) -> Result<()> {
         for (node_id, bindings) in start_nodes {
-            if all_results.len() >= limit {
+            if ctx.all_results.len() >= ctx.limit {
                 break;
             }
-            if let Some(ref where_clause) = match_clause.where_clause {
-                if !self.evaluate_where_condition(*node_id, Some(bindings), where_clause, params)? {
+            if let Some(ref where_clause) = ctx.match_clause.where_clause {
+                if !self.evaluate_where_condition(
+                    *node_id,
+                    Some(bindings),
+                    where_clause,
+                    ctx.params,
+                )? {
                     continue;
                 }
             }
-            if seen_pairs.contains(&(*node_id, *node_id)) {
+            if ctx.seen_pairs.contains(&(*node_id, *node_id)) {
                 continue;
             }
-            seen_pairs.insert((*node_id, *node_id));
+            ctx.seen_pairs.insert((*node_id, *node_id));
 
             let mut result = MatchResult::new(*node_id, 0, Vec::new());
             result.bindings.clone_from(bindings);
-            result.projected = self.project_properties(bindings, &match_clause.return_clause);
-            all_results.push(result);
+            result.projected = self.project_properties(bindings, &ctx.match_clause.return_clause);
+            ctx.all_results.push(result);
         }
         Ok(())
     }

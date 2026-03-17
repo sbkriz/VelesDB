@@ -59,12 +59,9 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<HashMap<GroupKey, Aggregator>> {
         let where_clause = stmt.where_clause.as_ref();
-        let use_runtime_where_eval = where_clause.is_some_and(|cond| {
-            Self::condition_contains_graph_match(cond) || Self::condition_requires_vector_eval(cond)
-        });
+        let use_runtime = Self::needs_runtime_where_eval(where_clause);
         let needs_vector_eval = where_clause.is_some_and(Self::condition_requires_vector_eval);
-
-        let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params);
+        let filter = Self::build_static_filter(where_clause, use_runtime, params);
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
         let payload_storage = self.payload_storage.read();
@@ -75,17 +72,15 @@ impl Collection {
 
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
-
-            let passes = if use_runtime_where_eval {
-                self.runtime_where_passes(
-                    id,
-                    payload.as_ref(),
-                    &*vector_storage,
+            let passes = if use_runtime {
+                let mut rt_ctx = super::RuntimeWhereCtx {
+                    vector_storage: &*vector_storage,
                     stmt,
                     params,
                     needs_vector_eval,
-                    &mut graph_cache,
-                )?
+                    graph_cache: &mut graph_cache,
+                };
+                self.runtime_where_passes(id, payload.as_ref(), &mut rt_ctx)?
             } else if let Some(ref f) = filter {
                 Self::payload_passes_filter(f, payload.as_ref())
             } else {
@@ -94,7 +89,6 @@ impl Collection {
             if !passes {
                 continue;
             }
-
             Self::insert_into_group(
                 &mut groups,
                 payload.as_ref(),
@@ -106,6 +100,13 @@ impl Collection {
         }
 
         Ok(groups)
+    }
+
+    /// Checks whether runtime WHERE evaluation is needed for the given clause.
+    fn needs_runtime_where_eval(where_clause: Option<&crate::velesql::Condition>) -> bool {
+        where_clause.is_some_and(|cond| {
+            Self::condition_contains_graph_match(cond) || Self::condition_requires_vector_eval(cond)
+        })
     }
 
     /// Builds a static `Filter` from the WHERE clause when runtime eval is not needed.

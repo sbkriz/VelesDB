@@ -98,6 +98,27 @@ impl PartialEq for GroupKey {
 
 impl Eq for GroupKey {}
 
+/// Context for runtime WHERE evaluation during aggregation.
+pub(super) struct RuntimeWhereCtx<'a> {
+    pub(super) vector_storage: &'a dyn VectorStorage,
+    pub(super) stmt: &'a crate::velesql::SelectStatement,
+    pub(super) params: &'a HashMap<String, serde_json::Value>,
+    pub(super) needs_vector_eval: bool,
+    pub(super) graph_cache: &'a mut GraphMatchEvalCache,
+}
+
+/// Context for sequential aggregation over a set of IDs.
+struct SequentialAggCtx<'a> {
+    payload_storage: &'a dyn PayloadStorage,
+    vector_storage: &'a dyn VectorStorage,
+    stmt: &'a crate::velesql::SelectStatement,
+    params: &'a HashMap<String, serde_json::Value>,
+    filter: Option<&'a crate::filter::Filter>,
+    columns_to_aggregate: &'a [String],
+    has_count_star: bool,
+    use_runtime_where_eval: bool,
+}
+
 /// Threshold for switching to parallel aggregation.
 /// Below this, sequential is faster due to overhead.
 const PARALLEL_THRESHOLD: usize = 10_000;
@@ -192,17 +213,17 @@ impl Collection {
                 has_count_star,
             ))
         } else {
-            self.aggregate_sequential(
-                &ids,
-                &*payload_storage,
-                &*vector_storage,
+            let ctx = SequentialAggCtx {
+                payload_storage: &*payload_storage,
+                vector_storage: &*vector_storage,
                 stmt,
                 params,
-                filter.as_ref(),
-                &columns_vec,
+                filter: filter.as_ref(),
+                columns_to_aggregate: &columns_vec,
                 has_count_star,
                 use_runtime_where_eval,
-            )
+            };
+            self.aggregate_sequential(&ids, &ctx)
         }
     }
 
@@ -288,51 +309,39 @@ impl Collection {
     }
 
     /// Evaluates runtime WHERE for a single record, returning whether it passes.
-    #[allow(clippy::too_many_arguments)]
-    fn runtime_where_passes(
+    pub(super) fn runtime_where_passes(
         &self,
         id: u64,
         payload: Option<&serde_json::Value>,
-        vector_storage: &dyn VectorStorage,
-        stmt: &crate::velesql::SelectStatement,
-        params: &HashMap<String, serde_json::Value>,
-        needs_vector_eval: bool,
-        graph_cache: &mut GraphMatchEvalCache,
+        ctx: &mut RuntimeWhereCtx<'_>,
     ) -> Result<bool> {
-        let vector = if needs_vector_eval {
-            vector_storage.retrieve(id).ok().flatten()
+        let vector = if ctx.needs_vector_eval {
+            ctx.vector_storage.retrieve(id).ok().flatten()
         } else {
             None
         };
-        match stmt.where_clause.as_ref() {
+        match ctx.stmt.where_clause.as_ref() {
             Some(cond) => self.evaluate_where_condition_for_record(
                 cond,
                 id,
                 payload,
                 vector.as_deref(),
-                params,
-                &stmt.from_alias,
-                graph_cache,
+                ctx.params,
+                &ctx.stmt.from_alias,
+                ctx.graph_cache,
             ),
             None => Ok(true),
         }
     }
 
     /// Sequential aggregation with optional runtime WHERE evaluation.
-    #[allow(clippy::too_many_arguments)]
     fn aggregate_sequential(
         &self,
         ids: &[u64],
-        payload_storage: &dyn PayloadStorage,
-        vector_storage: &dyn VectorStorage,
-        stmt: &crate::velesql::SelectStatement,
-        params: &HashMap<String, serde_json::Value>,
-        filter: Option<&crate::filter::Filter>,
-        columns_to_aggregate: &[String],
-        has_count_star: bool,
-        use_runtime_where_eval: bool,
+        ctx: &SequentialAggCtx<'_>,
     ) -> Result<crate::velesql::AggregateResult> {
-        let needs_vector_eval = stmt
+        let needs_vector_eval = ctx
+            .stmt
             .where_clause
             .as_ref()
             .is_some_and(Self::condition_requires_vector_eval);
@@ -340,19 +349,18 @@ impl Collection {
         let mut graph_cache = GraphMatchEvalCache::default();
 
         for &id in ids {
-            let payload = payload_storage.retrieve(id).ok().flatten();
+            let payload = ctx.payload_storage.retrieve(id).ok().flatten();
 
-            let passes = if use_runtime_where_eval {
-                self.runtime_where_passes(
-                    id,
-                    payload.as_ref(),
-                    vector_storage,
-                    stmt,
-                    params,
+            let passes = if ctx.use_runtime_where_eval {
+                let mut where_ctx = RuntimeWhereCtx {
+                    vector_storage: ctx.vector_storage,
+                    stmt: ctx.stmt,
+                    params: ctx.params,
                     needs_vector_eval,
-                    &mut graph_cache,
-                )?
-            } else if let Some(f) = filter {
+                    graph_cache: &mut graph_cache,
+                };
+                self.runtime_where_passes(id, payload.as_ref(), &mut where_ctx)?
+            } else if let Some(f) = ctx.filter {
                 Self::payload_passes_filter(f, payload.as_ref())
             } else {
                 true
@@ -364,8 +372,8 @@ impl Collection {
             Self::accumulate_record(
                 &mut aggregator,
                 payload.as_ref(),
-                columns_to_aggregate,
-                has_count_star,
+                ctx.columns_to_aggregate,
+                ctx.has_count_star,
             );
         }
         Ok(aggregator.finalize())

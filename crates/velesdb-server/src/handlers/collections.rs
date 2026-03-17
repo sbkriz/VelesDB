@@ -111,6 +111,42 @@ fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response
     }
 }
 
+/// Create a vector collection, requiring a dimension in the request.
+#[allow(clippy::result_large_err)]
+fn create_vector_collection(
+    state: &AppState,
+    req: &CreateCollectionRequest,
+    metric: DistanceMetric,
+    storage_mode: StorageMode,
+) -> Result<velesdb_core::error::Result<()>, axum::response::Response> {
+    let dimension = req.dimension.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "dimension is required for vector collections".to_string(),
+            }),
+        )
+            .into_response()
+    })?;
+    if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
+        Ok(state.db.create_vector_collection_with_hnsw(
+            &req.name,
+            dimension,
+            metric,
+            storage_mode,
+            req.hnsw_m,
+            req.hnsw_ef_construction,
+        ))
+    } else {
+        Ok(state.db.create_vector_collection_with_options(
+            &req.name,
+            dimension,
+            metric,
+            storage_mode,
+        ))
+    }
+}
+
 /// Dispatch collection creation based on `collection_type`.
 #[allow(clippy::result_large_err)]
 fn dispatch_create(
@@ -129,34 +165,7 @@ fn dispatch_create(
                 .db
                 .create_graph_collection(&req.name, GraphSchema::schemaless()))
         }
-        "vector" | "" => {
-            let dimension = req.dimension.ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "dimension is required for vector collections".to_string(),
-                    }),
-                )
-                    .into_response()
-            })?;
-            if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
-                Ok(state.db.create_vector_collection_with_hnsw(
-                    &req.name,
-                    dimension,
-                    metric,
-                    storage_mode,
-                    req.hnsw_m,
-                    req.hnsw_ef_construction,
-                ))
-            } else {
-                Ok(state.db.create_vector_collection_with_options(
-                    &req.name,
-                    dimension,
-                    metric,
-                    storage_mode,
-                ))
-            }
-        }
+        "vector" | "" => create_vector_collection(state, req, metric, storage_mode),
         _ => Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
