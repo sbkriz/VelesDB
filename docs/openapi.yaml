@@ -1176,11 +1176,11 @@ paths:
     get:
       tags:
       - health
-      summary: Health check endpoint.
+      summary: Liveness probe — always returns 200 OK.
       operationId: health_check
       responses:
         '200':
-          description: Server is healthy
+          description: Server is alive
           content:
             application/json:
               schema:
@@ -1257,6 +1257,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VelesqlErrorResponse'
+  /ready:
+    get:
+      tags:
+      - health
+      summary: Readiness probe — returns 200 when the database is fully loaded, 503 otherwise.
+      operationId: readiness_check
+      responses:
+        '200':
+          description: Server is ready to accept requests
+          content:
+            application/json:
+              schema:
+                type: object
+        '503':
+          description: Server is not yet ready
+          content:
+            application/json:
+              schema:
+                type: object
 components:
   schemas:
     AddEdgeRequest:

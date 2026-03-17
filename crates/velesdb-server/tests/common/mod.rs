@@ -14,13 +14,14 @@ use velesdb_server::{
     auth::{auth_middleware, AuthState},
     batch_search, collection_sanity, create_collection, delete_collection, delete_point, explain,
     get_collection, get_edges, get_node_degree, get_point, health_check, hybrid_search,
-    list_collections, query, search, search_ids, stream_upsert_points, text_search, traverse_graph,
-    upsert_points, AppState, OnboardingMetrics,
+    list_collections, query, readiness_check, search, search_ids, stream_upsert_points,
+    text_search, traverse_graph, upsert_points, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
+        .route("/ready", get(readiness_check))
         .route(
             "/collections",
             get(list_collections).post(create_collection),
@@ -64,6 +65,7 @@ fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
         query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
+        ready: std::sync::atomic::AtomicBool::new(true),
     })
 }
 

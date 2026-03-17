@@ -111,7 +111,7 @@ async fn test_auth_health_endpoint_bypasses_auth() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["status"], "healthy");
+    assert_eq!(json["status"], "ok");
 }
 
 // ============================================================================

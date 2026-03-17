@@ -36,7 +36,7 @@ async fn test_health_check() {
         .expect("Failed to read body");
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
 
-    assert_eq!(json["status"], "healthy");
+    assert_eq!(json["status"], "ok");
 }
 
 #[tokio::test]

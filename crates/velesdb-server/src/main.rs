@@ -32,9 +32,9 @@ use velesdb_server::{
     create_collection, create_index, delete_collection, delete_index, delete_point, explain,
     flush_collection, get_collection, get_collection_config, get_collection_stats, get_edges,
     get_guardrails, get_node_degree, get_point, health_check, hybrid_search, is_empty,
-    list_collections, list_indexes, match_query, multi_query_search, query, search, search_ids,
-    stream_insert, stream_traverse, stream_upsert_points, text_search, traverse_graph,
-    update_guardrails, upsert_points, AppState, OnboardingMetrics,
+    list_collections, list_indexes, match_query, multi_query_search, query, readiness_check,
+    search, search_ids, stream_insert, stream_traverse, stream_upsert_points, text_search,
+    traverse_graph, update_guardrails, upsert_points, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -95,16 +95,23 @@ fn log_startup(cfg: &ServerConfig) {
 
 fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
     let db = Database::open(data_dir)?;
-    Ok(Arc::new(AppState {
+    let state = Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
         query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
-    }))
+        ready: std::sync::atomic::AtomicBool::new(false),
+    });
+    // Database loaded successfully — mark server as ready
+    state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(state)
 }
 
 fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
+        .route("/ready", get(readiness_check))
         .route(
             "/collections",
             get(list_collections).post(create_collection),

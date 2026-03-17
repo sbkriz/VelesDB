@@ -30,7 +30,7 @@ pub mod tls;
 mod handlers;
 mod types;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use utoipa::OpenApi;
 use velesdb_core::guardrails::QueryLimits;
 use velesdb_core::Database;
@@ -44,8 +44,8 @@ pub use handlers::{
     create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
     get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, search, search_ids, stream_insert, stream_upsert_points,
-    text_search, update_guardrails, upsert_points,
+    multi_query_search, query, readiness_check, search, search_ids, stream_insert,
+    stream_upsert_points, text_search, update_guardrails, upsert_points,
 };
 
 // Graph handlers (EPIC-016/US-031)
@@ -89,6 +89,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
     ),
     paths(
         handlers::health::health_check,
+        handlers::health::readiness_check,
         handlers::collections::list_collections,
         handlers::collections::create_collection,
         handlers::collections::get_collection,
@@ -198,6 +199,8 @@ pub struct AppState {
     pub onboarding_metrics: OnboardingMetrics,
     /// Query guard-rails configuration (EPIC-048).
     pub query_limits: parking_lot::RwLock<QueryLimits>,
+    /// Readiness flag — `true` once the database is fully loaded.
+    pub ready: AtomicBool,
 }
 
 /// Lightweight counters for first-hour troubleshooting diagnostics.

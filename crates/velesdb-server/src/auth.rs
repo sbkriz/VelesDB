@@ -37,7 +37,7 @@ impl AuthState {
 
 /// Paths that bypass authentication.
 fn is_public_path(path: &str) -> bool {
-    path == "/health"
+    path == "/health" || path == "/ready"
 }
 
 /// Extract the Bearer token from the Authorization header value.
@@ -121,6 +121,11 @@ mod tests {
     #[test]
     fn test_is_public_path_health() {
         assert!(is_public_path("/health"));
+    }
+
+    #[test]
+    fn test_is_public_path_ready() {
+        assert!(is_public_path("/ready"));
     }
 
     #[test]
