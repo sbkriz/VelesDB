@@ -14,13 +14,13 @@ $envPath = if (Test-Path $EnvFile) {
 } elseif (Test-Path (Join-Path $projectRoot ".env")) {
     Join-Path $projectRoot ".env"
 } else {
-    Write-Host "❌ No .env file found" -ForegroundColor Red
-    Write-Host "   Create one from .env.example:" -ForegroundColor Yellow
-    Write-Host "   Copy-Item .env.example .env" -ForegroundColor Gray
+    Write-Output "No .env file found"
+    Write-Output "   Create one from .env.example:"
+    Write-Output "   Copy-Item .env.example .env"
     return
 }
 
-Write-Host "📁 Loading environment from: $envPath" -ForegroundColor Cyan
+Write-Output "Loading environment from: $envPath"
 
 # Parse and set environment variables
 Get-Content $envPath | ForEach-Object {
@@ -29,12 +29,12 @@ Get-Content $envPath | ForEach-Object {
         $value = $matches[2].Trim()
         if ($value -and $value -ne "your-service-role-key" -and $value -notlike "*YOUR_PROJECT*") {
             Set-Item -Path "env:$name" -Value $value
-            Write-Host "   ✅ $name" -ForegroundColor Green
+            Write-Output "   Set: $name"
         }
     }
 }
 
-Write-Host ""
-Write-Host "🚀 Ready to test! Run:" -ForegroundColor Cyan
-Write-Host "   cargo test -p velesdb-migrate --test integration_test -- --ignored --nocapture" -ForegroundColor Gray
-Write-Host "   cargo bench -p velesdb-migrate" -ForegroundColor Gray
+Write-Output ""
+Write-Output "Ready to test! Run:"
+Write-Output "   cargo test -p velesdb-migrate --test integration_test -- --ignored --nocapture"
+Write-Output "   cargo bench -p velesdb-migrate"

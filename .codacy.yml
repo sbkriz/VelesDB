@@ -22,6 +22,8 @@ exclude_paths:
   # limits don't apply to test harnesses, unsafe is used for test fixtures.
   # Test quality is enforced by `cargo test`, not static analysis.
   - "crates/**/src/**/*_tests.rs"
+  - "crates/**/src/**/*_test.rs"
+  - "crates/**/src/**/tests.rs"
   - "crates/**/tests/**"
   # Benchmark harnesses (criterion) — perf code, not production
   - "crates/**/benches/**"
@@ -65,3 +67,18 @@ exclude_paths:
   - "crates/velesdb-python/**"
   - "crates/velesdb-mobile/**"
   - "crates/velesdb-wasm/**"
+
+# ---------------------------------------------------------------------------
+# Per-engine exclusions — targeted suppression without losing other checks
+# ---------------------------------------------------------------------------
+engines:
+  metrics:
+    # Idiomatic Rust patterns with legitimate complexity above threshold.
+    # These files are still analyzed by all OTHER Codacy tools (security,
+    # duplication, style) — only complexity/NLOC metrics are excluded.
+    exclude_paths:
+      # evaluate_where_condition dispatches over Condition enum arms via
+      # pattern matching — inherently branchy, most readable form in Rust.
+      # Complexity 9 (limit 8) after genuine design review: splitting would
+      # degrade clarity. Covered by clippy::pedantic in CI.
+      - "crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs"

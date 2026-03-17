@@ -44,104 +44,7 @@ fn formatting_error_response() -> Response {
 pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let mut output = String::new();
 
-    // Write header comments
-    if writeln!(output, "# VelesDB Prometheus Metrics").is_err() || writeln!(output).is_err() {
-        return formatting_error_response();
-    }
-
-    // Server info
-    if writeln!(output, "# HELP velesdb_info VelesDB server information").is_err()
-        || writeln!(output, "# TYPE velesdb_info gauge").is_err()
-        || writeln!(
-            output,
-            "velesdb_info{{version=\"{}\"}} 1",
-            env!("CARGO_PKG_VERSION")
-        )
-        .is_err()
-        || writeln!(output).is_err()
-    {
-        return formatting_error_response();
-    }
-
-    // velesdb_up gauge
-    if writeln!(output, "# HELP velesdb_up VelesDB server is up and running").is_err()
-        || writeln!(output, "# TYPE velesdb_up gauge").is_err()
-        || writeln!(output, "velesdb_up 1").is_err()
-        || writeln!(output).is_err()
-    {
-        return formatting_error_response();
-    }
-
-    // Plan cache metrics (CACHE-04).
-    let cache_metrics = state.db.plan_cache().metrics();
-    let cache_stats = state.db.plan_cache().stats();
-
-    if writeln!(
-        output,
-        "# HELP velesdb_plan_cache_hits_total Plan cache hits"
-    )
-    .is_err()
-        || writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter").is_err()
-        || writeln!(
-            output,
-            "velesdb_plan_cache_hits_total {}",
-            cache_metrics.hits()
-        )
-        .is_err()
-        || writeln!(output).is_err()
-    {
-        return formatting_error_response();
-    }
-
-    if writeln!(
-        output,
-        "# HELP velesdb_plan_cache_misses_total Plan cache misses"
-    )
-    .is_err()
-        || writeln!(output, "# TYPE velesdb_plan_cache_misses_total counter").is_err()
-        || writeln!(
-            output,
-            "velesdb_plan_cache_misses_total {}",
-            cache_metrics.misses()
-        )
-        .is_err()
-        || writeln!(output).is_err()
-    {
-        return formatting_error_response();
-    }
-
-    if writeln!(
-        output,
-        "# HELP velesdb_plan_cache_size Current number of cached plans"
-    )
-    .is_err()
-        || writeln!(output, "# TYPE velesdb_plan_cache_size gauge").is_err()
-        || writeln!(
-            output,
-            "velesdb_plan_cache_size {}",
-            cache_stats.l1_size + cache_stats.l2_size
-        )
-        .is_err()
-        || writeln!(output).is_err()
-    {
-        return formatting_error_response();
-    }
-
-    if writeln!(
-        output,
-        "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate"
-    )
-    .is_err()
-        || writeln!(output, "# TYPE velesdb_plan_cache_hit_rate gauge").is_err()
-        || writeln!(
-            output,
-            "velesdb_plan_cache_hit_rate {:.4}",
-            cache_metrics.hit_rate()
-        )
-        .is_err()
-        // M-7: trailing blank line for Prometheus text format conformance.
-        || writeln!(output).is_err()
-    {
+    if write_metrics(&mut output, &state).is_err() {
         return formatting_error_response();
     }
 
@@ -151,6 +54,91 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
         output,
     )
         .into_response()
+}
+
+/// Writes all Prometheus metrics to the output buffer.
+fn write_metrics(output: &mut String, state: &AppState) -> std::fmt::Result {
+    writeln!(output, "# VelesDB Prometheus Metrics")?;
+    writeln!(output)?;
+
+    write_server_info(output)?;
+    write_uptime_gauge(output)?;
+
+    let cache_metrics = state.db.plan_cache().metrics();
+    let cache_stats = state.db.plan_cache().stats();
+    write_cache_metrics(output, cache_metrics, &cache_stats)
+}
+
+/// Writes server version info metric.
+fn write_server_info(output: &mut String) -> std::fmt::Result {
+    writeln!(output, "# HELP velesdb_info VelesDB server information")?;
+    writeln!(output, "# TYPE velesdb_info gauge")?;
+    writeln!(
+        output,
+        "velesdb_info{{version=\"{}\"}} 1",
+        env!("CARGO_PKG_VERSION")
+    )?;
+    writeln!(output)
+}
+
+/// Writes the server availability gauge.
+fn write_uptime_gauge(output: &mut String) -> std::fmt::Result {
+    writeln!(output, "# HELP velesdb_up VelesDB server is up and running")?;
+    writeln!(output, "# TYPE velesdb_up gauge")?;
+    writeln!(output, "velesdb_up 1")?;
+    writeln!(output)
+}
+
+/// Writes plan cache counters, size, and hit rate (CACHE-04).
+fn write_cache_metrics(
+    output: &mut String,
+    metrics: &velesdb_core::cache::PlanCacheMetrics,
+    stats: &velesdb_core::cache::LockFreeCacheStats,
+) -> std::fmt::Result {
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_hits_total Plan cache hits"
+    )?;
+    writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter")?;
+    writeln!(output, "velesdb_plan_cache_hits_total {}", metrics.hits())?;
+    writeln!(output)?;
+
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_misses_total Plan cache misses"
+    )?;
+    writeln!(output, "# TYPE velesdb_plan_cache_misses_total counter")?;
+    writeln!(
+        output,
+        "velesdb_plan_cache_misses_total {}",
+        metrics.misses()
+    )?;
+    writeln!(output)?;
+
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_size Current number of cached plans"
+    )?;
+    writeln!(output, "# TYPE velesdb_plan_cache_size gauge")?;
+    writeln!(
+        output,
+        "velesdb_plan_cache_size {}",
+        stats.l1_size + stats.l2_size
+    )?;
+    writeln!(output)?;
+
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate"
+    )?;
+    writeln!(output, "# TYPE velesdb_plan_cache_hit_rate gauge")?;
+    writeln!(
+        output,
+        "velesdb_plan_cache_hit_rate {:.4}",
+        metrics.hit_rate()
+    )?;
+    // M-7: trailing blank line for Prometheus text format conformance.
+    writeln!(output)
 }
 
 /// Simple health metrics for lightweight monitoring.

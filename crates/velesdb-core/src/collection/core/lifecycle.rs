@@ -591,14 +591,17 @@ impl Collection {
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
         self.index.save(&self.path)?;
+        self.flush_secondary_indexes()?;
+        self.flush_sparse_indexes()
+    }
 
-        // Save PropertyIndex (EPIC-009 US-005)
+    /// Persists property index, range index, and edge store (EPIC-009 US-005).
+    fn flush_secondary_indexes(&self) -> Result<()> {
         let property_index_path = self.path.join("property_index.bin");
         self.property_index
             .read()
             .save_to_file(&property_index_path)?;
 
-        // Save RangeIndex (EPIC-009 US-005)
         let range_index_path = self.path.join("range_index.bin");
         self.range_index.read().save_to_file(&range_index_path)?;
 
@@ -608,14 +611,15 @@ impl Collection {
             self.edge_store.read().save_to_file(&edge_store_path)?;
         }
 
-        // Compact all named sparse indexes to disk (EPIC-062 / SPARSE-04)
-        {
-            let indexes = self.sparse_indexes.read();
-            for (name, idx) in indexes.iter() {
-                crate::index::sparse::persistence::compact_named(&self.path, name, idx)?;
-            }
-        }
+        Ok(())
+    }
 
+    /// Compacts all named sparse indexes to disk (EPIC-062 / SPARSE-04).
+    fn flush_sparse_indexes(&self) -> Result<()> {
+        let indexes = self.sparse_indexes.read();
+        for (name, idx) in indexes.iter() {
+            crate::index::sparse::persistence::compact_named(&self.path, name, idx)?;
+        }
         Ok(())
     }
 
