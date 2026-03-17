@@ -1,9 +1,18 @@
 //! Request/Response DTOs for Tauri commands.
 //!
-//! These types are used for communication between the frontend and backend
-//! via Tauri's IPC system.
+//! Shared defaults and result types are imported from `velesdb_core::api_types`.
+//! Tauri-specific types use `#[serde(rename_all = "camelCase")]` for JavaScript
+//! frontend compatibility and include a `collection` context field.
 
 use serde::{Deserialize, Serialize};
+
+// Re-export shared defaults from core for use in serde attributes.
+pub use velesdb_core::api_types::{
+    default_metric, default_storage_mode, default_top_k, default_vector_weight,
+};
+
+// Re-export the canonical search result type (single-word fields: camelCase-safe).
+pub use velesdb_core::api_types::SearchResultResponse;
 
 // ============================================================================
 // Request DTOs
@@ -197,7 +206,7 @@ pub struct MultiQuerySearchRequest {
     /// Fusion strategy: "rrf", "average", "maximum", "weighted".
     #[serde(default = "default_fusion")]
     pub fusion: String,
-    /// Fusion parameters (e.g., {"k": 60} for RRF, {"avgWeight": 0.6, ...} for weighted).
+    /// Fusion parameters (e.g., {"k": 60} for RRF).
     #[serde(default)]
     pub fusion_params: Option<serde_json::Value>,
     /// Optional metadata filter.
@@ -206,9 +215,6 @@ pub struct MultiQuerySearchRequest {
 }
 
 /// Request for sparse vector search.
-///
-/// Sparse vectors use JSON string keys (`"42": 0.8`) because JSON only
-/// supports string keys. Keys are parsed to `u32` in the command handler.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SparseSearchRequest {
@@ -219,7 +225,7 @@ pub struct SparseSearchRequest {
     /// Number of results.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
-    /// Optional sparse index name (empty string or omitted for default).
+    /// Optional sparse index name.
     #[serde(default)]
     pub index_name: Option<String>,
 }
@@ -249,7 +255,7 @@ pub struct SparsePointInput {
     pub vector: Vec<f32>,
     /// Optional payload (JSON object).
     pub payload: Option<serde_json::Value>,
-    /// Optional sparse vector as `{ "dim_index": weight, ... }`.
+    /// Optional sparse vector.
     #[serde(default)]
     pub sparse_vector: Option<std::collections::HashMap<String, f32>>,
 }
@@ -260,11 +266,11 @@ pub struct SparsePointInput {
 pub struct SparseUpsertRequest {
     /// Collection name.
     pub collection: String,
-    /// Points to upsert (with optional sparse vectors).
+    /// Points to upsert.
     pub points: Vec<SparsePointInput>,
 }
 
-/// Request to train a Product Quantizer on a collection.
+/// Request to train a Product Quantizer.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrainPqRequest {
@@ -311,7 +317,7 @@ pub struct CollectionInfo {
     pub storage_mode: String,
 }
 
-/// Search result.
+/// Search result (camelCase wrapper over canonical `SearchResultResponse`).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {
@@ -323,7 +329,7 @@ pub struct SearchResult {
     pub payload: Option<serde_json::Value>,
 }
 
-/// Multi-model query result (EPIC-031 US-012).
+/// Multi-model query result.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridResult {
@@ -374,32 +380,18 @@ pub struct SearchResponse {
 }
 
 // ============================================================================
-// Default value functions
+// Default value functions (Tauri-specific)
 // ============================================================================
-
-#[must_use]
-pub fn default_metric() -> String {
-    "cosine".to_string()
-}
-
-#[must_use]
-pub fn default_storage_mode() -> String {
-    "full".to_string()
-}
-
-#[must_use]
-pub const fn default_top_k() -> usize {
-    10
-}
-
-#[must_use]
-pub const fn default_vector_weight() -> f32 {
-    0.5
-}
 
 #[must_use]
 pub fn default_fusion() -> String {
     "rrf".to_string()
+}
+
+/// Default dimension for agent memory (384 for typical sentence transformers).
+#[must_use]
+pub const fn default_dimension() -> usize {
+    384
 }
 
 // ============================================================================
@@ -475,12 +467,6 @@ pub struct EpisodicResult {
     pub timestamp: u64,
     /// Optional context.
     pub context: Option<serde_json::Value>,
-}
-
-/// Default dimension for agent memory (384 for typical sentence transformers).
-#[must_use]
-pub const fn default_dimension() -> usize {
-    384
 }
 
 // ============================================================================

@@ -6,6 +6,8 @@
 
 use std::io;
 
+use super::QuantizationCodec;
+
 /// A quantized vector using 8-bit scalar quantization.
 ///
 /// Each f32 value is mapped to a u8 (0-255) using min/max scaling.
@@ -89,9 +91,10 @@ impl QuantizedVector {
         self.data.len() + 8 // data + min(4) + max(4)
     }
 
-    /// Serializes the quantized vector to bytes.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
+}
+
+impl QuantizationCodec for QuantizedVector {
+    fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(8 + self.data.len());
         bytes.extend_from_slice(&self.min.to_le_bytes());
         bytes.extend_from_slice(&self.max.to_le_bytes());
@@ -99,12 +102,7 @@ impl QuantizedVector {
         bytes
     }
 
-    /// Deserializes a quantized vector from bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the bytes are invalid.
-    pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
+    fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() < 8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

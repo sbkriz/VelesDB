@@ -347,6 +347,9 @@ impl Collection {
                 || {
                     self.search_ids(dense_vector, candidate_k)
                         .unwrap_or_default()
+                        .into_iter()
+                        .map(Into::into)
+                        .collect()
                 },
                 || {
                     if let Some(filter) = metadata_filter {
@@ -377,9 +380,12 @@ impl Collection {
         #[cfg(not(feature = "persistence"))]
         {
             // Sequential fallback (no rayon).
-            let dense = self
+            let dense: Vec<(u64, f32)> = self
                 .search_ids(dense_vector, candidate_k)
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect();
             let sparse = if let Some(filter) = metadata_filter {
                 // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
                 let payload_storage = self.payload_storage.read();

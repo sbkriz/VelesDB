@@ -5,6 +5,7 @@
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::params::SearchQuality;
+use crate::scored_result::ScoredResult;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -62,15 +63,15 @@ impl HnswIndex {
     }
 
     /// Performs HNSW-only search (no reranking).
-    fn search_hnsw_only(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(u64, f32)> {
+    fn search_hnsw_only(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<ScoredResult> {
         let inner = self.inner.read();
         let neighbours = inner.search(query, k, ef_search);
 
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
         for n in &neighbours {
             if let Some(id) = self.mappings.get_id(n.d_id) {
                 let score = inner.transform_score(n.distance);
-                results.push((id, score));
+                results.push(ScoredResult::new(id, score));
             }
         }
         results
@@ -161,7 +162,7 @@ impl HnswIndex {
         query: &[f32],
         k: usize,
         quality: SearchQuality,
-    ) -> Vec<(u64, f32)> {
+    ) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
         // Perfect mode uses brute-force SIMD for guaranteed 100% recall
@@ -196,7 +197,7 @@ impl HnswIndex {
     ///
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
-    pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_k: usize) -> Vec<(u64, f32)> {
+    pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_k: usize) -> Vec<ScoredResult> {
         let ef_search = SearchQuality::Accurate.ef_search(rerank_k);
         let adaptive_rerank_k = self
             .should_two_stage_rerank(SearchQuality::Accurate, k, ef_search)
@@ -210,7 +211,7 @@ impl HnswIndex {
         k: usize,
         rerank_k: usize,
         ef_search: usize,
-    ) -> Vec<(u64, f32)> {
+    ) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
         // 1. Get candidates from HNSW (fast approximate search)
@@ -223,11 +224,10 @@ impl HnswIndex {
         let rerank_start = Instant::now();
 
         // 2. Re-rank using SIMD-optimized exact distance computation
-        let reranked = self.rerank_candidates(query, &candidates);
+        let mut reranked = self.rerank_candidates(query, &candidates);
 
         // 3. Sort, truncate, and update latency EMA
-        let mut reranked = reranked;
-        self.metric.sort_results(&mut reranked);
+        self.metric.sort_scored_results(&mut reranked);
         reranked.truncate(k);
 
         let elapsed_micros = rerank_start.elapsed().as_micros();
@@ -248,7 +248,7 @@ impl HnswIndex {
         k: usize,
         rerank_k: usize,
         initial_quality: SearchQuality,
-    ) -> Vec<(u64, f32)> {
+    ) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
         // 1. Get candidates from HNSW with specified quality
@@ -270,7 +270,7 @@ impl HnswIndex {
         let mut reranked = self.rerank_candidates(query, &candidates);
 
         // 3. Sort, truncate, and update latency EMA
-        self.metric.sort_results(&mut reranked);
+        self.metric.sort_scored_results(&mut reranked);
         reranked.truncate(k);
 
         let elapsed_micros = rerank_start.elapsed().as_micros();
@@ -285,21 +285,21 @@ impl HnswIndex {
     /// `ContiguousVectors` (64-byte aligned, cache-friendly) instead of
     /// cloning via `ShardedVectors::get()`. Eliminates ~600KB of allocations
     /// per search for k=100 × dim=1536.
-    fn rerank_candidates(&self, query: &[f32], candidates: &[(u64, f32)]) -> Vec<(u64, f32)> {
+    fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
         let inner = self.inner.read();
 
         inner.with_contiguous_vectors(|vectors| {
             // Resolve external IDs → internal indices (no vector cloning)
             let candidate_indices: Vec<(u64, usize)> = candidates
                 .iter()
-                .filter_map(|(id, _)| {
-                    let idx = self.mappings.get_idx(*id)?;
-                    Some((*id, idx))
+                .filter_map(|sr| {
+                    let idx = self.mappings.get_idx(sr.id)?;
+                    Some((sr.id, idx))
                 })
                 .collect();
 
             let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-            let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_indices.len());
+            let mut reranked: Vec<ScoredResult> = Vec::with_capacity(candidate_indices.len());
 
             for (i, &(id, idx)) in candidate_indices.iter().enumerate() {
                 // Prefetch upcoming vectors from contiguous storage
@@ -310,7 +310,7 @@ impl HnswIndex {
                 // Zero-copy: get &[f32] slice directly from ContiguousVectors
                 if let Some(vec) = vectors.get(idx) {
                     let exact_dist = self.compute_distance(query, vec);
-                    reranked.push((id, exact_dist));
+                    reranked.push(ScoredResult::new(id, exact_dist));
                 }
             }
 

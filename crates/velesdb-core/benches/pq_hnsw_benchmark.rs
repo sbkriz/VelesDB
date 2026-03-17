@@ -67,14 +67,14 @@ fn benchmark_hnsw_recall(c: &mut Criterion) {
         .search_ids(&query, 50)
         .expect("full search")
         .into_iter()
-        .map(|(id, _)| id)
+        .map(|sr| sr.id)
         .collect();
 
     let sq8_recall = sq8
         .search_ids(&query, 50)
         .expect("sq8 search")
         .into_iter()
-        .map(|(id, _)| id)
+        .map(|sr| sr.id)
         .filter(|id| full_top.contains(id))
         .count() as f32
         / 50.0;
@@ -83,7 +83,7 @@ fn benchmark_hnsw_recall(c: &mut Criterion) {
         .search_ids(&query, 50)
         .expect("pq search")
         .into_iter()
-        .map(|(id, _)| id)
+        .map(|sr| sr.id)
         .filter(|id| full_top.contains(id))
         .count() as f32
         / 50.0;

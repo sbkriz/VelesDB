@@ -132,7 +132,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                             for (query, ground_truth) in queries.iter().zip(&ground_truths) {
                                 let results = index.search_with_quality(query, k, quality);
                                 let result_ids: Vec<u64> =
-                                    results.iter().map(|(id, _)| *id).collect();
+                                    results.iter().map(|sr| sr.id).collect();
 
                                 total_recall += recall_at_k(ground_truth, &result_ids);
                                 total_mrr += mrr(ground_truth, &result_ids);
@@ -142,7 +142,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                             let last_query = &queries[0];
                             let last_results = index.search_with_quality(last_query, k, quality);
                             let last_ids: Vec<u64> =
-                                last_results.iter().map(|(id, _)| *id).collect();
+                                last_results.iter().map(|sr| sr.id).collect();
                             let _precision = precision_at_k(&ground_truths[0], &last_ids);
 
                             #[allow(clippy::cast_precision_loss)]
@@ -204,7 +204,7 @@ fn print_recall_stats(c: &mut Criterion) {
         let mut total_recall = 0.0;
         for (query, ground_truth) in queries.iter().zip(&ground_truths) {
             let results = index.search_with_quality(query, k, quality);
-            let result_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+            let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
             total_recall += recall_at_k(ground_truth, &result_ids);
         }
         #[allow(clippy::cast_precision_loss)]
@@ -234,7 +234,7 @@ fn print_recall_stats(c: &mut Criterion) {
 
                 for (query, ground_truth) in queries.iter().zip(&ground_truths) {
                     let results = index.search_with_quality(query, k, quality);
-                    let result_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+                    let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
                     total_recall += recall_at_k(ground_truth, &result_ids);
                 }
 

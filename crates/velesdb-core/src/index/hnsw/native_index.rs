@@ -21,6 +21,7 @@ use super::sharded_mappings::ShardedMappings;
 use super::sharded_vectors::ShardedVectors;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
+use crate::scored_result::ScoredResult;
 use parking_lot::RwLock;
 use std::path::Path;
 
@@ -257,7 +258,7 @@ impl NativeHnswIndex {
     }
 
     /// Searches for the k nearest neighbors.
-    pub fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    pub fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.search_with_quality(query, k, SearchQuality::Balanced)
     }
 
@@ -267,7 +268,7 @@ impl NativeHnswIndex {
         query: &[f32],
         k: usize,
         quality: SearchQuality,
-    ) -> Vec<(u64, f32)> {
+    ) -> Vec<ScoredResult> {
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
         let neighbors = inner.search(query, k, ef_search);
@@ -277,7 +278,7 @@ impl NativeHnswIndex {
             .filter_map(|n| {
                 self.mappings.get_id(n.d_id).map(|id| {
                     let score = inner.transform_score(n.distance);
-                    (id, score)
+                    ScoredResult::new(id, score)
                 })
             })
             .collect()
@@ -416,7 +417,7 @@ impl NativeHnswIndex {
         queries: &[&[f32]],
         k: usize,
         quality: SearchQuality,
-    ) -> Vec<Vec<(u64, f32)>> {
+    ) -> Vec<Vec<ScoredResult>> {
         use rayon::prelude::*;
 
         queries
@@ -445,7 +446,7 @@ impl NativeHnswIndex {
     /// - **Small datasets**: When n < 10k, brute-force may be faster
     /// - **Critical accuracy**: When 100% recall is required
     #[must_use]
-    pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         use rayon::prelude::*;
 
         // Collect all vectors for parallel iteration
@@ -459,17 +460,17 @@ impl NativeHnswIndex {
         let inner = self.inner.read();
 
         // Compute distances in parallel
-        let mut results: Vec<(u64, f32)> = vectors_snapshot
+        let mut results: Vec<ScoredResult> = vectors_snapshot
             .par_iter()
             .filter_map(|(idx, vec)| {
                 let id = self.mappings.get_id(*idx)?;
                 let distance = inner.compute_distance(query, vec);
-                Some((id, distance))
+                Some(ScoredResult::new(id, distance))
             })
             .collect();
 
         // Sort by distance (ascending for most metrics)
-        self.metric.sort_results(&mut results);
+        self.metric.sort_scored_results(&mut results);
 
         results.truncate(k);
         results
@@ -487,7 +488,7 @@ impl VectorIndex for NativeHnswIndex {
         NativeHnswIndex::remove(self, id)
     }
 
-    fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         NativeHnswIndex::search(self, query, k)
     }
 

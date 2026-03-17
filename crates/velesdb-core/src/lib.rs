@@ -61,6 +61,7 @@
 #[cfg(feature = "persistence")]
 pub mod agent;
 pub mod alloc_guard;
+pub mod api_types;
 #[cfg(test)]
 mod alloc_guard_tests;
 pub mod cache;
@@ -115,6 +116,7 @@ mod point_tests;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
+pub mod scored_result;
 pub mod simd_dispatch;
 #[cfg(test)]
 mod simd_dispatch_tests;
@@ -140,6 +142,7 @@ pub mod storage;
 pub mod sync;
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub mod update_check;
+pub mod validation;
 pub mod vector_ref;
 #[cfg(test)]
 mod vector_ref_tests;
@@ -179,19 +182,20 @@ pub use collection::{
     TraversalResult,
     ValueType,
     VectorCollection,
-    // Dimension validation bounds (VELES-032)
-    MAX_DIMENSION,
-    MIN_DIMENSION,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use perf_optimizations::pad_to_simd_width;
 pub use point::{Point, SearchResult};
+pub use scored_result::ScoredResult;
+pub use validation::{
+    validate_dimension, validate_dimension_match, MAX_DIMENSION, MIN_DIMENSION,
+};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
-    BinaryQuantizedVector, QuantizedVector, StorageMode,
+    BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode,
 };
 
 #[cfg(feature = "persistence")]

@@ -10,6 +10,8 @@
 //! | Cache efficiency | Baseline | ~4x better | ~32x better |
 //! | Recall loss | 0% | ~0.5-1% | ~5-10% |
 
+use std::io;
+
 use serde::{Deserialize, Serialize};
 
 mod binary;
@@ -36,6 +38,22 @@ pub use scalar::{
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
     QuantizedVector,
 };
+
+/// Trait for serializing and deserializing quantized vectors to/from bytes.
+///
+/// Provides a uniform interface for byte-level serialization across
+/// different quantization strategies (SQ8, Binary).
+pub trait QuantizationCodec: Sized {
+    /// Serializes the quantized vector to a byte representation.
+    fn to_bytes(&self) -> Vec<u8>;
+
+    /// Deserializes a quantized vector from bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the byte slice is too short or contains invalid data.
+    fn from_bytes(bytes: &[u8]) -> io::Result<Self>;
+}
 
 /// Storage mode for vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

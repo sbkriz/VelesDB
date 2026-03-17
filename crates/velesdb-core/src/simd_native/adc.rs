@@ -11,6 +11,8 @@
 #![allow(dead_code)]
 
 use super::dispatch::{simd_level, SimdLevel};
+#[cfg(target_arch = "x86_64")]
+use super::reduction::hsum_avx256;
 
 /// Compute ADC distances for a batch of PQ code vectors against a precomputed LUT.
 ///
@@ -103,9 +105,7 @@ fn lane_index(code: &[u16], subspace: usize, k: usize) -> i32 {
 #[target_feature(enable = "avx2")]
 unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 {
     use std::arch::x86_64::{
-        __m256, _mm256_add_ps, _mm256_castps256_ps128, _mm256_extractf128_ps, _mm256_i32gather_ps,
-        _mm256_setr_epi32, _mm256_setzero_ps, _mm_add_ps, _mm_add_ss, _mm_cvtss_f32,
-        _mm_movehdup_ps, _mm_movehl_ps,
+        __m256, _mm256_add_ps, _mm256_i32gather_ps, _mm256_setr_epi32, _mm256_setzero_ps,
     };
     debug_assert_eq!(code.len(), m, "code length must equal m");
     debug_assert!(
@@ -147,15 +147,7 @@ unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
     }
 
     // Horizontal sum of acc
-    // SAFETY: `_mm256_extractf128_ps` and subsequent SSE ops are safe with AVX2 enabled.
-    let hi = _mm256_extractf128_ps::<1>(acc);
-    let lo = _mm256_castps256_ps128(acc);
-    let sum128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(sum128);
-    let sum64 = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(sum64, sum64);
-    let sum32 = _mm_add_ss(sum64, shuf2);
-    let mut total = _mm_cvtss_f32(sum32);
+    let mut total = hsum_avx256(acc);
 
     // Handle tail subspaces (m % 8 != 0) with scalar loop.
     // `code` is indexed by subspace, so a range loop is the natural pattern here.

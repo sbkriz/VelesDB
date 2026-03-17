@@ -33,10 +33,11 @@ toml = "0.8"
 [features]
 default = ["velesdb-core/default"]
 gpu = ["velesdb-core/gpu"]
-persistence = ["velesdb-core/persistence"]
-update-check = ["velesdb-core/update-check"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
+openapi = ["velesdb-core/openapi"]
+persistence = ["velesdb-core/persistence"]
+update-check = ["velesdb-core/update-check"]
 
 [lints]
 workspace = true

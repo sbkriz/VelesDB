@@ -59,7 +59,7 @@ fn bench_batch_search(c: &mut Criterion) {
         BenchmarkId::new("sequential", format!("{num_queries}q")),
         |b| {
             b.iter(|| {
-                let results: Vec<Vec<(u64, f32)>> = queries
+                let results: Vec<Vec<velesdb_core::ScoredResult>> = queries
                     .iter()
                     .map(|q| index.search_with_quality(q, k, SearchQuality::Balanced))
                     .collect();

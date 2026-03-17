@@ -162,7 +162,7 @@ fn measure_recall(
     for query in queries {
         let gt = brute_force_topk(query, dataset, k);
         let results = collection.search_ids(query, k).expect("search");
-        let result_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+        let result_ids: Vec<u64> = results.iter().map(|sr| sr.id).collect();
         total_recall += recall_at_k(&gt, &result_ids, k);
     }
     #[allow(clippy::cast_precision_loss)]

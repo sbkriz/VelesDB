@@ -18,6 +18,9 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use crate::simd_4acc_dot_loop;
+use crate::simd_4acc_l2_loop;
+
 use super::scalar;
 
 // =============================================================================
@@ -99,54 +102,28 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
 
     let len = a.len();
-    let mut a_ptr = a.as_ptr();
-    let mut b_ptr = b.as_ptr();
-    let end_main = a.as_ptr().add(len / 64 * 64);
-    let end_ptr = a.as_ptr().add(len);
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+    let end_main = a_ptr.add(len / 64 * 64);
+    let end_ptr = a_ptr.add(len);
 
-    let mut acc0 = _mm512_setzero_ps();
-    let mut acc1 = _mm512_setzero_ps();
-    let mut acc2 = _mm512_setzero_ps();
-    let mut acc3 = _mm512_setzero_ps();
-
-    // Main loop: process 64 elements at a time using pointer arithmetic
-    while a_ptr < end_main {
-        let va0 = _mm512_loadu_ps(a_ptr);
-        let vb0 = _mm512_loadu_ps(b_ptr);
-        acc0 = _mm512_fmadd_ps(va0, vb0, acc0);
-
-        let va1 = _mm512_loadu_ps(a_ptr.add(16));
-        let vb1 = _mm512_loadu_ps(b_ptr.add(16));
-        acc1 = _mm512_fmadd_ps(va1, vb1, acc1);
-
-        let va2 = _mm512_loadu_ps(a_ptr.add(32));
-        let vb2 = _mm512_loadu_ps(b_ptr.add(32));
-        acc2 = _mm512_fmadd_ps(va2, vb2, acc2);
-
-        let va3 = _mm512_loadu_ps(a_ptr.add(48));
-        let vb3 = _mm512_loadu_ps(b_ptr.add(48));
-        acc3 = _mm512_fmadd_ps(va3, vb3, acc3);
-
-        a_ptr = a_ptr.add(64);
-        b_ptr = b_ptr.add(64);
-    }
-
-    // Combine all 4 accumulators into one, then continue with single acc
-    acc0 = _mm512_add_ps(acc0, acc1);
-    acc2 = _mm512_add_ps(acc2, acc3);
-    acc0 = _mm512_add_ps(acc0, acc2);
+    // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
+    let (mut acc, mut a_p, mut b_p) = simd_4acc_dot_loop!(
+        a_ptr, b_ptr, end_main,
+        _mm512_setzero_ps(), _mm512_loadu_ps, _mm512_fmadd_ps, _mm512_add_ps, 16
+    );
 
     // Process remaining 16-element chunks with same accumulator
-    while a_ptr.add(16) <= end_ptr {
-        let va = _mm512_loadu_ps(a_ptr);
-        let vb = _mm512_loadu_ps(b_ptr);
-        acc0 = _mm512_fmadd_ps(va, vb, acc0);
-        a_ptr = a_ptr.add(16);
-        b_ptr = b_ptr.add(16);
+    while a_p.add(16) <= end_ptr {
+        let va = _mm512_loadu_ps(a_p);
+        let vb = _mm512_loadu_ps(b_p);
+        acc = _mm512_fmadd_ps(va, vb, acc);
+        a_p = a_p.add(16);
+        b_p = b_p.add(16);
     }
 
     // Final masked chunk if any
-    let remaining = end_ptr.offset_from(a_ptr) as usize;
+    let remaining = end_ptr.offset_from(a_p) as usize;
     if remaining > 0 {
         // SAFETY: remaining is in 1..=16, mask computed without overflow
         let mask: __mmask16 = if remaining == 16 {
@@ -154,12 +131,12 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
         } else {
             ((1u32 << remaining) - 1) as u16
         };
-        let va = _mm512_maskz_loadu_ps(mask, a_ptr);
-        let vb = _mm512_maskz_loadu_ps(mask, b_ptr);
-        acc0 = _mm512_fmadd_ps(va, vb, acc0);
+        let va = _mm512_maskz_loadu_ps(mask, a_p);
+        let vb = _mm512_maskz_loadu_ps(mask, b_p);
+        acc = _mm512_fmadd_ps(va, vb, acc);
     }
 
-    _mm512_reduce_add_ps(acc0)
+    _mm512_reduce_add_ps(acc)
 }
 
 // =============================================================================
@@ -180,59 +157,29 @@ pub(crate) unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
 
     let len = a.len();
-    let mut a_ptr = a.as_ptr();
-    let mut b_ptr = b.as_ptr();
-    let end_main = a.as_ptr().add(len / 64 * 64);
-    let end_ptr = a.as_ptr().add(len);
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+    let end_main = a_ptr.add(len / 64 * 64);
+    let end_ptr = a_ptr.add(len);
 
-    let mut acc0 = _mm512_setzero_ps();
-    let mut acc1 = _mm512_setzero_ps();
-    let mut acc2 = _mm512_setzero_ps();
-    let mut acc3 = _mm512_setzero_ps();
-
-    // Main loop: process 64 elements at a time (4×16)
-    while a_ptr < end_main {
-        let va0 = _mm512_loadu_ps(a_ptr);
-        let vb0 = _mm512_loadu_ps(b_ptr);
-        let diff0 = _mm512_sub_ps(va0, vb0);
-        acc0 = _mm512_fmadd_ps(diff0, diff0, acc0);
-
-        let va1 = _mm512_loadu_ps(a_ptr.add(16));
-        let vb1 = _mm512_loadu_ps(b_ptr.add(16));
-        let diff1 = _mm512_sub_ps(va1, vb1);
-        acc1 = _mm512_fmadd_ps(diff1, diff1, acc1);
-
-        let va2 = _mm512_loadu_ps(a_ptr.add(32));
-        let vb2 = _mm512_loadu_ps(b_ptr.add(32));
-        let diff2 = _mm512_sub_ps(va2, vb2);
-        acc2 = _mm512_fmadd_ps(diff2, diff2, acc2);
-
-        let va3 = _mm512_loadu_ps(a_ptr.add(48));
-        let vb3 = _mm512_loadu_ps(b_ptr.add(48));
-        let diff3 = _mm512_sub_ps(va3, vb3);
-        acc3 = _mm512_fmadd_ps(diff3, diff3, acc3);
-
-        a_ptr = a_ptr.add(64);
-        b_ptr = b_ptr.add(64);
-    }
-
-    // Combine all 4 accumulators
-    acc0 = _mm512_add_ps(acc0, acc1);
-    acc2 = _mm512_add_ps(acc2, acc3);
-    acc0 = _mm512_add_ps(acc0, acc2);
+    // SAFETY: 4-accumulator ILP loop. Pointer bounds guaranteed by end_main.
+    let (mut acc, mut a_p, mut b_p) = simd_4acc_l2_loop!(
+        a_ptr, b_ptr, end_main,
+        _mm512_setzero_ps(), _mm512_loadu_ps, _mm512_sub_ps, _mm512_fmadd_ps, _mm512_add_ps, 16
+    );
 
     // Process remaining 16-element chunks
-    while a_ptr.add(16) <= end_ptr {
-        let va = _mm512_loadu_ps(a_ptr);
-        let vb = _mm512_loadu_ps(b_ptr);
+    while a_p.add(16) <= end_ptr {
+        let va = _mm512_loadu_ps(a_p);
+        let vb = _mm512_loadu_ps(b_p);
         let diff = _mm512_sub_ps(va, vb);
-        acc0 = _mm512_fmadd_ps(diff, diff, acc0);
-        a_ptr = a_ptr.add(16);
-        b_ptr = b_ptr.add(16);
+        acc = _mm512_fmadd_ps(diff, diff, acc);
+        a_p = a_p.add(16);
+        b_p = b_p.add(16);
     }
 
     // Final masked chunk if any
-    let remaining = end_ptr.offset_from(a_ptr) as usize;
+    let remaining = end_ptr.offset_from(a_p) as usize;
     if remaining > 0 {
         // SAFETY: remaining is in 1..=16, mask computed without overflow
         let mask: __mmask16 = if remaining == 16 {
@@ -240,13 +187,13 @@ pub(crate) unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
         } else {
             ((1u32 << remaining) - 1) as u16
         };
-        let va = _mm512_maskz_loadu_ps(mask, a_ptr);
-        let vb = _mm512_maskz_loadu_ps(mask, b_ptr);
+        let va = _mm512_maskz_loadu_ps(mask, a_p);
+        let vb = _mm512_maskz_loadu_ps(mask, b_p);
         let diff = _mm512_sub_ps(va, vb);
-        acc0 = _mm512_fmadd_ps(diff, diff, acc0);
+        acc = _mm512_fmadd_ps(diff, diff, acc);
     }
 
-    _mm512_reduce_add_ps(acc0)
+    _mm512_reduce_add_ps(acc)
 }
 
 /// AVX-512 squared L2 distance (1-acc fallback for small vectors).

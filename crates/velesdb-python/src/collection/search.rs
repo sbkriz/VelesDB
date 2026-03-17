@@ -93,7 +93,8 @@ impl Collection {
                 .inner
                 .search_ids(&query_vector, top_k)
                 .map_err(|e| PyRuntimeError::new_err(format!("Search IDs failed: {e}")))?;
-            Ok(id_score_pairs_to_dicts(py, results))
+            let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
+            Ok(id_score_pairs_to_dicts(py, tuples))
         })
     }
 
@@ -274,7 +275,8 @@ impl Collection {
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Multi-query search IDs failed: {e}"))
                 })?;
-            Ok(id_score_pairs_to_dicts(py, results))
+            let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
+            Ok(id_score_pairs_to_dicts(py, tuples))
         })
     }
 }

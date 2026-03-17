@@ -5,6 +5,8 @@
 
 use std::io;
 
+use super::QuantizationCodec;
+
 /// A binary quantized vector using 1-bit per dimension.
 ///
 /// Each f32 value is converted to 1 bit: >= 0.0 becomes 1, < 0.0 becomes 0.
@@ -121,15 +123,13 @@ impl BinaryQuantizedVector {
         1.0 - (distance as f32 / self.dimension as f32)
     }
 
-    /// Serializes the binary quantized vector to bytes.
-    ///
+}
+
+impl QuantizationCodec for BinaryQuantizedVector {
     /// # Panics
     ///
     /// Panics if dimension exceeds `u32::MAX` (4,294,967,295).
-    /// This is a theoretical limit as vectors of this size would require
-    /// ~512MB of binary data alone.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(&self) -> Vec<u8> {
         assert!(
             u32::try_from(self.dimension).is_ok(),
             "BinaryQuantizedVector dimension {} exceeds u32::MAX for serialization",
@@ -145,12 +145,7 @@ impl BinaryQuantizedVector {
         bytes
     }
 
-    /// Deserializes a binary quantized vector from bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the bytes are invalid.
-    pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
+    fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() < 4 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -158,6 +153,7 @@ impl BinaryQuantizedVector {
             ));
         }
 
+        #[allow(clippy::cast_possible_truncation)]
         let dimension = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
         let expected_data_len = dimension.div_ceil(8);
 

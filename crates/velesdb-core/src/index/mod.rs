@@ -21,6 +21,7 @@ pub use sparse::{SparseInvertedIndex, SparseVector};
 pub use trigram::{extract_trigrams, TrigramIndex};
 
 use crate::distance::DistanceMetric;
+use crate::scored_result::ScoredResult;
 
 /// Trait for vector index implementations.
 ///
@@ -57,8 +58,8 @@ pub trait VectorIndex: Send + Sync {
     ///
     /// # Returns
     ///
-    /// A vector of (id, distance) tuples, sorted by distance.
-    fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)>;
+    /// A vector of [`ScoredResult`] sorted by distance/similarity.
+    fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult>;
 
     /// Removes a vector from the index.
     ///

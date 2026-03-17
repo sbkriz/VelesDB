@@ -2,7 +2,10 @@
 //!
 //! This module is split into focused submodules:
 //!
-//! - [`collection_ops`] — Collection CRUD (create, delete, list, get)
+//! - [`collection_ops`] — Collection CRUD dispatcher (create, delete, list, get)
+//! - [`vector_ops`] — Vector collection create/get
+//! - [`graph_ops`] — Graph collection create/get
+//! - [`metadata_ops`] — Metadata-only collection create/get
 //! - [`query_engine`] — `VelesQL` query execution, plan caching, DML
 //! - [`persistence`] — Loading collections from disk at startup
 //! - [`training`] — `TRAIN QUANTIZER` statement execution
@@ -16,7 +19,10 @@ use crate::simd_dispatch;
 use crate::{Collection, ColumnStore, Error, Result};
 
 mod collection_ops;
+mod graph_ops;
+mod metadata_ops;
 mod persistence;
+mod vector_ops;
 mod query_engine;
 mod stats;
 mod training;

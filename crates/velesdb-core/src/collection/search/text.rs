@@ -2,9 +2,10 @@
 
 use super::OrderedFloat;
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 
 impl Collection {
     /// Performs full-text search using BM25.
@@ -130,12 +131,7 @@ impl Collection {
         use std::collections::BinaryHeap;
 
         let config = self.config.read();
-        if vector_query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: vector_query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, vector_query.len())?;
         let metric = config.metric;
         drop(config);
 
@@ -162,9 +158,9 @@ impl Collection {
 
         // Add vector scores with RRF
         #[allow(clippy::cast_precision_loss)]
-        for (rank, (id, _)) in vector_results.iter().enumerate() {
+        for (rank, sr) in vector_results.iter().enumerate() {
             let rrf_score = weight / (rank as f32 + 60.0);
-            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+            *fused_scores.entry(sr.id).or_insert(0.0) += rrf_score;
         }
 
         // Add text scores with RRF
@@ -243,12 +239,7 @@ impl Collection {
         use crate::index::VectorIndex;
 
         let config = self.config.read();
-        if vector_query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: vector_query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, vector_query.len())?;
         let metric = config.metric;
         drop(config);
 
@@ -271,9 +262,9 @@ impl Collection {
         let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
 
         #[allow(clippy::cast_precision_loss)]
-        for (rank, (id, _)) in vector_results.iter().enumerate() {
+        for (rank, sr) in vector_results.iter().enumerate() {
             let rrf_score = weight / (rank as f32 + 60.0);
-            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+            *fused_scores.entry(sr.id).or_insert(0.0) += rrf_score;
         }
 
         #[allow(clippy::cast_precision_loss)]

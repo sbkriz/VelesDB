@@ -757,8 +757,8 @@ fn test_concurrent_insert_delete_search_at_index_level() {
                 assert!(results.len() <= 10, "Search must respect k limit");
                 // All returned IDs must be valid (not deleted from mappings)
                 // and distances must be finite
-                for &(id, dist) in &results {
-                    assert!(dist.is_finite(), "Distance must be finite for ID {id}");
+                for sr in &results {
+                    assert!(sr.score.is_finite(), "Distance must be finite for ID {}", sr.id);
                 }
             }
         }));
@@ -783,10 +783,10 @@ fn test_concurrent_insert_delete_search_at_index_level() {
     // This is the core soft-delete invariant.
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.1).collect();
     let results = index.search(&query, 50);
-    for &(id, _) in &results {
+    for sr in &results {
         assert!(
-            !(0..50).contains(&id),
-            "Soft-deleted ID {id} must not appear in search results"
+            !(0..50).contains(&sr.id),
+            "Soft-deleted ID {} must not appear in search results", sr.id
         );
     }
 
@@ -840,8 +840,8 @@ fn test_delete_exclusion_under_concurrent_search() {
                 let results = idx.search(&query, 20);
                 // During concurrent deletion, we may or may not see some IDs.
                 // But search results must always have finite distances.
-                for &(_id, dist) in &results {
-                    if !dist.is_finite() {
+                for sr in &results {
+                    if !sr.score.is_finite() {
                         vf.store(true, AtomOrd::Relaxed);
                     }
                 }
@@ -865,10 +865,10 @@ fn test_delete_exclusion_under_concurrent_search() {
     // All even IDs must be gone from search results (soft-delete exclusion).
     let query: Vec<f32> = (0..16).map(|j| (j as f32 * 0.01).sin()).collect();
     let results = index.search(&query, 200);
-    for &(id, _) in &results {
+    for sr in &results {
         assert!(
-            id % 2 != 0,
-            "Soft-deleted even ID {id} must not appear in post-delete search"
+            sr.id % 2 != 0,
+            "Soft-deleted even ID {} must not appear in post-delete search", sr.id
         );
     }
     // Verify odd IDs are still returned

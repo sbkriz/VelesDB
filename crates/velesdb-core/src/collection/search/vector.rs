@@ -6,10 +6,12 @@ use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::quantization::{distance_pq_l2, PQVector, ProductQuantizer, StorageMode};
+use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 
 impl Collection {
-    fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+    fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         let config = self.config.read();
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
@@ -19,55 +21,48 @@ impl Collection {
         let oversampling = config.pq_rescore_oversampling.unwrap_or(0) as usize;
         drop(config);
 
-        if !is_pq {
-            let results = self.index.search(query, k);
-            return self.merge_delta(results, query, k, metric);
-        }
-
-        // When oversampling is disabled (None or Some(0)), skip rescore entirely
-        // and return raw index results truncated to k.
-        if oversampling == 0 {
+        if !is_pq || oversampling == 0 {
             let results = self.index.search(query, k);
             return self.merge_delta(results, query, k, metric);
         }
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
         let index_results = self.index.search(query, candidates_k);
+        let rescored = self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
+        self.merge_delta(rescored, query, k, metric)
+    }
 
+    /// Rescores PQ candidates using the product quantizer cache.
+    fn rescore_pq_candidates(
+        &self,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+        higher_is_better: bool,
+        index_results: Vec<ScoredResult>,
+    ) -> Vec<ScoredResult> {
         let pq_cache = self.pq_cache.read();
         let quantizer = self.pq_quantizer.read();
         let Some(quantizer) = quantizer.as_ref() else {
-            let results: Vec<(u64, f32)> = index_results.into_iter().take(k).collect();
-            return self.merge_delta(results, query, k, metric);
+            return index_results.into_iter().take(k).collect();
         };
 
-        let mut rescored: Vec<(u64, f32)> = index_results
+        let mut rescored: Vec<ScoredResult> = index_results
             .into_iter()
-            .map(|(id, fallback_score)| {
-                let score = pq_cache.get(&id).map_or(fallback_score, |pq_vec| {
+            .map(|sr| {
+                let score = pq_cache.get(&sr.id).map_or(sr.score, |pq_vec| {
                     rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
-                        tracing::warn!(
-                            id,
-                            %err,
-                            "PQ reconstruct failed during rescore; \
-                             falling back to HNSW score"
-                        );
-                        fallback_score
+                        tracing::warn!(sr.id, %err, "PQ rescore failed; using HNSW score");
+                        sr.score
                     })
                 });
-                (id, score)
+                ScoredResult::new(sr.id, score)
             })
             .collect();
 
-        rescored.sort_by(|a, b| {
-            if higher_is_better {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            }
-        });
+        sort_by_score(&mut rescored, higher_is_better);
         rescored.truncate(k);
-        self.merge_delta(rescored, query, k, metric)
+        rescored
     }
 
     /// Merges HNSW results with the delta buffer (if active).
@@ -78,31 +73,50 @@ impl Collection {
     #[inline]
     pub(crate) fn merge_delta(
         &self,
-        results: Vec<(u64, f32)>,
+        results: Vec<ScoredResult>,
         query: &[f32],
         k: usize,
         metric: DistanceMetric,
-    ) -> Vec<(u64, f32)> {
+    ) -> Vec<ScoredResult> {
+        let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
         crate::collection::streaming::merge_with_delta(
-            results,
+            tuples,
             &self.delta_buffer,
             query,
             k,
             metric,
         )
+        .into_iter()
+        .map(ScoredResult::from)
+        .collect()
     }
 
     #[cfg(not(feature = "persistence"))]
     #[inline]
     pub(crate) fn merge_delta(
         &self,
-        results: Vec<(u64, f32)>,
+        results: Vec<ScoredResult>,
         _query: &[f32],
         _k: usize,
         _metric: DistanceMetric,
-    ) -> Vec<(u64, f32)> {
+    ) -> Vec<ScoredResult> {
         results
     }
+}
+
+/// Sorts scored results by score (ascending or descending based on metric).
+fn sort_by_score(results: &mut [ScoredResult], higher_is_better: bool) {
+    results.sort_by(|a, b| {
+        if higher_is_better {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
 }
 
 fn rescore_with_metric(
@@ -141,12 +155,7 @@ impl Collection {
             return Err(Error::SearchNotSupported(config.name.clone()));
         }
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Use HNSW index for fast ANN search
@@ -158,19 +167,19 @@ impl Collection {
         // Map index results to SearchResult with full point data
         let results: Vec<SearchResult> = index_results
             .into_iter()
-            .filter_map(|(id, score)| {
+            .filter_map(|sr| {
                 // We need to fetch vector and payload
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                let payload = payload_storage.retrieve(id).ok().flatten();
+                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
+                let payload = payload_storage.retrieve(sr.id).ok().flatten();
 
                 let point = Point {
-                    id,
+                    id: sr.id,
                     vector,
                     payload,
                     sparse_vectors: None,
                 };
 
-                Some(SearchResult::new(point, score))
+                Some(SearchResult::new(point, sr.score))
             })
             .collect();
 
@@ -193,12 +202,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Convert ef_search to SearchQuality
@@ -218,18 +222,18 @@ impl Collection {
 
         let results: Vec<SearchResult> = index_results
             .into_iter()
-            .filter_map(|(id, score)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                let payload = payload_storage.retrieve(id).ok().flatten();
+            .filter_map(|sr| {
+                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
+                let payload = payload_storage.retrieve(sr.id).ok().flatten();
 
                 let point = Point {
-                    id,
+                    id: sr.id,
                     vector,
                     payload,
                     sparse_vectors: None,
                 };
 
-                Some(SearchResult::new(point, score))
+                Some(SearchResult::new(point, sr.score))
             })
             .collect();
 
@@ -248,20 +252,15 @@ impl Collection {
     ///
     /// # Returns
     ///
-    /// Vector of (id, score) tuples sorted by similarity.
+    /// Vector of [`ScoredResult`] sorted by similarity.
     ///
     /// # Errors
     ///
     /// Returns an error if the query vector dimension doesn't match the collection.
-    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
+    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<ScoredResult>> {
         let config = self.config.read();
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Perf: Direct HNSW search without vector/payload retrieval
@@ -291,12 +290,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
 
-        if query.len() != config.dimension {
-            return Err(Error::DimensionMismatch {
-                expected: config.dimension,
-                actual: query.len(),
-            });
-        }
+        validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
         // Post-filtering strategy: retrieve more candidates than k, then filter
@@ -311,9 +305,9 @@ impl Collection {
         // FIX: Consistent null payload handling - match null if no payload (same as execute_query)
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
-            .filter_map(|(id, score)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                let payload = payload_storage.retrieve(id).ok().flatten();
+            .filter_map(|sr| {
+                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
+                let payload = payload_storage.retrieve(sr.id).ok().flatten();
 
                 // Apply filter - check if filter matches payload or null
                 // This matches the behavior in execute_query for consistency
@@ -326,13 +320,13 @@ impl Collection {
                 }
 
                 let point = Point {
-                    id,
+                    id: sr.id,
                     vector,
                     payload,
                     sparse_vectors: None,
                 };
 
-                Some(SearchResult::new(point, score))
+                Some(SearchResult::new(point, sr.score))
             })
             .collect();
 

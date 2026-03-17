@@ -1290,7 +1290,7 @@ components:
           minimum: 0
     AggregationResponse:
       type: object
-      description: Response from VelesQL aggregation query execution (BUG-1 FIX).
+      description: Response from `VelesQL` aggregation query execution.
       required:
       - result
       - timing_ms
@@ -1298,9 +1298,9 @@ components:
       properties:
         meta:
           $ref: '#/components/schemas/QueryResponseMeta'
-          description: Query response metadata (contract version + count).
+          description: Query response metadata.
         result:
-          description: Aggregation results (JSON object or array for GROUP BY).
+          description: Aggregation results.
         timing_ms:
           type: number
           format: double
@@ -1505,33 +1505,27 @@ components:
       properties:
         collection_type:
           type: string
-          description: 'Collection type: "vector" (default) or "metadata_only".'
+          description: 'Collection type: "vector" (default) or "`metadata_only`".'
           example: vector
         dimension:
           type:
           - integer
           - 'null'
-          description: Vector dimension (required for vector collections, ignored for metadata_only).
+          description: Vector dimension (required for vector collections, ignored for `metadata_only`).
           example: 768
           minimum: 0
         hnsw_ef_construction:
           type:
           - integer
           - 'null'
-          description: |-
-            HNSW ef_construction parameter (candidate list size during build).
-            Higher values improve recall but slow down indexing.
-            When omitted, auto-tuned based on dimension.
+          description: HNSW `ef_construction` parameter (candidate list size during build).
           example: 400
           minimum: 0
         hnsw_m:
           type:
           - integer
           - 'null'
-          description: |-
-            HNSW M parameter (number of bi-directional links per node).
-            Higher values improve recall but increase memory and insert time.
-            When omitted, auto-tuned based on dimension.
+          description: HNSW M parameter (number of bi-directional links per node).
           example: 32
           minimum: 0
         metric:
@@ -1559,11 +1553,11 @@ components:
           example: hash
         label:
           type: string
-          description: Node label to index (e.g., "Person").
+          description: Node label to index.
           example: Person
         property:
           type: string
-          description: Property name to index (e.g., "email").
+          description: Property name to index.
           example: email
     DegreeResponse:
       type: object
@@ -1675,7 +1669,7 @@ components:
           description: Has aggregation functions.
         has_filter:
           type: boolean
-          description: Has metadata filter (WHERE without NEAR).
+          description: Has metadata filter.
         has_fusion:
           type: boolean
           description: Has FUSION clause.
@@ -1713,7 +1707,7 @@ components:
       properties:
         params:
           type: object
-          description: Named parameters for the query (optional, used for validation).
+          description: Named parameters for the query.
           additionalProperties: {}
           propertyNames:
             type: string
@@ -1783,7 +1777,7 @@ components:
           minimum: 0
         operation:
           type: string
-          description: Operation type (e.g., "VectorSearch", "Filter", "Sort").
+          description: Operation type.
         step:
           type: integer
           description: Step number (1-indexed).
@@ -1928,7 +1922,7 @@ components:
       - query
       properties:
         filter:
-          description: Optional metadata filter to apply to results (JSON object with condition).
+          description: Optional metadata filter.
         query:
           type: string
           description: Text query for BM25 search.
@@ -1947,7 +1941,7 @@ components:
         vector_weight:
           type: number
           format: float
-          description: Weight for vector similarity (0.0-1.0). Text weight = 1 - vector_weight.
+          description: Weight for vector similarity (0.0-1.0). Text weight = 1 - `vector_weight`.
           example: 0.5
     IdScoreResult:
       type: object
@@ -2014,7 +2008,7 @@ components:
           minimum: 0
         index_type:
           type: string
-          description: Index type (e.g., "HNSW", "PropertyIndex").
+          description: Index type (e.g., "HNSW", "`PropertyIndex`").
         name:
           type: string
           description: Index name.
@@ -2165,19 +2159,19 @@ components:
         avg_weight:
           type: number
           format: float
-          description: 'Weighted fusion: weight for average score component (default 0.5).'
+          description: 'Weighted fusion: weight for average score component.'
           example: 0.5
         filter:
-          description: Optional metadata filter to apply to results.
+          description: Optional metadata filter.
         hit_weight:
           type: number
           format: float
-          description: 'Weighted fusion: weight for hit count component (default 0.2).'
+          description: 'Weighted fusion: weight for hit count component.'
           example: 0.2
         max_weight:
           type: number
           format: float
-          description: 'Weighted fusion: weight for max score component (default 0.3).'
+          description: 'Weighted fusion: weight for max score component.'
           example: 0.3
         rrf_k:
           type: integer
@@ -2225,7 +2219,7 @@ components:
           type:
           - object
           - 'null'
-          description: 'Named sparse vectors map (e.g., `{"title": {...}, "body": {...}}`).'
+          description: Named sparse vectors map.
           additionalProperties:
             $ref: '#/components/schemas/SparseVectorInput'
           propertyNames:
@@ -2238,7 +2232,7 @@ components:
           description: Vector data.
     QueryErrorDetail:
       type: object
-      description: VelesQL query error detail.
+      description: '`VelesQL` query error detail.'
       required:
       - type
       - message
@@ -2260,7 +2254,7 @@ components:
           description: Error type.
     QueryErrorResponse:
       type: object
-      description: VelesQL query error response.
+      description: '`VelesQL` query error response.'
       required:
       - error
       properties:
@@ -2277,9 +2271,7 @@ components:
           type:
           - string
           - 'null'
-          description: |-
-            Optional collection name.
-            Required for top-level MATCH queries executed via `/query`.
+          description: Optional collection name (required for top-level MATCH queries via `/query`).
         params:
           type: object
           description: Named parameters for the query.
@@ -2291,7 +2283,7 @@ components:
           description: The `VelesQL` query string.
     QueryResponse:
       type: object
-      description: Response from VelesQL query execution.
+      description: Response from `VelesQL` query execution.
       required:
       - results
       - timing_ms
@@ -2301,7 +2293,7 @@ components:
       properties:
         meta:
           $ref: '#/components/schemas/QueryResponseMeta'
-          description: Query response metadata (contracted fields for SDK parity).
+          description: Query response metadata.
         results:
           type: array
           items:
@@ -2318,11 +2310,11 @@ components:
         took_ms:
           type: integer
           format: int64
-          description: Query execution time in whole milliseconds (compat helper for API clients).
+          description: Query execution time in whole milliseconds (compat helper).
           minimum: 0
     QueryResponseMeta:
       type: object
-      description: Metadata section for VelesQL query responses.
+      description: Metadata section for `VelesQL` query responses.
       required:
       - velesql_contract_version
       - count
@@ -2333,7 +2325,7 @@ components:
           minimum: 0
         velesql_contract_version:
           type: string
-          description: VelesQL contract version used by this response.
+          description: '`VelesQL` contract version used by this response.'
     SearchIdsResponse:
       type: object
       description: Response from IDs-only search (no payload hydration).
@@ -2347,48 +2339,38 @@ components:
           description: Search results with IDs and scores only.
     SearchRequest:
       type: object
-      description: |-
-        Request for vector search.
-
-        Supports three modes based on which fields are provided:
-        - **Dense only**: `vector` only (existing behavior)
-        - **Sparse only**: `sparse_vector` only
-        - **Hybrid**: both `vector` and `sparse_vector` (fused via RRF/RSF)
+      description: Request for vector search (dense, sparse, or hybrid).
       properties:
         ef_search:
           type:
           - integer
           - 'null'
-          description: |-
-            HNSW ef_search parameter (higher = better recall, slower).
-            Overrides mode if both are specified.
+          description: HNSW `ef_search` parameter.
           example: 128
           minimum: 0
         filter:
-          description: Optional metadata filter to apply to results (JSON object with condition).
+          description: Optional metadata filter.
         fusion:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/FusionRequest'
-            description: 'Fusion configuration for hybrid search (default: RRF k=60).'
+            description: Fusion configuration for hybrid search.
         mode:
           type:
           - string
           - 'null'
-          description: |-
-            Search mode preset: fast, balanced, accurate, perfect.
-            Overrides ef_search with predefined values.
+          description: 'Search mode preset: fast, balanced, accurate, perfect.'
           example: balanced
         sparse_index:
           type:
           - string
           - 'null'
-          description: 'Which named sparse index to search (default: `""`).'
+          description: Which named sparse index to search.
         sparse_vector:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/SparseVectorInput'
-            description: Single sparse query vector (for sparse or hybrid search).
+            description: Single sparse query vector.
         sparse_vectors:
           type:
           - object
@@ -2415,7 +2397,7 @@ components:
           items:
             type: number
             format: float
-          description: Query vector for dense search (optional if sparse-only).
+          description: Query vector for dense search.
     SearchResponse:
       type: object
       description: Response from vector search.
@@ -2478,8 +2460,6 @@ components:
 
         - **Parallel arrays**: `{"indices": [42, 1337], "values": [0.5, 1.2]}`
         - **Dict format** (Qdrant-compatible): `{"42": 0.5, "1337": 1.2}`
-
-        Both formats are accepted transparently via `#[serde(untagged)]`.
     StreamDoneEvent:
       type: object
       description: 'SSE event: Traversal completed.'
@@ -2504,10 +2484,7 @@ components:
           minimum: 0
     StreamInsertRequest:
       type: object
-      description: |-
-        Request body for the streaming insert endpoint.
-
-        Accepts a single point to be pushed into the bounded ingestion channel.
+      description: Request body for the streaming insert endpoint (single point).
       required:
       - id
       - vector
@@ -2573,7 +2550,7 @@ components:
       - query
       properties:
         filter:
-          description: Optional metadata filter to apply to results (JSON object with condition).
+          description: Optional metadata filter.
         query:
           type: string
           description: Text query for full-text search.
@@ -2694,7 +2671,7 @@ components:
           description: Points to upsert.
     VelesqlErrorDetail:
       type: object
-      description: Standardized VelesQL semantic/runtime error payload.
+      description: Standardized `VelesQL` semantic/runtime error detail.
       required:
       - code
       - message
@@ -2713,7 +2690,7 @@ components:
           description: Human-readable error message.
     VelesqlErrorResponse:
       type: object
-      description: Standardized VelesQL semantic/runtime error response.
+      description: Standardized `VelesQL` semantic/runtime error response.
       required:
       - error
       properties:

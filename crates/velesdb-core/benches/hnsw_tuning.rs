@@ -7,7 +7,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::collections::HashSet;
-use velesdb_core::{DistanceMetric, HnswIndex, VectorIndex};
+use velesdb_core::{DistanceMetric, HnswIndex, ScoredResult, VectorIndex};
 
 /// Simple LCG random number generator for reproducible benchmarks.
 struct SimpleRng {
@@ -60,8 +60,8 @@ fn brute_force_knn(vectors: &[(u64, Vec<f32>)], query: &[f32], k: usize) -> Vec<
 }
 
 /// Calculate recall.
-fn calculate_recall(hnsw_results: &[(u64, f32)], ground_truth: &[u64]) -> f64 {
-    let hnsw_ids: HashSet<u64> = hnsw_results.iter().map(|(id, _)| *id).collect();
+fn calculate_recall(hnsw_results: &[ScoredResult], ground_truth: &[u64]) -> f64 {
+    let hnsw_ids: HashSet<u64> = hnsw_results.iter().map(|sr| sr.id).collect();
     let truth_ids: HashSet<u64> = ground_truth.iter().copied().collect();
     let intersection = hnsw_ids.intersection(&truth_ids).count();
     #[allow(clippy::cast_precision_loss)]

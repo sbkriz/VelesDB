@@ -67,6 +67,22 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     result
 }
 
+/// NEON FMA wrapper with x86-compatible argument order.
+///
+/// NEON `vfmaq_f32(acc, a, b)` = acc + a*b, but [`simd_4acc_dot_loop!`] expects
+/// `fmadd(a, b, acc)` = a*b + acc. This wrapper reorders the arguments.
+///
+/// SAFETY: `vfmaq_f32` is a non-faulting register operation on aarch64.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn neon_fma_compat(
+    a: std::arch::aarch64::float32x4_t,
+    b: std::arch::aarch64::float32x4_t,
+    acc: std::arch::aarch64::float32x4_t,
+) -> std::arch::aarch64::float32x4_t {
+    std::arch::aarch64::vfmaq_f32(acc, a, b)
+}
+
 /// ARM NEON dot product with 4 accumulators for large vectors.
 #[cfg(target_arch = "aarch64")]
 #[inline]
@@ -74,8 +90,6 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
     let len = a.len();
-    let mut a_ptr = a.as_ptr();
-    let mut b_ptr = b.as_ptr();
     // SAFETY: `add` on a raw pointer derived from a valid slice.
     // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
     // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
@@ -83,50 +97,18 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
     let end_ptr = unsafe { a.as_ptr().add(len) };
 
-    // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
-    // - Condition 1: NEON is always present on aarch64.
-    // - Condition 2: Immediate value 0.0 is a valid f32 constant accepted by the instruction.
-    // Reason: Initialise four independent SIMD accumulators for 4-way instruction-level parallelism.
-    let mut acc0 = unsafe { vdupq_n_f32(0.0) };
-    let mut acc1 = unsafe { vdupq_n_f32(0.0) };
-    let mut acc2 = unsafe { vdupq_n_f32(0.0) };
-    let mut acc3 = unsafe { vdupq_n_f32(0.0) };
+    // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
+    // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
+    let (combined, mut a_ptr, mut b_ptr) = unsafe {
+        crate::simd_4acc_dot_loop!(
+            a.as_ptr(), b.as_ptr(), end_main,
+            vdupq_n_f32(0.0), vld1q_f32, neon_fma_compat, vaddq_f32, 4
+        )
+    };
 
-    while a_ptr < end_main {
-        // SAFETY: Four consecutive unaligned 4-element NEON loads per iteration.
-        // - Condition 1: Loop condition `a_ptr < end_main` guarantees 16 elements remain before `end_main`.
-        // - Condition 2: `vld1q_f32` is documented to support unaligned loads on ARM64.
-        // Reason: Process 16 elements per iteration with 4 independent accumulators for ILP.
-        unsafe {
-            let va0 = vld1q_f32(a_ptr);
-            let vb0 = vld1q_f32(b_ptr);
-            acc0 = vfmaq_f32(acc0, va0, vb0);
-
-            let va1 = vld1q_f32(a_ptr.add(4));
-            let vb1 = vld1q_f32(b_ptr.add(4));
-            acc1 = vfmaq_f32(acc1, va1, vb1);
-
-            let va2 = vld1q_f32(a_ptr.add(8));
-            let vb2 = vld1q_f32(b_ptr.add(8));
-            acc2 = vfmaq_f32(acc2, va2, vb2);
-
-            let va3 = vld1q_f32(a_ptr.add(12));
-            let vb3 = vld1q_f32(b_ptr.add(12));
-            acc3 = vfmaq_f32(acc3, va3, vb3);
-
-            a_ptr = a_ptr.add(16);
-            b_ptr = b_ptr.add(16);
-        }
-    }
-
-    // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations on aarch64.
-    // - Condition 1: All four accumulator registers hold valid float32x4_t values from the loop.
-    // - Condition 2: NEON is always present on aarch64; intrinsics are always available.
-    // Reason: Reduce the four SIMD accumulators to a single scalar result in two steps.
-    let sum01 = unsafe { vaddq_f32(acc0, acc1) };
-    let sum23 = unsafe { vaddq_f32(acc2, acc3) };
-    let sum = unsafe { vaddq_f32(sum01, sum23) };
-    let mut result = unsafe { vaddvq_f32(sum) };
+    // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
+    // Reason: Horizontal reduction of the combined SIMD accumulator to a scalar result.
+    let mut result = unsafe { vaddvq_f32(combined) };
 
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
