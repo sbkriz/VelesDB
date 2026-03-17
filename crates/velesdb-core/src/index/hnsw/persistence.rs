@@ -151,10 +151,7 @@ fn atomic_write(final_path: &Path, data: &[u8]) -> std::io::Result<()> {
     // Build temp file in the same directory as the target, with a unique suffix
     // derived from PID + thread ID + global counter to avoid concurrent-write
     // races both intra-process and cross-process.
-    let file_name = final_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
+    let file_name = final_path.file_name().unwrap_or_default().to_string_lossy();
     let tmp_name = format!("{file_name}.tmp.{pid}.{tid:?}.{seq}");
     let tmp_path = final_path.with_file_name(&tmp_name);
 
@@ -167,11 +164,7 @@ fn atomic_write(final_path: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 /// Inner write-fsync-rename step for [`atomic_write`].
-fn atomic_write_inner(
-    tmp_path: &Path,
-    final_path: &Path,
-    data: &[u8],
-) -> std::io::Result<()> {
+fn atomic_write_inner(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::io::Result<()> {
     let file = std::fs::File::create(tmp_path)?;
     let mut writer = std::io::BufWriter::new(file);
     writer.write_all(data)?;
