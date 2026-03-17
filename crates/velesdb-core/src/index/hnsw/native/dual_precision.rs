@@ -382,7 +382,14 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         let mut candidates: BinaryHeap<Reverse<(u32, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(u32, NodeId)> = BinaryHeap::new();
 
-        Self::init_search_from_ep(store, query_int8, current_ep, &mut visited, &mut candidates, &mut results);
+        Self::init_search_from_ep(
+            store,
+            query_int8,
+            current_ep,
+            &mut visited,
+            &mut candidates,
+            &mut results,
+        );
 
         while let Some(Reverse((c_dist, c_node))) = candidates.pop() {
             if c_dist > results.peek().map_or(u32::MAX, |r| r.0) && results.len() >= ef {
@@ -392,8 +399,13 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             let layers = self.inner.layers.read();
             let _ = layers[0].with_neighbors(c_node, |neighbors| {
                 Self::process_int8_neighbors(
-                    store, query_int8, neighbors, ef,
-                    &mut visited, &mut candidates, &mut results,
+                    store,
+                    query_int8,
+                    neighbors,
+                    ef,
+                    &mut visited,
+                    &mut candidates,
+                    &mut results,
                 );
             });
         }
@@ -414,7 +426,9 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         results: &mut std::collections::BinaryHeap<(u32, NodeId)>,
     ) {
         if let Some(ep_slice) = store.get_slice(ep) {
-            let dist = store.quantizer().distance_l2_quantized_slice(query_int8, ep_slice);
+            let dist = store
+                .quantizer()
+                .distance_l2_quantized_slice(query_int8, ep_slice);
             candidates.push(std::cmp::Reverse((dist, ep)));
             results.push((dist, ep));
             visited.insert(ep);

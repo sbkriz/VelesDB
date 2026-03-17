@@ -180,7 +180,9 @@ impl ColumnStore {
         &mut self,
         values: &[(&str, ColumnValue)],
     ) -> Result<UpsertResult, ColumnStoreError> {
-        let pk_col = self.primary_key_column.clone()
+        let pk_col = self
+            .primary_key_column
+            .clone()
             .ok_or(ColumnStoreError::MissingPrimaryKey)?;
 
         let pk_value = Self::extract_pk_value(values, &pk_col)?;
@@ -372,10 +374,7 @@ impl ColumnStore {
     }
 
     /// Sets a column cell to null at the given row index.
-    fn set_column_null(
-        col: &mut TypedColumn,
-        row_idx: usize,
-    ) -> Result<(), ColumnStoreError> {
+    fn set_column_null(col: &mut TypedColumn, row_idx: usize) -> Result<(), ColumnStoreError> {
         match col {
             TypedColumn::Int(vec) => Self::checked_set(vec, row_idx, None),
             TypedColumn::Float(vec) => Self::checked_set(vec, row_idx, None),

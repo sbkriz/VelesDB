@@ -6,11 +6,29 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::Point;
-use crate::quantization::StorageMode;
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::quantization::{BinaryQuantizedVector, PQVector, QuantizedVector, StorageMode};
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
-use std::collections::BTreeMap;
+use parking_lot::RwLockWriteGuard;
+use std::collections::{BTreeMap, HashMap};
+
+struct QuantizationGuards<'a> {
+    sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
+    binary: Option<RwLockWriteGuard<'a, HashMap<u64, BinaryQuantizedVector>>>,
+    pq: Option<RwLockWriteGuard<'a, HashMap<u64, PQVector>>>,
+}
+
+impl<'a> QuantizationGuards<'a> {
+    fn acquire(collection: &'a Collection, mode: StorageMode) -> Self {
+        Self {
+            sq8: matches!(mode, StorageMode::SQ8).then(|| collection.sq8_cache.write()),
+            binary: matches!(mode, StorageMode::Binary).then(|| collection.binary_cache.write()),
+            pq: matches!(mode, StorageMode::ProductQuantization)
+                .then(|| collection.pq_cache.write()),
+        }
+    }
+}
 
 impl Collection {
     /// Inserts or updates points in the collection.
@@ -65,47 +83,31 @@ impl Collection {
         points: &[Point],
         storage_mode: StorageMode,
     ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
-        let mut sparse_batch = Vec::new();
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
+        let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
 
-        let mut sq8_cache = match storage_mode {
-            StorageMode::SQ8 => Some(self.sq8_cache.write()),
-            _ => None,
-        };
-        let mut binary_cache = match storage_mode {
-            StorageMode::Binary => Some(self.binary_cache.write()),
-            _ => None,
-        };
-        let mut pq_cache = match storage_mode {
-            StorageMode::ProductQuantization => Some(self.pq_cache.write()),
-            _ => None,
-        };
-
+        let mut sparse_batch = Vec::new();
         for point in points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             vector_storage.store(point.id, &point.vector)?;
 
-            self.cache_quantized_vector(
-                point, storage_mode,
-                sq8_cache.as_deref_mut(), binary_cache.as_deref_mut(), pq_cache.as_deref_mut(),
+            let (sq8, binary, pq) = (
+                quant_guards.sq8.as_deref_mut(),
+                quant_guards.binary.as_deref_mut(),
+                quant_guards.pq.as_deref_mut(),
             );
+            self.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
 
-            if let Some(payload) = &point.payload {
-                payload_storage.store(point.id, payload)?;
-            } else {
-                let _ = payload_storage.delete(point.id);
-            }
-
-            self.update_secondary_indexes_on_upsert(point.id, old_payload.as_ref(), point.payload.as_ref());
+            Self::store_or_delete_payload(&mut payload_storage, point)?;
+            self.update_secondary_indexes_on_upsert(
+                point.id,
+                old_payload.as_ref(),
+                point.payload.as_ref(),
+            );
             self.index.insert(point.id, &point.vector);
             Self::update_text_index(&self.text_index, point);
-
-            if let Some(ref sv_map) = point.sparse_vectors {
-                if !sv_map.is_empty() {
-                    sparse_batch.push((point.id, sv_map.clone()));
-                }
-            }
+            Self::collect_sparse_vectors(point, &mut sparse_batch);
         }
 
         let point_count = vector_storage.len();
@@ -118,6 +120,29 @@ impl Collection {
         self.index.save(&self.path)?;
 
         Ok(sparse_batch)
+    }
+
+    fn store_or_delete_payload(
+        payload_storage: &mut LogPayloadStorage,
+        point: &Point,
+    ) -> Result<()> {
+        if let Some(payload) = &point.payload {
+            payload_storage.store(point.id, payload)?;
+        } else {
+            let _ = payload_storage.delete(point.id);
+        }
+        Ok(())
+    }
+
+    fn collect_sparse_vectors(
+        point: &Point,
+        sparse_batch: &mut Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>,
+    ) {
+        if let Some(sv_map) = &point.sparse_vectors {
+            if !sv_map.is_empty() {
+                sparse_batch.push((point.id, sv_map.clone()));
+            }
+        }
     }
 
     /// Updates the BM25 text index for a single point.
@@ -279,7 +304,10 @@ impl Collection {
         for point in points {
             if let Some(sv_map) = &point.sparse_vectors {
                 for (name, sv) in sv_map {
-                    batch.entry(name.clone()).or_default().push((point.id, sv.clone()));
+                    batch
+                        .entry(name.clone())
+                        .or_default()
+                        .push((point.id, sv.clone()));
                 }
             }
         }

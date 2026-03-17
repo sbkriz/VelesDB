@@ -60,7 +60,9 @@ pub async fn create_collection(
         Ok(()) => create_collection_success_response(&req),
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
             .into_response(),
     }
@@ -78,7 +80,10 @@ fn parse_distance_metric(raw: &str) -> Result<DistanceMetric, axum::response::Re
         _ => Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: format!("Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard", raw),
+                error: format!(
+                    "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
+                    raw
+                ),
             }),
         )
             .into_response()),
@@ -96,7 +101,10 @@ fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response
         _ => Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: format!("Invalid storage_mode: {}. Valid: full, sq8, binary, pq", raw),
+                error: format!(
+                    "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
+                    raw
+                ),
             }),
         )
             .into_response()),
@@ -117,7 +125,9 @@ fn dispatch_create(
         }
         "graph" | "knowledge_graph" | "kg" => {
             use velesdb_core::GraphSchema;
-            Ok(state.db.create_graph_collection(&req.name, GraphSchema::schemaless()))
+            Ok(state
+                .db
+                .create_graph_collection(&req.name, GraphSchema::schemaless()))
         }
         "vector" | "" => {
             let dimension = req.dimension.ok_or_else(|| {
@@ -131,12 +141,19 @@ fn dispatch_create(
             })?;
             if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
                 Ok(state.db.create_vector_collection_with_hnsw(
-                    &req.name, dimension, metric, storage_mode,
-                    req.hnsw_m, req.hnsw_ef_construction,
+                    &req.name,
+                    dimension,
+                    metric,
+                    storage_mode,
+                    req.hnsw_m,
+                    req.hnsw_ef_construction,
                 ))
             } else {
                 Ok(state.db.create_vector_collection_with_options(
-                    &req.name, dimension, metric, storage_mode,
+                    &req.name,
+                    dimension,
+                    metric,
+                    storage_mode,
                 ))
             }
         }

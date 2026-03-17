@@ -53,7 +53,11 @@ impl Parser {
         }
 
         if condition.is_none() && using_columns.is_none() {
-            return Err(ParseError::syntax(0, "", "JOIN clause requires ON or USING"));
+            return Err(ParseError::syntax(
+                0,
+                "",
+                "JOIN clause requires ON or USING",
+            ));
         }
 
         Ok(JoinClause {

@@ -52,20 +52,38 @@ impl Parser {
         match pair.as_rule() {
             Rule::distinct_modifier => stmt.distinct = crate::velesql::DistinctMode::All,
             Rule::select_list => stmt.columns = Self::parse_select_list(pair)?,
-            Rule::from_clause => {
-                let (table, aliases) = Self::parse_from_clause(pair);
-                stmt.from = table;
-                stmt.from_alias = aliases;
-            }
-            Rule::join_clause => {
-                let join = Self::parse_join_clause(pair)?;
-                // BUG-8: Collect JOIN aliases into from_alias so all
-                // aliases visible in scope are available to the executor.
-                if let Some(ref alias) = join.alias {
-                    stmt.from_alias.push(alias.clone());
-                }
-                stmt.joins.push(join);
-            }
+            Rule::from_clause => Self::dispatch_from_clause(pair, stmt),
+            Rule::join_clause => Self::dispatch_join_clause(pair, stmt)?,
+            _ => Self::dispatch_optional_clause(pair, stmt)?,
+        }
+        Ok(())
+    }
+
+    fn dispatch_from_clause(pair: pest::iterators::Pair<Rule>, stmt: &mut SelectStmtBuilder) {
+        let (table, aliases) = Self::parse_from_clause(pair);
+        stmt.from = table;
+        stmt.from_alias = aliases;
+    }
+
+    fn dispatch_join_clause(
+        pair: pest::iterators::Pair<Rule>,
+        stmt: &mut SelectStmtBuilder,
+    ) -> Result<(), ParseError> {
+        let join = Self::parse_join_clause(pair)?;
+        // BUG-8: Collect JOIN aliases into from_alias so all
+        // aliases visible in scope are available to the executor.
+        if let Some(ref alias) = join.alias {
+            stmt.from_alias.push(alias.clone());
+        }
+        stmt.joins.push(join);
+        Ok(())
+    }
+
+    fn dispatch_optional_clause(
+        pair: pest::iterators::Pair<Rule>,
+        stmt: &mut SelectStmtBuilder,
+    ) -> Result<(), ParseError> {
+        match pair.as_rule() {
             Rule::where_clause => stmt.where_clause = Some(Self::parse_where_clause(pair)?),
             Rule::group_by_clause => stmt.group_by = Some(Self::parse_group_by_clause(pair)),
             Rule::having_clause => stmt.having = Some(Self::parse_having_clause(pair)?),

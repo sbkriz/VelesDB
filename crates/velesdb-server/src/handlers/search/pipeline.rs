@@ -247,13 +247,15 @@ fn execute_hybrid_sparse(
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
     let strategy = parse_fusion_strategy(req.fusion.as_ref())?;
-    Ok(collection.hybrid_sparse_search(
-        &req.vector,
-        sparse_query,
-        req.top_k,
-        index_name,
-        &strategy,
-    ))
+    Ok(
+        collection.hybrid_sparse_search(
+            &req.vector,
+            sparse_query,
+            req.top_k,
+            index_name,
+            &strategy,
+        ),
+    )
 }
 
 /// Shared result-handling for all search modes.

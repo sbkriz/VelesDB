@@ -56,7 +56,9 @@ pub async fn create_index(
             .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
             .into_response(),
     }

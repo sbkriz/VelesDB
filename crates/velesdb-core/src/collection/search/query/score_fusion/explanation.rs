@@ -61,18 +61,35 @@ impl ScoreBreakdown {
     /// Builds weighted score components (vector, graph, path).
     fn build_weighted_components(&self, weight: f32) -> Vec<ComponentExplanation> {
         let scored = [
-            ("vector_similarity", self.vector_similarity, "Cosine similarity to query vector"),
-            ("graph_distance", self.graph_distance, "Normalized graph proximity"),
-            ("path_score", self.path_score, "Path relevance (decay + rel types)"),
+            (
+                "vector_similarity",
+                self.vector_similarity,
+                "Cosine similarity to query vector",
+            ),
+            (
+                "graph_distance",
+                self.graph_distance,
+                "Normalized graph proximity",
+            ),
+            (
+                "path_score",
+                self.path_score,
+                "Path relevance (decay + rel types)",
+            ),
         ];
-        scored.into_iter().filter_map(|(name, value, desc)| {
-            let v = value?;
-            Some(ComponentExplanation {
-                name: name.to_string(), value: v,
-                weight: Some(weight), contribution: v * weight,
-                description: format!("{desc}: {v:.3}"),
+        scored
+            .into_iter()
+            .filter_map(|(name, value, desc)| {
+                let v = value?;
+                Some(ComponentExplanation {
+                    name: name.to_string(),
+                    value: v,
+                    weight: Some(weight),
+                    contribution: v * weight,
+                    description: format!("{desc}: {v:.3}"),
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// Appends multiplicative boost components (metadata, recency, custom).
@@ -84,16 +101,20 @@ impl ScoreBreakdown {
         for (name, value, desc) in boosts {
             if let Some(v) = value {
                 components.push(ComponentExplanation {
-                    name: name.to_string(), value: v,
-                    weight: None, contribution: 0.0,
+                    name: name.to_string(),
+                    value: v,
+                    weight: None,
+                    contribution: 0.0,
                     description: format!("{desc}: {v:.2}x"),
                 });
             }
         }
         for (name, &boost) in &self.custom_boosts {
             components.push(ComponentExplanation {
-                name: format!("custom:{name}"), value: boost,
-                weight: None, contribution: 0.0,
+                name: format!("custom:{name}"),
+                value: boost,
+                weight: None,
+                contribution: 0.0,
                 description: format!("Custom boost '{name}': {boost:.2}x"),
             });
         }

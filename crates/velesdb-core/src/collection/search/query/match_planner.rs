@@ -93,18 +93,31 @@ impl MatchQueryPlanner {
     pub fn plan(match_clause: &MatchClause, stats: &CollectionStats) -> MatchExecutionStrategy {
         let has_similarity = Self::has_similarity_condition(match_clause.where_clause.as_ref());
         let similarity_info = Self::extract_similarity_info(match_clause.where_clause.as_ref());
-        let similarity_on_start = Self::is_similarity_on_start(match_clause, similarity_info.as_ref());
+        let similarity_on_start =
+            Self::is_similarity_on_start(match_clause, similarity_info.as_ref());
         let start_labels = Self::extract_start_labels(match_clause);
         let max_depth = Self::count_hops(match_clause);
 
         if has_similarity && similarity_on_start {
             Self::plan_vector_first(match_clause, stats, similarity_info)
         } else if !has_similarity {
-            MatchExecutionStrategy::GraphFirst { start_labels, max_depth }
+            MatchExecutionStrategy::GraphFirst {
+                start_labels,
+                max_depth,
+            }
         } else if Self::should_use_parallel(stats, similarity_info.as_ref()) {
-            Self::plan_parallel(match_clause, stats, similarity_info, start_labels, max_depth)
+            Self::plan_parallel(
+                match_clause,
+                stats,
+                similarity_info,
+                start_labels,
+                max_depth,
+            )
         } else {
-            MatchExecutionStrategy::GraphFirst { start_labels, max_depth }
+            MatchExecutionStrategy::GraphFirst {
+                start_labels,
+                max_depth,
+            }
         }
     }
 
@@ -113,16 +126,19 @@ impl MatchQueryPlanner {
         match_clause: &MatchClause,
         similarity_info: Option<&(String, f32, String)>,
     ) -> bool {
-        let start_alias = match_clause.patterns.first()
+        let start_alias = match_clause
+            .patterns
+            .first()
             .and_then(|p| p.nodes.first())
             .and_then(|n| n.alias.as_ref());
-        similarity_info
-            .is_some_and(|(alias, _, _)| Some(alias) == start_alias)
+        similarity_info.is_some_and(|(alias, _, _)| Some(alias) == start_alias)
     }
 
     /// Extracts start labels from the first pattern node.
     fn extract_start_labels(match_clause: &MatchClause) -> Vec<String> {
-        match_clause.patterns.first()
+        match_clause
+            .patterns
+            .first()
             .and_then(|p| p.nodes.first())
             .map(|n| n.labels.clone())
             .unwrap_or_default()
@@ -153,7 +169,8 @@ impl MatchQueryPlanner {
         let (alias, threshold, _) = similarity_info.unwrap_or_default();
         MatchExecutionStrategy::Parallel {
             graph_hint: Box::new(MatchExecutionStrategy::GraphFirst {
-                start_labels, max_depth,
+                start_labels,
+                max_depth,
             }),
             vector_hint: Box::new(MatchExecutionStrategy::VectorFirst {
                 similarity_alias: alias,

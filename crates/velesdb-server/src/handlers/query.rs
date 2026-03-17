@@ -250,7 +250,9 @@ fn execute_standard_query(
                 error: VelesqlErrorDetail {
                     code: "VELESQL_EXECUTION_ERROR".to_string(),
                     message: other.to_string(),
-                    hint: "Validate query semantics and parameter types against the target collection".to_string(),
+                    hint:
+                        "Validate query semantics and parameter types against the target collection"
+                            .to_string(),
                     details: None,
                 },
             }),
@@ -456,7 +458,11 @@ pub async fn explain(
     let plan = build_explain_plan(select, &features);
     let estimated_cost = estimate_cost(features.has_vector_search);
 
-    let query_type = if parsed.is_match_query() { "MATCH" } else { "SELECT" };
+    let query_type = if parsed.is_match_query() {
+        "MATCH"
+    } else {
+        "SELECT"
+    };
 
     let (cache_hit, plan_reuse_count) = state
         .db
@@ -509,8 +515,22 @@ fn build_explain_plan(
     let mut plan = Vec::new();
     let mut step_num = 1;
 
-    // Step 1: Source scan or vector search
-    plan.push(if features.has_vector_search {
+    plan.push(build_source_step(select, features, step_num));
+    step_num += 1;
+
+    append_filter_and_join_steps(select, features, &mut plan, &mut step_num);
+    append_aggregation_steps(features, &mut plan, &mut step_num);
+    append_pagination_step(select, &mut plan, step_num);
+
+    plan
+}
+
+fn build_source_step(
+    select: &velesdb_core::velesql::SelectStatement,
+    features: &ExplainFeatures,
+    step_num: usize,
+) -> ExplainStep {
+    if features.has_vector_search {
         ExplainStep {
             step: step_num,
             operation: "VectorSearch".to_string(),
@@ -524,53 +544,107 @@ fn build_explain_plan(
             description: format!("Scan collection '{}'", select.from),
             estimated_rows: None,
         }
-    });
-    step_num += 1;
+    }
+}
 
+fn append_filter_and_join_steps(
+    select: &velesdb_core::velesql::SelectStatement,
+    features: &ExplainFeatures,
+    plan: &mut Vec<ExplainStep>,
+    step_num: &mut usize,
+) {
     if features.has_filter {
-        plan.push(ExplainStep { step: step_num, operation: "Filter".to_string(), description: "Apply WHERE clause predicates".to_string(), estimated_rows: None });
-        step_num += 1;
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "Filter".to_string(),
+            description: "Apply WHERE clause predicates".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
     }
 
     for join in &select.joins {
-        plan.push(ExplainStep { step: step_num, operation: format!("{:?}Join", join.join_type), description: format!("Join with '{}'", join.table), estimated_rows: None });
-        step_num += 1;
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: format!("{:?}Join", join.join_type),
+            description: format!("Join with '{}'", join.table),
+            estimated_rows: None,
+        });
+        *step_num += 1;
     }
+}
 
+fn append_aggregation_steps(
+    features: &ExplainFeatures,
+    plan: &mut Vec<ExplainStep>,
+    step_num: &mut usize,
+) {
     if features.has_group_by {
-        plan.push(ExplainStep { step: step_num, operation: "GroupBy".to_string(), description: "Group rows by specified columns".to_string(), estimated_rows: None });
-        step_num += 1;
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "GroupBy".to_string(),
+            description: "Group rows by specified columns".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
     }
 
     if features.has_aggregation {
-        plan.push(ExplainStep { step: step_num, operation: "Aggregate".to_string(), description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(), estimated_rows: None });
-        step_num += 1;
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "Aggregate".to_string(),
+            description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
     }
 
     if features.has_order_by {
-        plan.push(ExplainStep { step: step_num, operation: "Sort".to_string(), description: "Sort results by ORDER BY clause".to_string(), estimated_rows: None });
-        step_num += 1;
+        plan.push(ExplainStep {
+            step: *step_num,
+            operation: "Sort".to_string(),
+            description: "Sort results by ORDER BY clause".to_string(),
+            estimated_rows: None,
+        });
+        *step_num += 1;
     }
+}
 
+fn append_pagination_step(
+    select: &velesdb_core::velesql::SelectStatement,
+    plan: &mut Vec<ExplainStep>,
+    step_num: usize,
+) {
     if select.limit.is_some() || select.offset.is_some() {
         plan.push(ExplainStep {
             step: step_num,
             operation: "Limit".to_string(),
-            description: format!("Apply LIMIT {} OFFSET {}", select.limit.unwrap_or(0), select.offset.unwrap_or(0)),
+            description: format!(
+                "Apply LIMIT {} OFFSET {}",
+                select.limit.unwrap_or(0),
+                select.offset.unwrap_or(0)
+            ),
             estimated_rows: select.limit.map(|l| l as usize),
         });
     }
-
-    plan
 }
 
 /// Estimate execution cost based on query features.
 fn estimate_cost(has_vector_search: bool) -> ExplainCost {
     ExplainCost {
         uses_index: has_vector_search,
-        index_name: if has_vector_search { Some("HNSW".to_string()) } else { None },
+        index_name: if has_vector_search {
+            Some("HNSW".to_string())
+        } else {
+            None
+        },
         selectivity: if has_vector_search { 0.01 } else { 1.0 },
-        complexity: if has_vector_search { "O(log n)" } else { "O(n)" }.to_string(),
+        complexity: if has_vector_search {
+            "O(log n)"
+        } else {
+            "O(n)"
+        }
+        .to_string(),
     }
 }
 

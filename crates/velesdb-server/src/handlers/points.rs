@@ -212,12 +212,16 @@ pub async fn upsert_points(
         }
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: format!("Task panicked: {e}") }),
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
         )
             .into_response(),
     }
@@ -310,10 +314,7 @@ fn extract_id_hint(line: &str) -> Option<u64> {
 }
 
 /// Read an NDJSON body stream, batching points and flushing periodically.
-async fn process_ndjson_stream(
-    collection: &VectorCollection,
-    body: Body,
-) -> StreamUpsertStats {
+async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> StreamUpsertStats {
     let mut stream = body.into_data_stream();
     let mut buffer = Vec::<u8>::new();
     let mut batch = Vec::with_capacity(STREAM_BATCH_SIZE);

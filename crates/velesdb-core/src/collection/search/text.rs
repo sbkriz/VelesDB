@@ -205,7 +205,12 @@ impl Collection {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
                 Some(SearchResult::new(
-                    Point { id, vector, payload, sparse_vectors: None },
+                    Point {
+                        id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
                     score,
                 ))
             })
@@ -277,9 +282,16 @@ impl Collection {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
                 let payload_ref = payload.as_ref()?;
-                if !filter.matches(payload_ref) { return None; }
+                if !filter.matches(payload_ref) {
+                    return None;
+                }
                 Some(SearchResult::new(
-                    Point { id, vector, payload, sparse_vectors: None },
+                    Point {
+                        id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
                     score,
                 ))
             })

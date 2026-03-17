@@ -233,7 +233,8 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
 
         match op {
             WAL_OP_UPSERT => {
-                let Some(new_pos) = replay_upsert_entry(&data, pos, entry_start, total_len, index)? else {
+                let Some(new_pos) = replay_upsert_entry(&data, pos, entry_start, total_len, index)?
+                else {
                     break;
                 };
                 pos = new_pos;
@@ -267,9 +268,7 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
 /// `total_len` is the body length declared in the prefix.
 fn read_wal_entry_header(data: &[u8], pos: usize) -> Option<(usize, usize)> {
     if pos + 4 > data.len() {
-        tracing::warn!(
-            "Sparse WAL truncated at offset {pos}: not enough bytes for length prefix"
-        );
+        tracing::warn!("Sparse WAL truncated at offset {pos}: not enough bytes for length prefix");
         return None;
     }
     let total_len =
@@ -419,20 +418,8 @@ fn write_idx_tmp(
     let mut current_offset: u64 = 0;
 
     for &term_id in term_ids {
-        let (postings, max_weight) = merged.get(&term_id).ok_or_else(|| {
-            Error::SparseIndexError(format!(
-                "compact: term_id {term_id} absent from merged postings map"
-            ))
-        })?;
-
-        for entry in postings {
-            idx_file
-                .write_all(&entry.doc_id.to_le_bytes())
-                .map_err(|e| Error::SparseIndexError(format!("compact idx write: {e}")))?;
-            idx_file
-                .write_all(&entry.weight.to_le_bytes())
-                .map_err(|e| Error::SparseIndexError(format!("compact idx write: {e}")))?;
-        }
+        let (postings, max_weight) = lookup_term(term_id, merged)?;
+        write_postings(&mut idx_file, postings)?;
 
         let byte_len = (postings.len() * POSTING_DISK_SIZE) as u64;
         term_entries.push(TermEntry {
@@ -449,6 +436,27 @@ fn write_idx_tmp(
         .flush()
         .map_err(|e| Error::SparseIndexError(format!("compact idx flush: {e}")))?;
     Ok(term_entries)
+}
+
+fn lookup_term(
+    term_id: u32,
+    merged: &FxHashMap<u32, (Vec<PostingEntry>, f32)>,
+) -> Result<&(Vec<PostingEntry>, f32)> {
+    merged.get(&term_id).ok_or_else(|| {
+        Error::SparseIndexError(format!(
+            "compact: term_id {term_id} absent from merged postings map"
+        ))
+    })
+}
+
+fn write_postings(w: &mut BufWriter<std::fs::File>, postings: &[PostingEntry]) -> Result<()> {
+    for entry in postings {
+        w.write_all(&entry.doc_id.to_le_bytes())
+            .map_err(|e| Error::SparseIndexError(format!("compact idx write: {e}")))?;
+        w.write_all(&entry.weight.to_le_bytes())
+            .map_err(|e| Error::SparseIndexError(format!("compact idx write: {e}")))?;
+    }
+    Ok(())
 }
 
 /// Writes the term dictionary file.

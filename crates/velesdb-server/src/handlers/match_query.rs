@@ -204,9 +204,7 @@ fn parse_match_clause(
 }
 
 /// Validate that threshold (if provided) is in [0.0, 1.0].
-fn validate_threshold(
-    threshold: Option<f32>,
-) -> Result<(), (StatusCode, Json<MatchQueryError>)> {
+fn validate_threshold(threshold: Option<f32>) -> Result<(), (StatusCode, Json<MatchQueryError>)> {
     if let Some(t) = threshold {
         if !(0.0..=1.0).contains(&t) {
             return Err(mk_match_error(

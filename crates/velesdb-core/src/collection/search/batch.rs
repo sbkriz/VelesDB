@@ -33,7 +33,8 @@ impl Collection {
         if queries.len() != filters.len() {
             return Err(Error::Config(format!(
                 "Queries count ({}) does not match filters count ({})",
-                queries.len(), filters.len()
+                queries.len(),
+                filters.len()
             )));
         }
 
@@ -59,7 +60,10 @@ impl Collection {
         {
             let query_results = self.merge_delta(query_results, query, candidates_k, metric);
             let mut filtered = Self::filter_and_resolve_batch(
-                &query_results, filter_opt.as_ref(), &*vector_storage, &*payload_storage,
+                &query_results,
+                filter_opt.as_ref(),
+                &*vector_storage,
+                &*payload_storage,
             );
             Self::sort_results_by_metric(&mut filtered, higher_is_better);
             filtered.truncate(k);
@@ -85,11 +89,18 @@ impl Collection {
                         Some(p) => f.matches(p),
                         None => f.matches(&serde_json::Value::Null),
                     };
-                    if !matches { return None; }
+                    if !matches {
+                        return None;
+                    }
                 }
                 let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
                 Some(SearchResult {
-                    point: Point { id: sr.id, vector, payload, sparse_vectors: None },
+                    point: Point {
+                        id: sr.id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
                     score: sr.score,
                 })
             })
@@ -100,9 +111,13 @@ impl Collection {
     fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
         results.sort_by(|a, b| {
             if higher_is_better {
-                b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             } else {
-                a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal)
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }
         });
     }
@@ -242,10 +257,7 @@ impl Collection {
     }
 
     /// Validates inputs for `multi_query_search` and returns the distance metric.
-    fn validate_multi_query_inputs(
-        &self,
-        vectors: &[&[f32]],
-    ) -> Result<crate::DistanceMetric> {
+    fn validate_multi_query_inputs(&self, vectors: &[&[f32]]) -> Result<crate::DistanceMetric> {
         const MAX_VECTORS: usize = 10;
 
         if vectors.is_empty() {
@@ -333,11 +345,7 @@ impl Collection {
     }
 
     /// Fetches full point data for the top-k fused results.
-    fn hydrate_fused_results(
-        &self,
-        fused: Vec<(u64, f32)>,
-        top_k: usize,
-    ) -> Vec<SearchResult> {
+    fn hydrate_fused_results(&self, fused: Vec<(u64, f32)>, top_k: usize) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 

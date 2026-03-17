@@ -174,8 +174,12 @@ impl Collection {
 
             if pattern.relationships.is_empty() {
                 self.collect_single_node_results(
-                    &start_nodes, match_clause, params, &mut seen_pairs,
-                    &mut all_results, limit,
+                    &start_nodes,
+                    match_clause,
+                    params,
+                    &mut seen_pairs,
+                    &mut all_results,
+                    limit,
                 )?;
                 continue;
             }
@@ -200,18 +204,25 @@ impl Collection {
 
                     iteration_count += 1;
                     self.check_periodic_guardrails(
-                        ctx, iteration_count, &all_results, &mut reported_cardinality,
+                        ctx,
+                        iteration_count,
+                        &all_results,
+                        &mut reported_cardinality,
                     )?;
 
                     let match_result = self.build_traversal_match_result(
-                        &traversal_result, &start_bindings, pattern, ctx,
+                        &traversal_result,
+                        &start_bindings,
+                        pattern,
+                        ctx,
                     )?;
 
                     if let Some(ref where_clause) = match_clause.where_clause {
                         if !self.evaluate_where_condition(
                             traversal_result.target_id,
                             Some(&match_result.bindings),
-                            where_clause, params,
+                            where_clause,
+                            params,
                         )? {
                             continue;
                         }
@@ -249,9 +260,7 @@ impl Collection {
                 break;
             }
             if let Some(ref where_clause) = match_clause.where_clause {
-                if !self.evaluate_where_condition(
-                    *node_id, Some(bindings), where_clause, params,
-                )? {
+                if !self.evaluate_where_condition(*node_id, Some(bindings), where_clause, params)? {
                     continue;
                 }
             }
@@ -262,8 +271,7 @@ impl Collection {
 
             let mut result = MatchResult::new(*node_id, 0, Vec::new());
             result.bindings.clone_from(bindings);
-            result.projected =
-                self.project_properties(bindings, &match_clause.return_clause);
+            result.projected = self.project_properties(bindings, &match_clause.return_clause);
             all_results.push(result);
         }
         Ok(())
@@ -346,10 +354,14 @@ impl Collection {
                 None
             };
 
-            if has_label_filter && !Self::node_matches_labels(payload_opt.as_ref(), &first_node.labels) {
+            if has_label_filter
+                && !Self::node_matches_labels(payload_opt.as_ref(), &first_node.labels)
+            {
                 continue;
             }
-            if has_property_filter && !Self::node_matches_properties(payload_opt.as_ref(), &first_node.properties) {
+            if has_property_filter
+                && !Self::node_matches_properties(payload_opt.as_ref(), &first_node.properties)
+            {
                 continue;
             }
 

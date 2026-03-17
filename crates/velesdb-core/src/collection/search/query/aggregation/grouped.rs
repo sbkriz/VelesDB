@@ -12,6 +12,7 @@
 #![allow(clippy::cast_sign_loss)]
 
 use super::super::where_eval::GraphMatchEvalCache;
+use super::GroupKey;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -20,8 +21,6 @@ use crate::velesql::{
     Query,
 };
 use std::collections::HashMap;
-
-use super::GroupKey;
 
 impl Collection {
     /// Execute a grouped aggregation query (GROUP BY) with optional HAVING filter.
@@ -36,12 +35,15 @@ impl Collection {
         let stmt = &query.select;
         let max_groups = Self::extract_max_groups_limit(stmt.with_clause.as_ref());
 
-        let groups = self.scan_and_group(
-            stmt, aggregations, group_by_columns, max_groups, params,
-        )?;
+        let groups =
+            self.scan_and_group(stmt, aggregations, group_by_columns, max_groups, params)?;
 
         let results = Self::build_grouped_results(
-            groups, aggregations, group_by_columns, having, stmt.order_by.as_deref(),
+            groups,
+            aggregations,
+            group_by_columns,
+            having,
+            stmt.order_by.as_deref(),
         );
 
         Ok(serde_json::Value::Array(results))
@@ -62,25 +64,8 @@ impl Collection {
         });
         let needs_vector_eval = where_clause.is_some_and(Self::condition_requires_vector_eval);
 
-        let filter = if use_runtime_where_eval {
-            None
-        } else {
-            where_clause.as_ref().map(|cond| {
-                let resolved = Self::resolve_condition_params(cond, params);
-                crate::filter::Filter::new(crate::filter::Condition::from(resolved))
-            })
-        };
-
-        let columns_to_aggregate: std::collections::HashSet<&str> = aggregations
-            .iter()
-            .filter_map(|agg| match &agg.argument {
-                AggregateArg::Column(col) => Some(col.as_str()),
-                AggregateArg::Wildcard => None,
-            })
-            .collect();
-        let has_count_star = aggregations
-            .iter()
-            .any(|agg| matches!(agg.argument, AggregateArg::Wildcard));
+        let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params);
+        let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
@@ -91,43 +76,87 @@ impl Collection {
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
 
-            if use_runtime_where_eval {
-                let vector = if needs_vector_eval {
-                    vector_storage.retrieve(id).ok().flatten()
-                } else { None };
-                if let Some(cond) = where_clause {
-                    if !self.evaluate_where_condition_for_record(
-                        cond, id, payload.as_ref(), vector.as_deref(),
-                        params, &stmt.from_alias, &mut graph_cache,
-                    )? { continue; }
-                }
+            let passes = if use_runtime_where_eval {
+                self.runtime_where_passes(
+                    id,
+                    payload.as_ref(),
+                    &*vector_storage,
+                    stmt,
+                    params,
+                    needs_vector_eval,
+                    &mut graph_cache,
+                )?
             } else if let Some(ref f) = filter {
-                let matches = match payload {
-                    Some(ref p) => f.matches(p),
-                    None => f.matches(&serde_json::Value::Null),
-                };
-                if !matches { continue; }
+                Self::payload_passes_filter(f, payload.as_ref())
+            } else {
+                true
+            };
+            if !passes {
+                continue;
             }
 
-            let group_key = Self::extract_group_key_fast(payload.as_ref(), group_by_columns);
-            if !groups.contains_key(&group_key) && groups.len() >= max_groups {
-                return Err(crate::error::Error::Config(format!(
-                    "Too many groups (limit: {max_groups})"
-                )));
-            }
-
-            let aggregator = groups.entry(group_key).or_default();
-            if has_count_star { aggregator.process_count(); }
-            if let Some(ref p) = payload {
-                for col in &columns_to_aggregate {
-                    if let Some(value) = Self::get_nested_value(p, col) {
-                        aggregator.process_value(col, value);
-                    }
-                }
-            }
+            Self::insert_into_group(
+                &mut groups,
+                payload.as_ref(),
+                group_by_columns,
+                &columns_vec,
+                has_count_star,
+                max_groups,
+            )?;
         }
 
         Ok(groups)
+    }
+
+    /// Builds a static `Filter` from the WHERE clause when runtime eval is not needed.
+    pub(super) fn build_static_filter(
+        where_clause: Option<&crate::velesql::Condition>,
+        use_runtime: bool,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Option<crate::filter::Filter> {
+        if use_runtime {
+            return None;
+        }
+        where_clause.map(|cond| {
+            let resolved = Self::resolve_condition_params(cond, params);
+            crate::filter::Filter::new(crate::filter::Condition::from(resolved))
+        })
+    }
+
+    /// Extracts the list of columns to aggregate and whether COUNT(*) is present.
+    pub(super) fn prepare_agg_columns(aggregations: &[AggregateFunction]) -> (Vec<String>, bool) {
+        let columns: Vec<String> = aggregations
+            .iter()
+            .filter_map(|agg| match &agg.argument {
+                AggregateArg::Column(col) => Some(col.clone()),
+                AggregateArg::Wildcard => None,
+            })
+            .collect();
+        let has_count_star = aggregations
+            .iter()
+            .any(|agg| matches!(agg.argument, AggregateArg::Wildcard));
+        (columns, has_count_star)
+    }
+
+    /// Inserts a record into the appropriate group, enforcing the max-groups limit.
+    fn insert_into_group(
+        groups: &mut HashMap<GroupKey, Aggregator>,
+        payload: Option<&serde_json::Value>,
+        group_by_columns: &[String],
+        columns_to_aggregate: &[String],
+        has_count_star: bool,
+        max_groups: usize,
+    ) -> Result<()> {
+        let group_key = Self::extract_group_key_fast(payload, group_by_columns);
+        if !groups.contains_key(&group_key) && groups.len() >= max_groups {
+            return Err(crate::error::Error::Config(format!(
+                "Too many groups (limit: {max_groups})"
+            )));
+        }
+
+        let aggregator = groups.entry(group_key).or_default();
+        Self::accumulate_record(aggregator, payload, columns_to_aggregate, has_count_star);
+        Ok(())
     }
 
     /// Builds the result array from grouped aggregators, applying HAVING and ORDER BY.

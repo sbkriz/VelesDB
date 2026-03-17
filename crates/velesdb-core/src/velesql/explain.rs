@@ -210,10 +210,8 @@ impl QueryPlan {
             index_lookup = Self::extract_index_lookup(condition, indexed_fields);
         }
 
-        let (mut nodes, index_used) =
-            Self::build_scan_node(stmt, has_vector_search, index_lookup);
-        let filter_strategy =
-            Self::append_filter_nodes(&mut nodes, &filter_conditions, stmt);
+        let (mut nodes, index_used) = Self::build_scan_node(stmt, has_vector_search, index_lookup);
+        let filter_strategy = Self::append_filter_nodes(&mut nodes, &filter_conditions, stmt);
 
         let root = if nodes.len() == 1 {
             nodes.swap_remove(0)
@@ -434,7 +432,11 @@ impl QueryPlan {
         Self {
             root,
             estimated_cost_ms,
-            index_used: if has_similarity { Some(IndexType::Hnsw) } else { None },
+            index_used: if has_similarity {
+                Some(IndexType::Hnsw)
+            } else {
+                None
+            },
             filter_strategy: FilterStrategy::None,
             cache_hit: None,
             plan_reuse_count: None,

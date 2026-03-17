@@ -136,12 +136,21 @@ impl QueryCache {
         let original_query = query.to_string();
         let hash = (self.hash_fn)(&canonical_query);
 
-        if let Some(cached) = self.try_cache_hit(hash, &original_query, &canonical_query, record_stats) {
+        if let Some(cached) =
+            self.try_cache_hit(hash, &original_query, &canonical_query, record_stats)
+        {
             return Ok(cached);
         }
 
         let parsed = Parser::parse(query)?;
-        self.insert_into_cache(hash, original_query, canonical_query, query, &parsed, record_stats);
+        self.insert_into_cache(
+            hash,
+            original_query,
+            canonical_query,
+            query,
+            &parsed,
+            record_stats,
+        );
         Ok(parsed)
     }
 

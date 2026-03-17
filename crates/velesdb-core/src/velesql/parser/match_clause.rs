@@ -121,9 +121,7 @@ pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, Pa
 }
 
 /// Detects relationship direction and returns bracket positions.
-fn detect_direction_and_brackets(
-    input: &str,
-) -> Result<(Direction, usize, usize), ParseError> {
+fn detect_direction_and_brackets(input: &str) -> Result<(Direction, usize, usize), ParseError> {
     if input.starts_with("<-") && input.ends_with('-') {
         Ok((
             Direction::Incoming,
@@ -143,7 +141,11 @@ fn detect_direction_and_brackets(
             input.rfind(']').unwrap_or(input.len() - 1),
         ))
     } else {
-        Err(ParseError::syntax(0, input, "Invalid relationship direction"))
+        Err(ParseError::syntax(
+            0,
+            input,
+            "Invalid relationship direction",
+        ))
     }
 }
 

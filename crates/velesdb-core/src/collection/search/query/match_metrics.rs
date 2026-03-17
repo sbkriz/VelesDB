@@ -171,28 +171,54 @@ impl MatchMetrics {
     pub fn to_prometheus(&self) -> String {
         let mut output = String::new();
 
-        Self::write_counter(&mut output, "velesdb_match_queries_total",
-            "Total MATCH queries executed", self.total_queries.load(Ordering::Relaxed));
-        Self::write_counter(&mut output, "velesdb_match_queries_success_total",
-            "Successful MATCH queries", self.successful_queries.load(Ordering::Relaxed));
-        Self::write_counter(&mut output, "velesdb_match_queries_failed_total",
-            "Failed MATCH queries", self.failed_queries.load(Ordering::Relaxed));
+        Self::write_counter(
+            &mut output,
+            "velesdb_match_queries_total",
+            "Total MATCH queries executed",
+            self.total_queries.load(Ordering::Relaxed),
+        );
+        Self::write_counter(
+            &mut output,
+            "velesdb_match_queries_success_total",
+            "Successful MATCH queries",
+            self.successful_queries.load(Ordering::Relaxed),
+        );
+        Self::write_counter(
+            &mut output,
+            "velesdb_match_queries_failed_total",
+            "Failed MATCH queries",
+            self.failed_queries.load(Ordering::Relaxed),
+        );
 
         self.write_latency_histogram(&mut output);
 
-        Self::write_counter(&mut output, "velesdb_match_results_total",
-            "Total results returned", self.total_results.load(Ordering::Relaxed));
-        Self::write_counter(&mut output, "velesdb_match_guardrail_hits_total",
-            "Guard-rail violations", self.guard_rail_hits.load(Ordering::Relaxed));
-        Self::write_counter(&mut output, "velesdb_match_similarity_queries_total",
-            "Queries with similarity", self.similarity_queries.load(Ordering::Relaxed));
+        Self::write_counter(
+            &mut output,
+            "velesdb_match_results_total",
+            "Total results returned",
+            self.total_results.load(Ordering::Relaxed),
+        );
+        Self::write_counter(
+            &mut output,
+            "velesdb_match_guardrail_hits_total",
+            "Guard-rail violations",
+            self.guard_rail_hits.load(Ordering::Relaxed),
+        );
+        Self::write_counter(
+            &mut output,
+            "velesdb_match_similarity_queries_total",
+            "Queries with similarity",
+            self.similarity_queries.load(Ordering::Relaxed),
+        );
 
         output
     }
 
     /// Writes a Prometheus counter metric line.
     fn write_counter(output: &mut String, name: &str, help: &str, value: u64) {
-        output.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n{name} {value}\n"));
+        output.push_str(&format!(
+            "# HELP {name} {help}\n# TYPE {name} counter\n{name} {value}\n"
+        ));
     }
 
     /// Writes the latency histogram section.
@@ -204,7 +230,8 @@ impl MatchMetrics {
             cumulative += self.latency_buckets[i].load(Ordering::Relaxed);
             output.push_str(&format!(
                 "velesdb_match_latency_seconds_bucket{{le=\"{}\"}} {}\n",
-                bound as f64 / 1000.0, cumulative
+                bound as f64 / 1000.0,
+                cumulative
             ));
         }
         cumulative += self.latency_buckets[LATENCY_BUCKETS_MS.len()].load(Ordering::Relaxed);

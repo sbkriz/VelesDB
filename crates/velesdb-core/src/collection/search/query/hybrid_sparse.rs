@@ -118,17 +118,23 @@ impl Collection {
             return Ok(None);
         };
         let indices: Vec<u32> = serde_json::from_value(indices_val.clone()).map_err(|e| {
-            Error::Config(format!("Invalid sparse vector parameter ${name}.indices: {e}"))
+            Error::Config(format!(
+                "Invalid sparse vector parameter ${name}.indices: {e}"
+            ))
         })?;
         let values: Vec<f32> = serde_json::from_value(values_val.clone()).map_err(|e| {
-            Error::Config(format!("Invalid sparse vector parameter ${name}.values: {e}"))
+            Error::Config(format!(
+                "Invalid sparse vector parameter ${name}.values: {e}"
+            ))
         })?;
         if indices.len() != values.len() {
             return Err(Error::Config(format!(
                 "Sparse vector parameter ${name}: indices and values must have equal length"
             )));
         }
-        Ok(Some(SparseVector::new(indices.into_iter().zip(values).collect())))
+        Ok(Some(SparseVector::new(
+            indices.into_iter().zip(values).collect(),
+        )))
     }
 
     /// Parses shorthand sparse vector format: `{"12": 0.8, "45": 0.3}`.
@@ -139,11 +145,15 @@ impl Collection {
         let mut pairs = Vec::with_capacity(obj.len());
         for (k, v) in obj {
             let idx: u32 = k.parse().map_err(|_| {
-                Error::Config(format!("Invalid sparse vector parameter ${name}: key '{k}' is not a valid u32 index"))
+                Error::Config(format!(
+                    "Invalid sparse vector parameter ${name}: key '{k}' is not a valid u32 index"
+                ))
             })?;
             #[allow(clippy::cast_possible_truncation)]
             let weight = v.as_f64().ok_or_else(|| {
-                Error::Config(format!("Invalid sparse vector parameter ${name}: value for key '{k}' is not a number"))
+                Error::Config(format!(
+                    "Invalid sparse vector parameter ${name}: value for key '{k}' is not a number"
+                ))
             })? as f32;
             pairs.push((idx, weight));
         }

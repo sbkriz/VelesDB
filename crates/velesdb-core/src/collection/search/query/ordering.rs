@@ -90,7 +90,12 @@ impl Collection {
         let mut indices: Vec<usize> = (0..results.len()).collect();
         indices.sort_by(|&i, &j| {
             Self::compare_by_order_columns(
-                i, j, results, order_by, &similarity_scores_map, higher_is_better,
+                i,
+                j,
+                results,
+                order_by,
+                &similarity_scores_map,
+                higher_is_better,
             )
         });
 
@@ -145,15 +150,24 @@ impl Collection {
                     .get(&idx)
                     .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
                 OrderByExpr::Field(field_name) => {
-                    let val_i = results[i].point.payload.as_ref().and_then(|p| p.get(field_name));
-                    let val_j = results[j].point.payload.as_ref().and_then(|p| p.get(field_name));
+                    let val_i = results[i]
+                        .point
+                        .payload
+                        .as_ref()
+                        .and_then(|p| p.get(field_name));
+                    let val_j = results[j]
+                        .point
+                        .payload
+                        .as_ref()
+                        .and_then(|p| p.get(field_name));
                     compare_json_values(val_i, val_j)
                 }
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
             };
 
             let is_similarity = matches!(&ob.expr, OrderByExpr::Similarity(_));
-            let directed_cmp = Self::apply_sort_direction(cmp, ob.descending, is_similarity, higher_is_better);
+            let directed_cmp =
+                Self::apply_sort_direction(cmp, ob.descending, is_similarity, higher_is_better);
             if directed_cmp != Ordering::Equal {
                 return directed_cmp;
             }
@@ -169,7 +183,11 @@ impl Collection {
         higher_is_better: bool,
     ) -> Ordering {
         if descending {
-            if is_similarity && !higher_is_better { cmp } else { cmp.reverse() }
+            if is_similarity && !higher_is_better {
+                cmp
+            } else {
+                cmp.reverse()
+            }
         } else if is_similarity && !higher_is_better {
             cmp.reverse()
         } else {

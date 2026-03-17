@@ -271,8 +271,7 @@ impl Bm25Index {
             .filter_map(|doc_id_u32| {
                 let doc_id = *doc_to_point.get(&doc_id_u32)?;
                 let doc = docs.get(&doc_id)?;
-                let score =
-                    Self::score_document_fast(doc, query_terms, &idf_cache, k1, b, avgdl);
+                let score = Self::score_document_fast(doc, query_terms, &idf_cache, k1, b, avgdl);
                 (score > 0.0).then_some((doc_id, score))
             })
             .collect()

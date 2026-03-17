@@ -185,7 +185,11 @@ impl Database {
         let mut values: Vec<(String, ColumnValue)> = Vec::with_capacity(schema_refs.len());
         values.push(("id".to_string(), ColumnValue::Int(pk)));
 
-        if let Some(obj) = point.payload.as_ref().and_then(serde_json::Value::as_object) {
+        if let Some(obj) = point
+            .payload
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+        {
             for (key, value) in obj {
                 if key == "id" || !schema_refs.iter().any(|(name, _)| *name == key.as_str()) {
                     continue;

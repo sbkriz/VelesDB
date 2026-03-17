@@ -31,8 +31,7 @@ impl Parser {
                 Rule::where_clause => where_clause = Some(Self::parse_where_clause(inner_pair)?),
                 Rule::return_clause => return_clause = Self::parse_return_clause(inner_pair)?,
                 Rule::order_by_clause => {
-                    return_clause.order_by =
-                        Some(Self::convert_order_by_to_match(inner_pair)?);
+                    return_clause.order_by = Some(Self::convert_order_by_to_match(inner_pair)?);
                 }
                 Rule::limit_clause => limit = Self::extract_limit_integer(inner_pair),
                 _ => {}

@@ -179,10 +179,14 @@ impl EpisodicMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        Ok(self.fetch_temporal_events(limit, |fetch_limit| {
-            let entries = self.temporal_index.recent(fetch_limit, since_timestamp);
-            entries.iter().map(|e| e.id).collect()
-        }, &collection))
+        Ok(self.fetch_temporal_events(
+            limit,
+            |fetch_limit| {
+                let entries = self.temporal_index.recent(fetch_limit, since_timestamp);
+                entries.iter().map(|e| e.id).collect()
+            },
+            &collection,
+        ))
     }
 
     /// Returns events older than `timestamp`.
@@ -201,10 +205,14 @@ impl EpisodicMemory {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        Ok(self.fetch_temporal_events(limit, |fetch_limit| {
-            let entries = self.temporal_index.older_than(timestamp, fetch_limit);
-            entries.iter().map(|e| e.id).collect()
-        }, &collection))
+        Ok(self.fetch_temporal_events(
+            limit,
+            |fetch_limit| {
+                let entries = self.temporal_index.older_than(timestamp, fetch_limit);
+                entries.iter().map(|e| e.id).collect()
+            },
+            &collection,
+        ))
     }
 
     /// Retrieves the `k` most similar episodic events to a query embedding.

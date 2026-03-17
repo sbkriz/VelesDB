@@ -190,9 +190,7 @@ impl Collection {
                     val
                 })
             }
-            Condition::Similarity(sim) => {
-                self.evaluate_similarity(sim, vector, params)
-            }
+            Condition::Similarity(sim) => self.evaluate_similarity(sim, vector, params),
             Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
             other => Ok(Self::evaluate_metadata_filter(other, payload)),
         }
@@ -214,7 +212,12 @@ impl Collection {
         #[allow(clippy::cast_possible_truncation)]
         // Reason: similarity thresholds are approximate floating bounds.
         let threshold = sim.threshold as f32;
-        Ok(Self::compare_score(score, threshold, sim.operator, metric.higher_is_better()))
+        Ok(Self::compare_score(
+            score,
+            threshold,
+            sim.operator,
+            metric.higher_is_better(),
+        ))
     }
 
     /// Compares a score against a threshold using the given operator and metric direction.
@@ -245,8 +248,7 @@ impl Collection {
         condition: &Condition,
         payload: Option<&serde_json::Value>,
     ) -> bool {
-        let filter =
-            crate::filter::Filter::new(crate::filter::Condition::from(condition.clone()));
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(condition.clone()));
         match payload {
             Some(p) => filter.matches(p),
             None => filter.matches(&serde_json::Value::Null),

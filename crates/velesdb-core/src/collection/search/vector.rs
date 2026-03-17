@@ -103,9 +103,13 @@ impl Collection {
 fn sort_search_results(results: &mut [SearchResult], higher_is_better: bool) {
     results.sort_by(|a, b| {
         if higher_is_better {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         } else {
-            a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal)
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }
     });
 }
@@ -314,9 +318,16 @@ impl Collection {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),
                 };
-                if !matches { return None; }
+                if !matches {
+                    return None;
+                }
                 Some(SearchResult::new(
-                    Point { id: sr.id, vector, payload, sparse_vectors: None },
+                    Point {
+                        id: sr.id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
                     sr.score,
                 ))
             })

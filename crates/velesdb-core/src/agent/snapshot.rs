@@ -260,9 +260,9 @@ fn read_section(
     let section_len = read_u64(&data[*offset..])? as usize;
     *offset += 8;
     if *offset + section_len > payload_end {
-        return Err(SnapshotError::CorruptedData(
-            format!("{label} data truncated"),
-        ));
+        return Err(SnapshotError::CorruptedData(format!(
+            "{label} data truncated"
+        )));
     }
     let section = data[*offset..*offset + section_len].to_vec();
     *offset += section_len;

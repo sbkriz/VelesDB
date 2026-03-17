@@ -109,7 +109,10 @@ impl ShardedTraverser {
             let shard_results = self.expand_shards(&shard_frontiers, &adjacency, &stats, depth);
 
             shard_frontiers = self.merge_shard_results(
-                shard_results, &mut global_visited, &stats, &mut all_results,
+                shard_results,
+                &mut global_visited,
+                &stats,
+                &mut all_results,
             );
         }
 
@@ -152,7 +155,12 @@ impl ShardedTraverser {
                     for (neighbor, edge_id) in neighbors {
                         let mut new_path = path.clone();
                         new_path.push(edge_id);
-                        results.push(TraversalResult::new(*start_node, neighbor, new_path.clone(), depth));
+                        results.push(TraversalResult::new(
+                            *start_node,
+                            neighbor,
+                            new_path.clone(),
+                            depth,
+                        ));
                         next_frontier.push((*start_node, neighbor, new_path));
                     }
                 }

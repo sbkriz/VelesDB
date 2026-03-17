@@ -126,7 +126,12 @@ impl Collection {
             }
 
             results.push(SearchResult::new(
-                Point { id, vector, payload, sparse_vectors: None },
+                Point {
+                    id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                },
                 score,
             ));
             if results.len() >= limit {
@@ -204,7 +209,8 @@ impl Collection {
             tracing::warn!(
                 "NOT similarity() query scanning {} documents with LIMIT {}. \
                 Consider using a smaller LIMIT for better performance.",
-                total_count, limit
+                total_count,
+                limit
             );
         }
     }

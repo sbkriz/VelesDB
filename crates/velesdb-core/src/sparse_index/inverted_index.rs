@@ -286,8 +286,7 @@ impl SparseInvertedIndex {
             return;
         }
 
-        let (batch_postings, batch_max_weights, batch_doc_ids) =
-            Self::build_batch_buffers(docs);
+        let (batch_postings, batch_max_weights, batch_doc_ids) = Self::build_batch_buffers(docs);
 
         let mut seg = self.mutable.write();
         let new_docs = Self::merge_doc_ids(&mut seg, batch_doc_ids);
@@ -306,7 +305,11 @@ impl SparseInvertedIndex {
     #[allow(clippy::type_complexity)]
     fn build_batch_buffers(
         docs: &[(u64, SparseVector)],
-    ) -> (FxHashMap<u32, Vec<PostingEntry>>, FxHashMap<u32, f32>, FxHashSet<u64>) {
+    ) -> (
+        FxHashMap<u32, Vec<PostingEntry>>,
+        FxHashMap<u32, f32>,
+        FxHashSet<u64>,
+    ) {
         let mut batch_postings: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
         let mut batch_max_weights: FxHashMap<u32, f32> = FxHashMap::default();
         let mut batch_doc_ids: FxHashSet<u64> = FxHashSet::default();

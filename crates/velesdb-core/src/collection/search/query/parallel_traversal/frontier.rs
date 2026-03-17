@@ -100,9 +100,15 @@ impl FrontierParallelBFS {
         };
 
         if self.config.should_parallelize_frontier(frontier.len()) {
-            frontier.par_iter().flat_map(|(node, path)| expand_node(node, path)).collect()
+            frontier
+                .par_iter()
+                .flat_map(|(node, path)| expand_node(node, path))
+                .collect()
         } else {
-            frontier.iter().flat_map(|(node, path)| expand_node(node, path)).collect()
+            frontier
+                .iter()
+                .flat_map(|(node, path)| expand_node(node, path))
+                .collect()
         }
     }
 

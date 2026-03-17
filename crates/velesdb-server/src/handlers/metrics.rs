@@ -105,7 +105,10 @@ fn write_cache_hits(
     output: &mut String,
     metrics: &velesdb_core::cache::PlanCacheMetrics,
 ) -> std::fmt::Result {
-    writeln!(output, "# HELP velesdb_plan_cache_hits_total Plan cache hits")?;
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_hits_total Plan cache hits"
+    )?;
     writeln!(output, "# TYPE velesdb_plan_cache_hits_total counter")?;
     writeln!(output, "velesdb_plan_cache_hits_total {}", metrics.hits())?;
     writeln!(output)
@@ -115,9 +118,16 @@ fn write_cache_misses(
     output: &mut String,
     metrics: &velesdb_core::cache::PlanCacheMetrics,
 ) -> std::fmt::Result {
-    writeln!(output, "# HELP velesdb_plan_cache_misses_total Plan cache misses")?;
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_misses_total Plan cache misses"
+    )?;
     writeln!(output, "# TYPE velesdb_plan_cache_misses_total counter")?;
-    writeln!(output, "velesdb_plan_cache_misses_total {}", metrics.misses())?;
+    writeln!(
+        output,
+        "velesdb_plan_cache_misses_total {}",
+        metrics.misses()
+    )?;
     writeln!(output)
 }
 
@@ -125,9 +135,16 @@ fn write_cache_size(
     output: &mut String,
     stats: &velesdb_core::cache::LockFreeCacheStats,
 ) -> std::fmt::Result {
-    writeln!(output, "# HELP velesdb_plan_cache_size Current number of cached plans")?;
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_size Current number of cached plans"
+    )?;
     writeln!(output, "# TYPE velesdb_plan_cache_size gauge")?;
-    writeln!(output, "velesdb_plan_cache_size {}", stats.l1_size + stats.l2_size)?;
+    writeln!(
+        output,
+        "velesdb_plan_cache_size {}",
+        stats.l1_size + stats.l2_size
+    )?;
     writeln!(output)
 }
 
@@ -135,9 +152,16 @@ fn write_cache_hit_rate(
     output: &mut String,
     metrics: &velesdb_core::cache::PlanCacheMetrics,
 ) -> std::fmt::Result {
-    writeln!(output, "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate")?;
+    writeln!(
+        output,
+        "# HELP velesdb_plan_cache_hit_rate Plan cache hit rate"
+    )?;
     writeln!(output, "# TYPE velesdb_plan_cache_hit_rate gauge")?;
-    writeln!(output, "velesdb_plan_cache_hit_rate {:.4}", metrics.hit_rate())?;
+    writeln!(
+        output,
+        "velesdb_plan_cache_hit_rate {:.4}",
+        metrics.hit_rate()
+    )?;
     // M-7: trailing blank line for Prometheus text format conformance.
     writeln!(output)
 }
