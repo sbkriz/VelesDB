@@ -139,21 +139,23 @@ pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
 /// This provides crash-safe persistence: readers always see either the
 /// previous complete file or the new complete file, never a torn write.
 ///
-/// Each call generates a unique temporary filename using a global counter
-/// and the current thread ID to prevent races when multiple threads
-/// concurrently save the same index file.
+/// Each call generates a unique temporary filename using process ID, thread ID,
+/// and a global counter to prevent races both within a process (concurrent
+/// threads) and across processes sharing the same data directory.
 fn atomic_write(final_path: &Path, data: &[u8]) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
     let tid = std::thread::current().id();
 
     // Build temp file in the same directory as the target, with a unique suffix
-    // derived from thread ID + global counter to avoid concurrent-write races.
+    // derived from PID + thread ID + global counter to avoid concurrent-write
+    // races both intra-process and cross-process.
     let file_name = final_path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
-    let tmp_name = format!("{file_name}.tmp.{tid:?}.{seq}");
+    let tmp_name = format!("{file_name}.tmp.{pid}.{tid:?}.{seq}");
     let tmp_path = final_path.with_file_name(&tmp_name);
 
     let result = atomic_write_inner(&tmp_path, final_path, data);
