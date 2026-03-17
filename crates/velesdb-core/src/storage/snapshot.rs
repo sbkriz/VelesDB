@@ -69,8 +69,8 @@ pub(crate) fn crc32_hash(data: &[u8]) -> u32 {
 /// # Errors
 ///
 /// Returns an error if the snapshot file is missing, corrupt, or has an invalid format.
-/// Validates snapshot header (magic, version, size, CRC) and returns (wal_pos, entry_count).
-fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
+/// Validates magic, version, and minimum size of snapshot data.
+fn validate_snapshot_format(data: &[u8]) -> io::Result<()> {
     if data.len() < 25 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Snapshot too small"));
     }
@@ -80,6 +80,12 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
     if data[4] != SNAPSHOT_VERSION {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Unsupported version"));
     }
+    Ok(())
+}
+
+/// Validates snapshot CRC and entry count, returns (wal_pos, entry_count).
+fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
+    validate_snapshot_format(data)?;
 
     let wal_pos = u64::from_le_bytes(
         data[5..13].try_into()
@@ -98,12 +104,10 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
     #[allow(clippy::cast_possible_truncation)] // Validated above
     let entry_count = entry_count_u64 as usize;
 
-    let expected_size = 21 + entry_count * 16 + 4;
-    if data.len() != expected_size {
+    if data.len() != 21 + entry_count * 16 + 4 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Size mismatch"));
     }
 
-    // Validate CRC
     let stored_crc = u32::from_le_bytes(
         data[data.len() - 4..].try_into()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid CRC"))?,
