@@ -14,6 +14,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Drain timeout for graceful shutdown (seconds).
+const SHUTDOWN_DRAIN_TIMEOUT_SECS: u64 = 30;
+
 #[cfg(feature = "swagger-ui")]
 use utoipa::OpenApi;
 #[cfg(feature = "swagger-ui")]
@@ -202,12 +205,43 @@ fn warn_if_exposed(host: &str) {
     }
 }
 
-async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
+/// Returns a future that resolves when SIGINT (Ctrl+C) or SIGTERM is received.
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown..."),
+        () = terminate => tracing::info!("Received SIGTERM, initiating graceful shutdown..."),
+    }
+}
+
+async fn serve(
+    host: &str,
+    port: u16,
+    app: Router,
+    state: Arc<AppState>,
+) -> anyhow::Result<()> {
     warn_if_exposed(host);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);
-    axum::serve(listener, app).await?;
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    flush_and_exit(&state);
     Ok(())
 }
 
@@ -217,6 +251,7 @@ async fn serve_tls(
     app: Router,
     cert_path: &str,
     key_path: &str,
+    state: Arc<AppState>,
 ) -> anyhow::Result<()> {
     warn_if_exposed(host);
 
@@ -225,35 +260,108 @@ async fn serve_tls(
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on https://{}", addr);
 
+    // Track active connections for drain timeout
+    let active_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let shutdown = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::pin!(shutdown);
+    tokio::pin!(terminate);
+
     loop {
-        let (stream, _peer_addr) = listener.accept().await?;
-        let acceptor = tls_acceptor.clone();
-        let tower_service = app.clone();
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, _peer_addr) = result?;
+                let acceptor = tls_acceptor.clone();
+                let tower_service = app.clone();
+                let conns = active_conns.clone();
+                conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        tokio::spawn(async move {
-            let Ok(tls_stream) = acceptor.accept(stream).await else {
-                tracing::debug!("TLS handshake failed");
-                return;
-            };
+                tokio::spawn(async move {
+                    let Ok(tls_stream) = acceptor.accept(stream).await else {
+                        tracing::debug!("TLS handshake failed");
+                        conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        return;
+                    };
 
-            let io = hyper_util::rt::TokioIo::new(tls_stream);
-            let hyper_service = hyper::service::service_fn(move |request| {
-                let clone = tower_service.clone();
-                async move {
-                    clone.oneshot(request).await
-                }
-            });
+                    let io = hyper_util::rt::TokioIo::new(tls_stream);
+                    let hyper_service = hyper::service::service_fn(move |request| {
+                        let clone = tower_service.clone();
+                        async move {
+                            clone.oneshot(request).await
+                        }
+                    });
 
-            if let Err(err) = hyper_util::server::conn::auto::Builder::new(
-                hyper_util::rt::TokioExecutor::new(),
-            )
-            .serve_connection_with_upgrades(io, hyper_service)
-            .await
-            {
-                tracing::debug!("TLS connection error: {err}");
+                    if let Err(err) = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    )
+                    .serve_connection_with_upgrades(io, hyper_service)
+                    .await
+                    {
+                        tracing::debug!("TLS connection error: {err}");
+                    }
+
+                    conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                });
             }
-        });
+            _ = &mut shutdown => {
+                tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+                break;
+            }
+            () = &mut terminate => {
+                tracing::info!("Received SIGTERM, initiating graceful shutdown...");
+                break;
+            }
+        }
     }
+
+    // Drain active connections with timeout
+    drain_connections(&active_conns).await;
+    flush_and_exit(&state);
+    Ok(())
+}
+
+/// Waits for active connections to complete, up to the drain timeout.
+async fn drain_connections(active_conns: &std::sync::atomic::AtomicUsize) {
+    let deadline = tokio::time::Instant::now()
+        + tokio::time::Duration::from_secs(SHUTDOWN_DRAIN_TIMEOUT_SECS);
+
+    loop {
+        let count = active_conns.load(std::sync::atomic::Ordering::Relaxed);
+        if count == 0 {
+            tracing::info!("All active connections drained");
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                "Drain timeout ({SHUTDOWN_DRAIN_TIMEOUT_SECS}s) reached with {count} active connection(s)"
+            );
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// Flushes all WALs and logs shutdown completion.
+fn flush_and_exit(state: &AppState) {
+    tracing::info!("Flushing all WALs...");
+    let failures = state.db.flush_all();
+    if failures > 0 {
+        tracing::warn!("WAL flush completed with {failures} failure(s)");
+    } else {
+        tracing::info!("All WALs flushed successfully");
+    }
+    tracing::info!("Shutdown complete");
 }
 
 fn build_cli_overrides(args: Args) -> CliOverrides {
@@ -281,11 +389,11 @@ async fn main() -> anyhow::Result<()> {
 
     let state = init_app_state(&cfg.data_dir)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
-    let app = build_router(state, auth_state);
+    let app = build_router(state.clone(), auth_state);
 
     if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
-        serve_tls(&cfg.host, cfg.port, app, cert, key).await
+        serve_tls(&cfg.host, cfg.port, app, cert, key, state).await
     } else {
-        serve(&cfg.host, cfg.port, app).await
+        serve(&cfg.host, cfg.port, app, state).await
     }
 }
