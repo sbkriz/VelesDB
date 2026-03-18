@@ -139,6 +139,9 @@ jobs:
           fi
           python3 scripts/check-todo-annotations.py --files "${CORE_RS_FILES[@]}"
 
+      - name: Check for .unwrap() in production code
+        run: python3 scripts/check_prod_unwraps.py
+
       - name: Check doctests compile
         run: |
           cargo test --doc --package velesdb-core

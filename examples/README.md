@@ -156,7 +156,7 @@ GROUP BY category
 
 ## Requirements
 
-- **Rust examples**: Rust 1.75+ with Cargo
+- **Rust examples**: Rust 1.83+ with Cargo
 - **Python examples**: Python 3.9+, `requests` library
 - **WASM demo**: Modern browser (Chrome, Firefox, Edge, Safari)
 

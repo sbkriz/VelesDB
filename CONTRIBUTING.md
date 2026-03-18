@@ -60,7 +60,7 @@ Unsure where to begin? Look for issues labeled:
 
 ### Prerequisites
 
-- Rust 1.75+ (stable)
+- Rust 1.83+ (stable)
 - Docker (optional, for integration tests)
 
 ### Building from Source

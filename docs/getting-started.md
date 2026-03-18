@@ -4,7 +4,7 @@ This guide will help you get VelesDB up and running in just a few minutes.
 
 ## Prerequisites
 
-- Docker (recommended) or Rust 1.75+
+- Docker (recommended) or Rust 1.83+
 - curl or any HTTP client for testing
 
 ## Installation
