@@ -282,11 +282,18 @@ VelesDB exposes **25+ REST endpoints** organized by domain: Collections, Points,
 | Category | Key Endpoints | Description |
 |----------|--------------|-------------|
 | **Collections** | `POST /collections`, `GET /collections/{name}/stats` | Create, inspect, analyze collections |
-| **Points** | `POST /collections/{name}/points`, `POST .../stream/insert` | Upsert & streaming insert |
-| **Search** | `POST .../search`, `.../search/batch`, `.../search/hybrid` | Vector, sparse, hybrid, text search |
-| **Graph** | `POST .../graph/edges`, `.../graph/traverse` | Edge management, BFS/DFS traversal |
+| **Points** | `POST /collections/{name}/points`, `POST /collections/{name}/stream/insert` | Upsert & streaming insert |
+| **Search** | `POST /collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid` | Vector, sparse, hybrid, text search |
+| **Graph** | `POST /collections/{name}/graph/edges`, `/collections/{name}/graph/traverse` | Edge management, BFS/DFS traversal |
 | **VelesQL** | `POST /query`, `/aggregate`, `/query/explain` | Unified query language with EXPLAIN |
-| **Health** | `GET /health`, `/ready`, `/metrics` | Liveness, readiness, Prometheus |
+| **Admin** | `GET /health`, `/ready`, `/metrics`, `/guardrails` | Liveness, readiness, Prometheus, guard-rails |
+
+<details>
+<summary>All 25 REST endpoints</summary>
+
+`/health` · `/ready` · `/metrics` · `/guardrails` · `/query` · `/query/explain` · `/aggregate` · `/collections/{name}/search` · `/collections/{name}/search/batch` · `/collections/{name}/search/text` · `/collections/{name}/search/hybrid` · `/collections/{name}/search/multi` · `/collections/{name}/search/ids` · `/collections/{name}/match` · `/collections/{name}/points` · `/collections/{name}/stream/insert` · `/collections/{name}/graph/traverse` · `/collections/{name}/analyze` · `/collections/{name}/config` · `/collections/{name}/stats` · `/collections/{name}/flush` · `/collections/{name}/empty` · `/collections/{name}/sanity`
+
+</details>
 
 > **Full API reference:** [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) — all endpoints with request/response examples.
 > **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
@@ -345,7 +352,7 @@ cargo run --release
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **Dot Product** | **16.2 ns** | **47.4 Gelem/s** |
+| **SIMD Dot Product (768D)** | **16.2 ns** | **47.4 Gelem/s** |
 | **Euclidean** | **19.7 ns** | **39.0 Gelem/s** |
 | **Cosine** | **29.6 ns** | **25.9 Gelem/s** |
 | **Hamming** | **35.3 ns** | — |
@@ -354,7 +361,7 @@ cargo run --release
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search** | **38.6 µs** (k=10) |
+| **HNSW Search (10K vectors)** | **38.6 µs** (k=10) |
 | **VelesQL Cache Hit** | **1.05 µs** (~952K QPS) |
 | **Sparse Search** | **732 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
