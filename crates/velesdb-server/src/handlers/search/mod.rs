@@ -18,7 +18,7 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::helpers::get_vector_collection_or_404;
+use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
     actionable_search_error, build_search_response, execute_search_request, finish_search,
     finish_search_ids, parse_filter_or_400, validate_query_dimension,
@@ -54,6 +54,7 @@ pub use multi::multi_query_search;
 #[allow(clippy::unused_async)]
 pub async fn search(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(mut req): Json<SearchRequest>,
 ) -> impl IntoResponse {
@@ -65,9 +66,20 @@ pub async fn search(
         Err(resp) => return resp,
     };
 
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        return resp;
+    }
+
     let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
-        Ok(r) => r,
-        Err(resp) => return resp,
+        Ok(r) => {
+            collection.guard_rails().circuit_breaker.record_success();
+            r
+        }
+        Err(resp) => {
+            collection.guard_rails().circuit_breaker.record_failure();
+            return resp;
+        }
     };
 
     finish_search(&state, &name, start, search_result)
@@ -90,6 +102,7 @@ pub async fn search(
 #[allow(clippy::unused_async)]
 pub async fn text_search(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(req): Json<TextSearchRequest>,
 ) -> impl IntoResponse {
@@ -99,6 +112,11 @@ pub async fn text_search(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        return resp;
+    }
 
     let results = if let Some(ref filter_json) = req.filter {
         let filter = match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
@@ -111,12 +129,18 @@ pub async fn text_search(
     };
 
     match results {
-        Ok(results) => Json(build_search_response(results)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(actionable_search_error(&e)),
-        )
-            .into_response(),
+        Ok(results) => {
+            collection.guard_rails().circuit_breaker.record_success();
+            Json(build_search_response(results)).into_response()
+        }
+        Err(e) => {
+            collection.guard_rails().circuit_breaker.record_failure();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(actionable_search_error(&e)),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -138,6 +162,7 @@ pub async fn text_search(
 #[allow(clippy::unused_async)]
 pub async fn hybrid_search(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(req): Json<HybridSearchRequest>,
 ) -> impl IntoResponse {
@@ -147,6 +172,11 @@ pub async fn hybrid_search(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        return resp;
+    }
 
     let expected_dimension = collection.config().dimension;
     if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector) {
@@ -171,12 +201,16 @@ pub async fn hybrid_search(
 
     match search_result {
         Ok(results) => {
+            collection.guard_rails().circuit_breaker.record_success();
             if results.is_empty() {
                 state.onboarding_metrics.record_empty_search_results();
             }
             Json(build_search_response(results)).into_response()
         }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
+        Err(e) => {
+            collection.guard_rails().circuit_breaker.record_failure();
+            (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response()
+        }
     }
 }
 
@@ -202,6 +236,7 @@ pub async fn hybrid_search(
 #[allow(clippy::unused_async)]
 pub async fn search_ids(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(mut req): Json<SearchRequest>,
 ) -> impl IntoResponse {
@@ -213,9 +248,20 @@ pub async fn search_ids(
         Err(resp) => return resp,
     };
 
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        return resp;
+    }
+
     let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
-        Ok(r) => r,
-        Err(resp) => return resp,
+        Ok(r) => {
+            collection.guard_rails().circuit_breaker.record_success();
+            r
+        }
+        Err(resp) => {
+            collection.guard_rails().circuit_breaker.record_failure();
+            return resp;
+        }
     };
 
     finish_search_ids(&state, &name, start, search_result)

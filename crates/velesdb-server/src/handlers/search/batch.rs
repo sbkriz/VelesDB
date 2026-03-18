@@ -14,7 +14,7 @@ use crate::types::{
 use crate::AppState;
 
 use super::pipeline::{actionable_search_error, validate_query_dimension};
-use crate::handlers::helpers::get_vector_collection_or_404;
+use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Batch search for multiple vectors.
 #[utoipa::path(
@@ -34,6 +34,7 @@ use crate::handlers::helpers::get_vector_collection_or_404;
 #[allow(clippy::unused_async)]
 pub async fn batch_search(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(req): Json<BatchSearchRequest>,
 ) -> impl IntoResponse {
@@ -44,6 +45,11 @@ pub async fn batch_search(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        return resp;
+    }
 
     if let Err(resp) = validate_batch_dimensions(&state, &name, &collection, &req) {
         return resp;
@@ -58,9 +64,13 @@ pub async fn batch_search(
     let max_top_k = req.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
     let all_results = match collection.search_batch_with_filters(&queries, max_top_k, &filters) {
-        Ok(batch_results) => build_batch_responses(&state, batch_results, &req),
+        Ok(batch_results) => {
+            collection.guard_rails().circuit_breaker.record_success();
+            build_batch_responses(&state, batch_results, &req)
+        }
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response()
+            collection.guard_rails().circuit_breaker.record_failure();
+            return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response();
         }
     };
 

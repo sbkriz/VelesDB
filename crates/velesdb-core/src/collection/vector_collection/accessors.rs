@@ -7,6 +7,12 @@ use crate::quantization::StorageMode;
 use super::VectorCollection;
 
 impl VectorCollection {
+    /// Returns a reference to the collection's guard rails.
+    #[must_use]
+    pub fn guard_rails(&self) -> &std::sync::Arc<crate::guardrails::GuardRails> {
+        self.inner.guard_rails()
+    }
+
     /// Returns the collection name.
     #[must_use]
     pub fn name(&self) -> String {

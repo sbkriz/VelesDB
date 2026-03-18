@@ -12,7 +12,7 @@ use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchResponse};
 use crate::AppState;
 
 use super::pipeline::{actionable_search_error, build_search_response, validate_query_dimension};
-use crate::handlers::helpers::get_vector_collection_or_404;
+use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Multi-query search with fusion strategies.
 #[utoipa::path(
@@ -27,9 +27,10 @@ use crate::handlers::helpers::get_vector_collection_or_404;
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::unused_async, clippy::too_many_lines)]
 pub async fn multi_query_search(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(req): Json<MultiQuerySearchRequest>,
 ) -> impl IntoResponse {
@@ -41,6 +42,11 @@ pub async fn multi_query_search(
             Ok(c) => c,
             Err(resp) => return resp,
         };
+
+    let client_id = extract_client_id(&headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        return resp;
+    }
 
     let strategy = match req.strategy.to_lowercase().as_str() {
         "average" | "avg" => FusionStrategy::Average,
@@ -82,9 +88,14 @@ pub async fn multi_query_search(
 
     let results: Vec<velesdb_core::SearchResult> =
         match collection.multi_query_search(&query_refs, req.top_k, strategy, None) {
-            Ok(r) => r,
+            Ok(r) => {
+                collection.guard_rails().circuit_breaker.record_success();
+                r
+            }
             Err(e) => {
-                return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response()
+                collection.guard_rails().circuit_breaker.record_failure();
+                return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e)))
+                    .into_response();
             }
         };
 
