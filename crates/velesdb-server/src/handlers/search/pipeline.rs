@@ -12,9 +12,7 @@ use crate::types::{
 use crate::AppState;
 
 /// Convert a `Vec<SearchResult>` into a `SearchResponse`.
-pub(crate) fn build_search_response(
-    results: Vec<velesdb_core::SearchResult>,
-) -> SearchResponse {
+pub(crate) fn build_search_response(results: Vec<velesdb_core::SearchResult>) -> SearchResponse {
     SearchResponse {
         results: results
             .into_iter()

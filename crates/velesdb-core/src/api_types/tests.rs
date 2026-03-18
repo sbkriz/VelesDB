@@ -216,8 +216,7 @@ fn round_trip_collection_config_response() {
         embedding_dimension: Some(128),
     };
     let serialized = serde_json::to_value(&resp).unwrap();
-    let deserialized: CollectionConfigResponse =
-        serde_json::from_value(serialized).unwrap();
+    let deserialized: CollectionConfigResponse = serde_json::from_value(serialized).unwrap();
     assert_eq!(deserialized.name, "docs");
     assert_eq!(deserialized.dimension, 128);
     assert_eq!(deserialized.metric, "cosine");
@@ -237,8 +236,7 @@ fn round_trip_search_ids_response() {
         ],
     };
     let serialized = serde_json::to_value(&resp).unwrap();
-    let deserialized: SearchIdsResponse =
-        serde_json::from_value(serialized).unwrap();
+    let deserialized: SearchIdsResponse = serde_json::from_value(serialized).unwrap();
     assert_eq!(deserialized.results.len(), 2);
     assert_eq!(deserialized.results[0].id, 1);
     assert!((deserialized.results[0].score - 0.95).abs() < f32::EPSILON);
@@ -351,9 +349,7 @@ fn missing_optional_fields_deserialize_to_none() {
 
 #[test]
 fn serialize_search_response_empty_results() {
-    let resp = SearchResponse {
-        results: vec![],
-    };
+    let resp = SearchResponse { results: vec![] };
     let json = serde_json::to_value(&resp).unwrap();
     assert_eq!(json["results"], json!([]));
 }
@@ -505,7 +501,10 @@ fn serialize_collection_config_skips_none_graph_schema() {
     let json = serde_json::to_value(&resp).unwrap();
     // `skip_serializing_if = "Option::is_none"` omits the key entirely
     assert!(!json.as_object().unwrap().contains_key("graph_schema"));
-    assert!(!json.as_object().unwrap().contains_key("embedding_dimension"));
+    assert!(!json
+        .as_object()
+        .unwrap()
+        .contains_key("embedding_dimension"));
 }
 
 #[test]

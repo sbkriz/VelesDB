@@ -1,52 +1,52 @@
-# ⚙️ Configuration VelesDB
+# ⚙️ VelesDB Configuration
 
-*Version 1.6.0 — Mars 2026*
+*Version 1.6.0 — March 2026*
 
-Guide complet pour configurer VelesDB via fichier de configuration, variables d'environnement et paramètres runtime.
+Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
-> **Voir aussi :** [SERVER_SECURITY.md](SERVER_SECURITY.md) pour le guide opérationnel du serveur (authentification, TLS, arrêt gracieux, endpoints de santé).
-
----
-
-## Table des Matières
-
-1. [Vue d'ensemble](#vue-densemble)
-2. [Fichier velesdb.toml](#fichier-velesdbtoml)
-3. [Variables d'environnement](#variables-denvironnement)
-4. [Ordre de priorité](#ordre-de-priorité)
-5. [Référence complète](#référence-complète)
-6. [Exemples par cas d'usage](#exemples-par-cas-dusage)
-7. [Validation et erreurs](#validation-et-erreurs)
+> **See also:** [SERVER_SECURITY.md](SERVER_SECURITY.md) for the server operations guide (authentication, TLS, graceful shutdown, health endpoints).
 
 ---
 
-## Vue d'ensemble
+## Table of Contents
 
-VelesDB supporte 3 niveaux de configuration :
+1. [Overview](#overview)
+2. [velesdb.toml File](#velesdbtoml-file)
+3. [Environment Variables](#environment-variables)
+4. [Priority Order](#priority-order)
+5. [Complete Reference](#complete-reference)
+6. [Usage Examples](#usage-examples)
+7. [Validation and Errors](#validation-and-errors)
 
-| Niveau | Source | Priorité | Persistance |
-|--------|--------|----------|-------------|
-| **Fichier** | `velesdb.toml` | Basse | ✅ Disque |
-| **Environnement** | `VELESDB_*` | Moyenne | Session |
-| **Runtime** | API / REPL / VelesQL | Haute | Requête |
+---
 
-### Chemins de recherche du fichier
+## Overview
 
-VelesDB cherche `velesdb.toml` dans l'ordre suivant :
+VelesDB supports 3 levels of configuration:
 
-1. `./velesdb.toml` (répertoire courant)
-2. `$VELESDB_CONFIG` (variable d'environnement)
+| Level | Source | Priority | Persistence |
+|-------|--------|----------|-------------|
+| **File** | `velesdb.toml` | Low | ✅ Disk |
+| **Environment** | `VELESDB_*` | Medium | Session |
+| **Runtime** | API / REPL / VelesQL | High | Request |
+
+### File Search Paths
+
+VelesDB looks for `velesdb.toml` in the following order:
+
+1. `./velesdb.toml` (current directory)
+2. `$VELESDB_CONFIG` (environment variable)
 3. `~/.config/velesdb/velesdb.toml` (Linux/macOS)
 4. `%APPDATA%\velesdb\velesdb.toml` (Windows)
-5. `/etc/velesdb/velesdb.toml` (système)
+5. `/etc/velesdb/velesdb.toml` (system-wide)
 
-Si aucun fichier n'est trouvé, les valeurs par défaut sont utilisées.
+If no file is found, default values are used.
 
 ---
 
-## Fichier velesdb.toml
+## velesdb.toml File
 
-### Exemple minimal
+### Minimal Example
 
 ```toml
 # velesdb.toml - Configuration minimale
@@ -57,7 +57,7 @@ default_mode = "balanced"
 data_dir = "./data"
 ```
 
-### Exemple complet
+### Full Example
 
 ```toml
 # =============================================================================
@@ -290,11 +290,11 @@ hot_reload = false
 
 ---
 
-## Variables d'environnement
+## Environment Variables
 
-Toutes les options peuvent être définies via des variables d'environnement avec le préfixe `VELESDB_` :
+All options can be set via environment variables with the `VELESDB_` prefix:
 
-| Variable | Équivalent TOML | Exemple |
+| Variable | TOML Equivalent | Example |
 |----------|-----------------|---------|
 | `VELESDB_SEARCH_DEFAULT_MODE` | `search.default_mode` | `balanced` |
 | `VELESDB_SEARCH_EF_SEARCH` | `search.ef_search` | `256` |
@@ -305,22 +305,22 @@ Toutes les options peuvent être définies via des variables d'environnement ave
 | `VELESDB_HOST` | `server.host` | `0.0.0.0` |
 | `VELESDB_PORT` | `server.port` | `8080` |
 | `VELESDB_DATA_DIR` | `server.data_dir` | `/var/lib/velesdb` |
-| `VELESDB_API_KEYS` | `auth.api_keys` | `key1,key2,key3` (virgules) |
+| `VELESDB_API_KEYS` | `auth.api_keys` | `key1,key2,key3` (comma-separated) |
 | `VELESDB_TLS_CERT` | `tls.cert` | `/etc/ssl/cert.pem` |
 | `VELESDB_TLS_KEY` | `tls.key` | `/etc/ssl/key.pem` |
 | `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
 | `VELESDB_LICENSE_KEY` | `premium.license_key` | `VELES-...` |
-| `VELESDB_CONFIG` | Chemin du fichier config | `/etc/velesdb/velesdb.toml` |
+| `VELESDB_CONFIG` | Config file path | `/etc/velesdb/velesdb.toml` |
 
-### Conversion des noms
+### Name Mapping
 
-Le mapping suit cette règle :
+The mapping follows this rule:
 ```
 VELESDB_{SECTION}_{KEY} (uppercase, underscores)
 → section.key (lowercase, underscores preserved)
 ```
 
-### Exemples
+### Examples
 
 ```bash
 # Linux/macOS
@@ -338,23 +338,23 @@ docker run -e VELESDB_SERVER_HOST=0.0.0.0 -e VELESDB_SERVER_PORT=8080 ghcr.io/cy
 
 ---
 
-## Ordre de priorité
+## Priority Order
 
-La configuration suit cet ordre de priorité (du plus bas au plus haut) :
+Configuration follows this priority order (from lowest to highest):
 
 ```
-1. Valeurs par défaut (hardcodées)
+1. Default values (hardcoded)
    ↓
-2. Fichier velesdb.toml
+2. velesdb.toml file
    ↓
-3. Variables d'environnement VELESDB_*
+3. VELESDB_* environment variables
    ↓
-4. Paramètres CLI (--host, --port, --data-dir, --tls-cert, --tls-key)
+4. CLI parameters (--host, --port, --data-dir, --tls-cert, --tls-key)
    ↓
-5. Override runtime (REPL \set, VelesQL WITH, API params)
+5. Runtime override (REPL \set, VelesQL WITH, API params)
 ```
 
-### Exemple de résolution
+### Resolution Example
 
 ```toml
 # velesdb.toml
@@ -364,7 +364,7 @@ ef_search = 128
 ```
 
 ```bash
-# Environnement
+# Environment
 export VELESDB_SEARCH_EF_SEARCH=256
 ```
 
@@ -373,110 +373,110 @@ export VELESDB_SEARCH_EF_SEARCH=256
 SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 ```
 
-**Résultat** : La requête utilise `ef_search = 512` (override runtime gagne).
+**Result**: The query uses `ef_search = 512` (runtime override wins).
 
 ---
 
-## Référence complète
+## Complete Reference
 
 ### Section [search]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `default_mode` | string | `"balanced"` | Mode de recherche par défaut |
-| `ef_search` | int? | `null` | Override ef_search (si null, utilise le mode) |
-| `max_results` | int | `1000` | Limite max de résultats par requête |
-| `query_timeout_ms` | int | `30000` | Timeout en ms |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `default_mode` | string | `"balanced"` | Default search mode |
+| `ef_search` | int? | `null` | ef_search override (if null, uses mode value) |
+| `max_results` | int | `1000` | Maximum results per query |
+| `query_timeout_ms` | int | `30000` | Timeout in ms |
 
 ### Section [hnsw]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `m` | int\|"auto" | `"auto"` | Connexions par nœud |
-| `ef_construction` | int\|"auto" | `"auto"` | Pool de construction |
-| `max_layers` | int | `0` | Couches max (0=auto) |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `m` | int\|"auto" | `"auto"` | Connections per node |
+| `ef_construction` | int\|"auto" | `"auto"` | Construction pool size |
+| `max_layers` | int | `0` | Max layers (0=auto) |
 
 ### Section [storage]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `data_dir` | string | `"./velesdb_data"` | Répertoire des données |
-| `storage_mode` | string | `"mmap"` | Mode: mmap ou memory |
-| `mmap_cache_mb` | int | `1024` | Cache mmap en MB |
-| `vector_alignment` | int | `64` | Alignement mémoire |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `data_dir` | string | `"./velesdb_data"` | Data directory |
+| `storage_mode` | string | `"mmap"` | Mode: mmap or memory |
+| `mmap_cache_mb` | int | `1024` | mmap cache in MB |
+| `vector_alignment` | int | `64` | Memory alignment |
 
 ### Section [limits]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `max_dimensions` | int | `4096` | Dimension max |
-| `max_vectors_per_collection` | int | `100000000` | Vecteurs max/collection |
-| `max_collections` | int | `1000` | Collections max |
-| `max_payload_size` | int | `1048576` | Payload max (bytes) |
-| `max_perfect_mode_vectors` | int | `500000` | Limite bruteforce |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_dimensions` | int | `4096` | Max dimension |
+| `max_vectors_per_collection` | int | `100000000` | Max vectors/collection |
+| `max_collections` | int | `1000` | Max collections |
+| `max_payload_size` | int | `1048576` | Max payload (bytes) |
+| `max_perfect_mode_vectors` | int | `500000` | Bruteforce limit |
 
 ### Section [server]
 
-| Clé | Type | Env var | CLI flag | Défaut | Description |
-|-----|------|---------|----------|--------|-------------|
-| `host` | string | `VELESDB_HOST` | `--host` | `"127.0.0.1"` | Adresse d'écoute |
+| Key | Type | Env var | CLI flag | Default | Description |
+|-----|------|---------|----------|---------|-------------|
+| `host` | string | `VELESDB_HOST` | `--host` | `"127.0.0.1"` | Listen address |
 | `port` | int | `VELESDB_PORT` | `--port` | `8080` | Port |
-| `data_dir` | string | `VELESDB_DATA_DIR` | `--data-dir` | `"./velesdb_data"` | Répertoire des données |
-| `shutdown_timeout_secs` | int | — | — | `30` | Timeout drain connexions (secondes) |
+| `data_dir` | string | `VELESDB_DATA_DIR` | `--data-dir` | `"./velesdb_data"` | Data directory |
+| `shutdown_timeout_secs` | int | — | — | `30` | Connection drain timeout (seconds) |
 | `workers` | int | — | — | `0` | Workers (0=auto) |
-| `max_body_size` | int | — | — | `104857600` | Body max (bytes) |
-| `cors_enabled` | bool | — | — | `false` | Activer CORS |
-| `cors_origins` | array | — | — | `["*"]` | Origines CORS |
+| `max_body_size` | int | — | — | `104857600` | Max body (bytes) |
+| `cors_enabled` | bool | — | — | `false` | Enable CORS |
+| `cors_origins` | array | — | — | `["*"]` | CORS origins |
 
 ### Section [auth]
 
-| Clé | Type | Env var | CLI flag | Défaut | Description |
-|-----|------|---------|----------|--------|-------------|
-| `api_keys` | array | `VELESDB_API_KEYS` | — | `[]` (désactivé) | Clés API Bearer autorisées |
+| Key | Type | Env var | CLI flag | Default | Description |
+|-----|------|---------|----------|---------|-------------|
+| `api_keys` | array | `VELESDB_API_KEYS` | — | `[]` (disabled) | Authorized Bearer API keys |
 
-> `VELESDB_API_KEYS` accepte des clés séparées par des virgules : `key1,key2,key3`.
-> Lorsque la liste est vide, l'authentification est désactivée (mode dev local).
-> Les endpoints `/health` et `/ready` sont toujours publics.
+> `VELESDB_API_KEYS` accepts comma-separated keys: `key1,key2,key3`.
+> When the list is empty, authentication is disabled (local dev mode).
+> The `/health` and `/ready` endpoints are always public.
 
 ### Section [tls]
 
-| Clé | Type | Env var | CLI flag | Défaut | Description |
-|-----|------|---------|----------|--------|-------------|
-| `cert` | string? | `VELESDB_TLS_CERT` | `--tls-cert` | `null` | Chemin du certificat PEM |
-| `key` | string? | `VELESDB_TLS_KEY` | `--tls-key` | `null` | Chemin de la clé privée PEM |
+| Key | Type | Env var | CLI flag | Default | Description |
+|-----|------|---------|----------|---------|-------------|
+| `cert` | string? | `VELESDB_TLS_CERT` | `--tls-cert` | `null` | PEM certificate path |
+| `key` | string? | `VELESDB_TLS_KEY` | `--tls-key` | `null` | PEM private key path |
 
-> Les deux champs doivent être définis ensemble. Si aucun n'est défini, le serveur utilise HTTP en clair.
-> Voir [SERVER_SECURITY.md](SERVER_SECURITY.md) pour la génération de certificats.
+> Both fields must be set together. If neither is set, the server uses plain HTTP.
+> See [SERVER_SECURITY.md](SERVER_SECURITY.md) for certificate generation.
 
 ### Section [logging]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `level` | string | `"info"` | Niveau de log |
-| `format` | string | `"text"` | Format: text ou json |
-| `file` | string | `""` | Fichier (vide=stdout) |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `level` | string | `"info"` | Log level |
+| `format` | string | `"text"` | Format: text or json |
+| `file` | string | `""` | File (empty=stdout) |
 
 ### Section [quantization]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `default_type` | string | `"none"` | Type par défaut |
-| `rerank_enabled` | bool | `true` | Activer reranking |
-| `rerank_multiplier` | int | `2` | Multiplicateur candidats |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `default_type` | string | `"none"` | Default type |
+| `rerank_enabled` | bool | `true` | Enable reranking |
+| `rerank_multiplier` | int | `2` | Candidate multiplier |
 
 ### Section [premium]
 
-| Clé | Type | Défaut | Description |
-|-----|------|--------|-------------|
-| `license_key` | string? | `null` | Clé de licence |
-| `hot_reload` | bool | `false` | Hot-reload config |
-| `profile` | string | `"default"` | Profil prédéfini |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `license_key` | string? | `null` | License key |
+| `hot_reload` | bool | `false` | Config hot-reload |
+| `profile` | string | `"default"` | Predefined profile |
 
 ---
 
-## Exemples par cas d'usage
+## Usage Examples
 
-### Développement local
+### Local Development
 
 ```toml
 [search]
@@ -490,7 +490,7 @@ storage_mode = "memory"  # Tout en RAM
 level = "debug"
 ```
 
-### Production - Haute performance
+### Production - High Performance
 
 ```toml
 [search]
@@ -518,7 +518,7 @@ format = "json"
 file = "/var/log/velesdb/velesdb.log"
 ```
 
-### Production - Haute précision (légal/médical)
+### Production - High Precision (Legal/Medical)
 
 ```toml
 [search]
@@ -537,7 +537,7 @@ level = "info"
 format = "json"
 ```
 
-### Edge / IoT - Ressources limitées
+### Edge / IoT - Limited Resources
 
 ```toml
 [search]
@@ -576,11 +576,11 @@ format = "json"  # Pour collecteurs de logs
 
 ---
 
-## Validation et erreurs
+## Validation and Errors
 
-### Validation au démarrage
+### Startup Validation
 
-VelesDB valide la configuration au démarrage et affiche les erreurs clairement :
+VelesDB validates the configuration at startup and displays errors clearly:
 
 ```
 ERROR: Configuration validation failed:
@@ -591,7 +591,7 @@ ERROR: Configuration validation failed:
 
 ### Warnings
 
-Certaines configurations génèrent des avertissements sans bloquer le démarrage :
+Some configurations generate warnings without blocking startup:
 
 ```
 WARN: search.ef_search=2048 is very high, may cause slow queries
@@ -599,7 +599,7 @@ WARN: limits.max_perfect_mode_vectors=5000000 allows slow bruteforce on large da
 WARN: premium.hot_reload=true but no valid license key found
 ```
 
-### Commande de validation
+### Validation Command
 
 ```bash
 # Valider un fichier de configuration
@@ -614,9 +614,9 @@ velesdb config init > velesdb.toml
 
 ---
 
-## Implémentation Rust
+## Rust Implementation
 
-### Structure de configuration
+### Configuration Structure
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -659,7 +659,7 @@ pub enum SearchMode {
 // ... autres structs
 ```
 
-### Chargement
+### Loading
 
 ```rust
 use figment::{Figment, providers::{Env, Format, Toml}};
@@ -677,4 +677,4 @@ impl VelesConfig {
 
 ---
 
-*Documentation VelesDB — Janvier 2026*
+*VelesDB Documentation — January 2026*

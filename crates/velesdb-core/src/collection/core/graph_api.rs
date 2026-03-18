@@ -3,12 +3,44 @@
 //! Exposes Knowledge Graph operations on Collection for use by
 //! Tauri plugin, REST API, and other consumers.
 
-use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
+use std::collections::HashSet;
+
+use crate::collection::graph::{
+    EdgeStore, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
+};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
+
+/// Pushes unvisited, rel-type-filtered neighbors onto the DFS stack.
+///
+/// Iterates outgoing edges in reverse so that the first outgoing edge
+/// is processed first after `stack.pop()` (LIFO order preservation).
+#[inline]
+fn expand_dfs_neighbors(
+    store: &EdgeStore,
+    node_id: u64,
+    depth: u32,
+    path: &[u64],
+    rel_filter: &HashSet<&str>,
+    visited: &HashSet<u64>,
+    stack: &mut Vec<(u64, u32, Vec<u64>)>,
+) {
+    for edge in store.get_outgoing(node_id).into_iter().rev() {
+        if !rel_filter.is_empty() && !rel_filter.contains(edge.label()) {
+            continue;
+        }
+        if visited.contains(&edge.target()) {
+            continue;
+        }
+        let mut new_path = path.to_vec();
+        // Use edge IDs in path, consistent with bfs_traverse/bfs_stream.
+        new_path.push(edge.id());
+        stack.push((edge.target(), depth + 1, new_path));
+    }
+}
 
 impl Collection {
     /// Adds an edge to the collection's knowledge graph.
@@ -408,18 +440,15 @@ impl Collection {
                 }
             }
             if depth < config.max_depth {
-                for edge in store.get_outgoing(node_id).into_iter().rev() {
-                    if !rel_filter.is_empty() && !rel_filter.contains(edge.label()) {
-                        continue;
-                    }
-                    if visited.contains(&edge.target()) {
-                        continue;
-                    }
-                    let mut new_path = path.clone();
-                    // Use edge IDs in path, consistent with bfs_traverse/bfs_stream.
-                    new_path.push(edge.id());
-                    stack.push((edge.target(), depth + 1, new_path));
-                }
+                expand_dfs_neighbors(
+                    &store,
+                    node_id,
+                    depth,
+                    &path,
+                    &rel_filter,
+                    &visited,
+                    &mut stack,
+                );
             }
         }
         results

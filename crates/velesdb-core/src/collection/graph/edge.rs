@@ -475,43 +475,51 @@ impl EdgeStore {
         // Collect edge IDs to remove (incoming)
         let incoming_ids: Vec<u64> = self.incoming.remove(&node_id).unwrap_or_default();
 
-        // Remove outgoing edges and clean all indices
+        // Remove outgoing edges: clean incoming + label indices for each
         for edge_id in outgoing_ids {
             if let Some(edge) = self.edges.remove(&edge_id) {
-                let label = edge.label().to_string();
-                // Clean incoming index
-                if let Some(ids) = self.incoming.get_mut(&edge.target()) {
-                    ids.retain(|&id| id != edge_id);
-                }
-                // Clean label index (US-003)
-                if let Some(ids) = self.by_label.get_mut(&label) {
-                    ids.retain(|&id| id != edge_id);
-                }
-                // Clean composite index (US-003)
-                if let Some(ids) = self.outgoing_by_label.get_mut(&(node_id, label)) {
-                    ids.retain(|&id| id != edge_id);
-                }
+                self.purge_incoming_index(edge_id, edge.target());
+                self.purge_label_indices(edge_id, node_id, edge.label());
             }
         }
 
-        // Remove incoming edges and clean all indices
+        // Remove incoming edges: clean outgoing + label indices for each
         for edge_id in incoming_ids {
             if let Some(edge) = self.edges.remove(&edge_id) {
                 let source = edge.source();
-                let label = edge.label().to_string();
-                // Clean outgoing index
-                if let Some(ids) = self.outgoing.get_mut(&source) {
-                    ids.retain(|&id| id != edge_id);
-                }
-                // Clean label index (US-003)
-                if let Some(ids) = self.by_label.get_mut(&label) {
-                    ids.retain(|&id| id != edge_id);
-                }
-                // Clean composite index (US-003)
-                if let Some(ids) = self.outgoing_by_label.get_mut(&(source, label)) {
-                    ids.retain(|&id| id != edge_id);
-                }
+                self.purge_outgoing_index(edge_id, source);
+                self.purge_label_indices(edge_id, source, edge.label());
             }
+        }
+    }
+
+    /// Removes `edge_id` from the incoming index of `target_node`.
+    #[inline]
+    fn purge_incoming_index(&mut self, edge_id: u64, target_node: u64) {
+        if let Some(ids) = self.incoming.get_mut(&target_node) {
+            ids.retain(|&id| id != edge_id);
+        }
+    }
+
+    /// Removes `edge_id` from the outgoing index of `source_node`.
+    #[inline]
+    fn purge_outgoing_index(&mut self, edge_id: u64, source_node: u64) {
+        if let Some(ids) = self.outgoing.get_mut(&source_node) {
+            ids.retain(|&id| id != edge_id);
+        }
+    }
+
+    /// Removes `edge_id` from the `by_label` and `outgoing_by_label` indices (US-003).
+    #[inline]
+    fn purge_label_indices(&mut self, edge_id: u64, source_node: u64, label: &str) {
+        if let Some(ids) = self.by_label.get_mut(label) {
+            ids.retain(|&id| id != edge_id);
+        }
+        if let Some(ids) = self
+            .outgoing_by_label
+            .get_mut(&(source_node, label.to_string()))
+        {
+            ids.retain(|&id| id != edge_id);
         }
     }
 }

@@ -13,7 +13,6 @@
 use std::collections::HashMap;
 use velesdb_core::{Database, DistanceMetric, Point};
 
-#[allow(deprecated)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== VelesDB Multi-Model Search Example ===\n");
 
@@ -23,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Create collection with embeddings
     db.create_collection("documents", 384, DistanceMetric::Cosine)?;
-    let collection = db.get_collection("documents").ok_or("Collection not found")?;
+    let collection = db.get_vector_collection("documents").ok_or("Collection not found")?;
 
     // 3. Insert sample documents with vectors and metadata
     let points = vec![
