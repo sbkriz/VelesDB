@@ -349,3 +349,8 @@ harness = false
 [[bench]]
 name = "pq_recall_multidist"
 harness = false
+
+[[bench]]
+name = "scalability_quick"
+harness = false
+required-features = ["internal-bench"]
