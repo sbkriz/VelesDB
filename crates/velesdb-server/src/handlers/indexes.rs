@@ -11,6 +11,8 @@ use std::sync::Arc;
 use crate::types::{CreateIndexRequest, ErrorResponse, IndexResponse, ListIndexesResponse};
 use crate::AppState;
 
+use super::helpers::get_vector_collection_or_404;
+
 /// Create a property index on a graph collection.
 #[utoipa::path(
     post,
@@ -31,7 +33,7 @@ pub async fn create_index(
     Path(name): Path<String>,
     Json(req): Json<CreateIndexRequest>,
 ) -> impl IntoResponse {
-    let collection = match get_collection_or_404(&state, &name) {
+    let collection = match get_vector_collection_or_404(&state, &name) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
@@ -62,23 +64,6 @@ pub async fn create_index(
         )
             .into_response(),
     }
-}
-
-/// Look up a vector collection by name, returning a 404 response on miss.
-#[allow(clippy::result_large_err)]
-fn get_collection_or_404(
-    state: &AppState,
-    name: &str,
-) -> Result<velesdb_core::collection::VectorCollection, axum::response::Response> {
-    state.db.get_vector_collection(name).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
-            }),
-        )
-            .into_response()
-    })
 }
 
 /// Dispatch index creation by type.
@@ -117,17 +102,9 @@ pub async fn list_indexes(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let core_indexes = collection.list_indexes();
@@ -165,17 +142,9 @@ pub async fn delete_index(
     State(state): State<Arc<AppState>>,
     Path((name, label, property)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     match collection.drop_index(&label, &property) {

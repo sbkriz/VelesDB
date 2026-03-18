@@ -1,0 +1,61 @@
+# =============================================================================
+# VelesDB Core - 100K Scalability Quick Benchmark
+# =============================================================================
+# Lightweight scalability check (100K vectors, 128-d) that runs:
+#   - Weekly (Monday 06:00 UTC)
+#   - On every push to main
+#   - On manual dispatch
+#
+# Detects insert throughput and search latency regressions at moderate scale
+# without the multi-hour cost of the full scalability_benchmark.
+# =============================================================================
+
+name: Scalability Benchmark
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Weekly Monday 6am UTC
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: bench-scalability-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: "1.83"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  scalability:
+    name: 100K Scalability Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "velesdb-bench"
+
+      - name: Run 100K scalability benchmark
+        run: cargo bench -p velesdb-core --bench scalability_quick --features internal-bench -- --noplot
+
+      - name: Upload results
+        uses: actions/upload-artifact@ea165f8d65b6db9a6b7c67d0a616a1a049718a22 # v4
+        with:
+          name: scalability-results
+          path: target/criterion/
+          retention-days: 30

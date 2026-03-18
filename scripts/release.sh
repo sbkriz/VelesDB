@@ -115,31 +115,60 @@ run_tests() {
     success "Tous les tests passent."
 }
 
-# Créer le commit et le tag
+# Créer le commit de release (sans tag)
 create_release_commit() {
     local new_version=$1
-    
+
     info "Création du commit de release..."
-    
+
     git add .
     git commit -m "chore(release): v$new_version"
-    
-    info "Création du tag v$new_version..."
-    git tag -a "v$new_version" -m "Release v$new_version"
-    
-    success "Commit et tag créés."
+
+    success "Commit de release créé (tag différé après validation CI)."
 }
 
-# Pousser les changements
-push_release() {
+# Pousser le commit et attendre la validation CI
+push_and_wait_ci() {
     local new_version=$1
-    
-    info "Push des changements vers origin..."
-    
+
+    info "Push du commit vers origin (sans tag)..."
     git push origin main
+
+    success "Commit poussé. Attente de la validation CI sur main..."
+    info "Le tag ne sera créé qu'après validation CI pour éviter les tags orphelins."
+
+    # Attendre que le CI passe
+    if command -v gh &> /dev/null; then
+        info "Surveillance du CI via gh..."
+        local run_id
+        run_id=$(gh run list --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
+        if [ -n "$run_id" ]; then
+            gh run watch "$run_id" || {
+                error "Le CI a échoué. Corrigez les erreurs avant de taguer. Le tag n'a PAS été créé."
+            }
+        fi
+        success "CI validé sur main."
+    else
+        warning "gh CLI non disponible. Vérifiez manuellement que le CI passe sur main avant de continuer."
+        read -p "Le CI est-il vert sur main ? (y/n) " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            error "Release annulée. Le commit est sur main mais aucun tag n'a été créé."
+        fi
+    fi
+}
+
+# Créer et pousser le tag (seulement après CI vert)
+create_and_push_tag() {
+    local new_version=$1
+
+    info "Création du tag v$new_version..."
+    git tag -a "v$new_version" -m "Release v$new_version"
+
+    info "Push du tag vers origin (déclenche le workflow de publication)..."
     git push origin "v$new_version"
-    
-    success "Release v$new_version poussée vers origin."
+
+    success "Tag v$new_version poussé. Le workflow release.yml va se déclencher."
 }
 
 # Script principal
@@ -178,15 +207,16 @@ main() {
     update_cargo_versions "$new_version"
     run_tests
     create_release_commit "$new_version"
-    push_release "$new_version"
-    
+    push_and_wait_ci "$new_version"
+    create_and_push_tag "$new_version"
+
     echo ""
     echo "╔════════════════════════════════════════════════════════════════╗"
     echo "║                    🎉 Release Complète !                       ║"
     echo "╚════════════════════════════════════════════════════════════════╝"
     echo ""
     success "VelesDB Core v$new_version a été publiée avec succès !"
-    info "Le workflow GitHub Actions va maintenant créer les binaires et publier sur crates.io."
+    info "Le workflow release.yml va maintenant créer les binaires et publier sur les registres."
     echo ""
 }
 

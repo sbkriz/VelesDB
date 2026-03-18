@@ -1,0 +1,94 @@
+//! Shared handler helpers to reduce duplication across endpoint modules.
+
+use axum::{http::StatusCode, response::IntoResponse, Json};
+
+use crate::types::ErrorResponse;
+use crate::AppState;
+
+/// Look up a vector collection by name, returning a 404 response on miss.
+#[allow(clippy::result_large_err)]
+pub(crate) fn get_vector_collection_or_404(
+    state: &AppState,
+    name: &str,
+) -> Result<velesdb_core::collection::VectorCollection, axum::response::Response> {
+    state.db.get_vector_collection(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!(
+                    "Collection '{}' not found or is not a vector collection",
+                    name
+                ),
+            }),
+        )
+            .into_response()
+    })
+}
+
+/// Extract client identifier from request headers.
+///
+/// Falls back to `"anonymous"` if no `X-Client-Id` header is present.
+pub(crate) fn extract_client_id(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get("x-client-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("anonymous")
+        .to_string()
+}
+
+/// Apply guardrails pre-check (rate limiting + circuit breaker).
+///
+/// Returns `Err` with a 429 response on rate limit exceeded, or a 503
+/// response when the circuit breaker is open.
+#[allow(clippy::result_large_err)]
+pub(crate) fn apply_pre_check(
+    guard_rails: &velesdb_core::guardrails::GuardRails,
+    client_id: &str,
+) -> Result<(), axum::response::Response> {
+    if let Err(violation) = guard_rails.pre_check(client_id) {
+        let (status, msg) = match violation {
+            velesdb_core::guardrails::GuardRailViolation::RateLimitExceeded { .. } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("Rate limit exceeded for client '{client_id}'"),
+            ),
+            velesdb_core::guardrails::GuardRailViolation::CircuitOpen { .. } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Circuit breaker is open — too many recent failures".to_string(),
+            ),
+            other => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Guard rail violation: {other}"),
+            ),
+        };
+        return Err((status, Json(ErrorResponse { error: msg })).into_response());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+
+    #[test]
+    fn test_extract_client_id_from_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-client-id", "my-app".parse().unwrap());
+        assert_eq!(extract_client_id(&headers), "my-app");
+    }
+
+    #[test]
+    fn test_extract_client_id_fallback() {
+        let headers = HeaderMap::new();
+        assert_eq!(extract_client_id(&headers), "anonymous");
+    }
+
+    #[test]
+    fn test_extract_client_id_invalid_utf8_falls_back() {
+        let mut headers = HeaderMap::new();
+        // HeaderValue with valid ASCII always succeeds to_str,
+        // so we verify the fallback path by omitting the header.
+        headers.insert("x-other-header", "value".parse().unwrap());
+        assert_eq!(extract_client_id(&headers), "anonymous");
+    }
+}

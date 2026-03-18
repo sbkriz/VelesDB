@@ -145,6 +145,39 @@ For each file:
 
 **4d. Report** all changes made and any files that need user decision.
 
+**4e. Feature inventory cross-check:**
+
+Run the automated feature claims audit:
+```bash
+python3 scripts/check-feature-claims.py
+```
+
+This script introspects public API exports of each crate/SDK and cross-references
+with documentation claims. It checks:
+
+- **Per-crate capabilities**: public exports vs README feature lists for velesdb-core,
+  velesdb-python, velesdb-wasm, TypeScript SDK, LangChain/LlamaIndex integrations
+- **SDK parity**: features claimed in SDK docs must actually be exported
+- **Roadmap vs delivered**: items marked "in progress" in `.epics/` must not be
+  presented as delivered in README
+- **Feature gaps**: capabilities exported but not documented (missed marketing)
+- **False claims**: capabilities documented but not exported (misleading)
+
+If the script reports gaps:
+1. For MISSING (documented but not exported): either implement the feature or remove
+   the claim from docs. ASK the user which approach.
+2. For UNDOC (exported but not documented): add documentation for the feature.
+3. For ROADMAP misrepresentations: clarify the status in README (e.g., "coming soon"
+   vs presented as available).
+
+Also run the performance claims audit:
+```bash
+python3 scripts/check-perf-claims.py
+```
+
+This ensures all performance numbers in docs are consistent across files and
+match actual benchmark results (within 20% tolerance).
+
 ---
 
 ### Phase 5: Examples and Demos Validation
@@ -235,6 +268,12 @@ cargo audit
 
 # WASM build check (no persistence)
 cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown 2>/dev/null || echo "WASM check skipped (target not installed)"
+
+# Feature claims audit
+python3 scripts/check-feature-claims.py
+
+# Performance claims audit
+python3 scripts/check-perf-claims.py
 ```
 
 **Platform-specific checks to NOTE but not block on:**
@@ -248,9 +287,13 @@ If any check FAILS, stop and ASK the user before continuing.
 
 ---
 
-### Phase 7: Commit, Tag, and Push
+### Phase 7: Commit and Push (WITHOUT tag)
 
 **Only after user approval of all previous phases.**
+
+**IMPORTANT:** Do NOT create the tag yet. Push the release commit first so that
+the standard CI pipeline (`ci.yml`) validates everything on `main`. The tag is
+created in Phase 9 only after CI is green.
 
 ```bash
 # Stage all changes
@@ -259,34 +302,61 @@ git add -A
 # Commit (NO AI co-author)
 git commit -m "chore(release): v$0"
 
-# Create annotated tag
-git tag -a "v$0" -m "Release v$0"
-
-# Push
-git push origin main --follow-tags
+# Push the commit only — NO tag
+git push origin main
 ```
 
-ASK the user: "Ready to push v$0 to remote? This will trigger CI and publishing workflows."
+ASK the user: "Release commit pushed to main. Waiting for CI to validate before tagging."
 
 ---
 
-### Phase 8: Publishing and Verification
+### Phase 8: Wait for CI Green
 
-**8a. Trigger publishing workflows:**
+**Purpose:** ensure the release commit passes ALL CI checks before creating the
+immutable version tag. This prevents orphan tags that require version re-roll.
+
 ```bash
-# Check if release workflow exists
-gh workflow list | grep -i release
+# Monitor the CI run on main
+gh run list --branch main --limit 5 --json name,status,conclusion,createdAt
 
-# If manual trigger needed:
-gh workflow run release.yml --ref "v$0"
+# Wait for the CI Success gate
+gh run watch $(gh run list --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-**8b. Monitor CI on the tag:**
+**Checks that must pass:**
+- Lint & Format
+- Tests (full workspace)
+- Security audit
+- VelesQL Conformance
+- Perf Smoke Test
+- Contract and Doc Guards
+
+**If CI fails:** fix the issue, amend or add a commit, push again, and wait for
+the next CI run. Do NOT proceed to tagging until CI is fully green.
+
+Report CI status and ASK the user: "CI is green. Ready to create tag v$0 and trigger publishing?"
+
+---
+
+### Phase 9: Tag and Publish
+
+**Only after CI is green on the release commit.**
+
+```bash
+# Create annotated tag on the validated commit
+git tag -a "v$0" -m "Release v$0"
+
+# Push the tag — this triggers release.yml
+git push origin "v$0"
+```
+
+**9a. Monitor publishing workflows:**
 ```bash
 gh run list --branch "v$0" --limit 5
+gh run watch $(gh run list --branch "v$0" --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-**8c. Verify each registry:**
+**9b. Verify each registry:**
 
 | Registry | Verification command |
 |----------|---------------------|
@@ -295,11 +365,13 @@ gh run list --branch "v$0" --limit 5
 | npm | `npm view @velesdb/wasm version 2>/dev/null` |
 | GitHub Releases | `gh release view "v$0"` |
 
-**8d. If any publishing fails**, report the error and ASK the user for next steps.
+**9c. If any publishing fails**, report the error and ASK the user for next steps.
+Since the tag is on a CI-validated commit, publishing failures are registry-side
+issues (credentials, rate limits) — not code problems.
 
 ---
 
-### Phase 9: Post-Release Summary
+### Phase 10: Post-Release Summary
 
 Generate a final summary:
 

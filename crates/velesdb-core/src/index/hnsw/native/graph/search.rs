@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Searches for k nearest neighbors.
+    #[inline]
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
         let prepared_query = self.prepare_query(query);
@@ -118,6 +119,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// Includes software prefetch hints for upcoming neighbor vectors to
     /// reduce memory latency in upper HNSW layers (mirrors `search_layer`).
+    #[inline]
     pub(in crate::index::hnsw::native::graph) fn search_layer_single(
         &self,
         query: &[f32],
@@ -223,6 +225,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// F-03 optimization: acquires both vectors and layers read locks once
     /// before the search loop, avoiding ~ef lock acquire/release cycles.
+    #[inline]
     pub(in crate::index::hnsw::native::graph) fn search_layer(
         &self,
         query: &[f32],

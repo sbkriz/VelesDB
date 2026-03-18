@@ -6,6 +6,8 @@
 
 mod requests;
 mod responses;
+#[cfg(test)]
+mod tests;
 
 pub use requests::*;
 pub use responses::*;

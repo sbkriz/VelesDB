@@ -133,6 +133,105 @@ pub(super) struct BfsState {
     pub(super) depth: u32,
 }
 
+/// Direction of edge traversal used by the shared BFS helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BfsDirection {
+    /// Follow outgoing edges (source -> target).
+    Forward,
+    /// Follow incoming edges (target -> source).
+    Reverse,
+}
+
+/// Core BFS loop shared by forward and reverse traversal.
+///
+/// The `direction` parameter controls which edges are followed and which
+/// endpoint is used as the next hop. All other logic is identical.
+#[must_use]
+fn bfs_traverse_directed(
+    edge_store: &EdgeStore,
+    source_id: u64,
+    config: &TraversalConfig,
+    direction: BfsDirection,
+) -> Vec<TraversalResult> {
+    let mut results = Vec::new();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    // CRITICAL FIX: Mark source node as visited before traversal
+    // to prevent cycles back to source causing duplicate work
+    visited.insert(source_id);
+
+    queue.push_back(BfsState {
+        node_id: source_id,
+        path: Vec::new(),
+        depth: 0,
+    });
+
+    while let Some(state) = queue.pop_front() {
+        if results.len() >= config.limit {
+            break;
+        }
+        let edges = match direction {
+            BfsDirection::Forward => edge_store.get_outgoing(state.node_id),
+            BfsDirection::Reverse => edge_store.get_incoming(state.node_id),
+        };
+        process_bfs_neighbors(
+            &edges,
+            &state,
+            config,
+            direction,
+            &mut results,
+            &mut visited,
+            &mut queue,
+        );
+    }
+
+    results
+}
+
+/// Processes neighbors for a single BFS level: filters edges, records results,
+/// and enqueues unvisited nodes for the next hop.
+#[inline]
+fn process_bfs_neighbors(
+    edges: &[&super::GraphEdge],
+    state: &BfsState,
+    config: &TraversalConfig,
+    direction: BfsDirection,
+    results: &mut Vec<TraversalResult>,
+    visited: &mut HashSet<u64>,
+    queue: &mut VecDeque<BfsState>,
+) {
+    for edge in edges {
+        if results.len() >= config.limit {
+            break;
+        }
+        if !config.rel_types.is_empty() && !config.rel_types.contains(&edge.label().to_string()) {
+            continue;
+        }
+        let next_node = match direction {
+            BfsDirection::Forward => edge.target(),
+            BfsDirection::Reverse => edge.source(),
+        };
+        let new_depth = state.depth + 1;
+        if new_depth > config.max_depth {
+            continue;
+        }
+        let mut new_path = state.path.clone();
+        new_path.push(edge.id());
+
+        if new_depth >= config.min_depth {
+            results.push(TraversalResult::new(next_node, new_path.clone(), new_depth));
+        }
+        if new_depth < config.max_depth && visited.insert(next_node) {
+            queue.push_back(BfsState {
+                node_id: next_node,
+                path: new_path,
+                depth: new_depth,
+            });
+        }
+    }
+}
+
 /// Performs BFS traversal from a source node.
 ///
 /// Finds all paths from `source_id` within the configured depth range.
@@ -153,71 +252,7 @@ pub fn bfs_traverse(
     source_id: u64,
     config: &TraversalConfig,
 ) -> Vec<TraversalResult> {
-    let mut results = Vec::new();
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-
-    // CRITICAL FIX: Mark source node as visited before traversal
-    // to prevent cycles back to source causing duplicate work
-    visited.insert(source_id);
-
-    // Initialize with source node
-    queue.push_back(BfsState {
-        node_id: source_id,
-        path: Vec::new(),
-        depth: 0,
-    });
-
-    while let Some(state) = queue.pop_front() {
-        // Check if we've collected enough results
-        if results.len() >= config.limit {
-            break;
-        }
-
-        // Get outgoing edges from current node
-        let edges = edge_store.get_outgoing(state.node_id);
-
-        for edge in edges {
-            // Filter by relationship type if specified
-            if !config.rel_types.is_empty() && !config.rel_types.contains(&edge.label().to_string())
-            {
-                continue;
-            }
-
-            let target = edge.target();
-            let new_depth = state.depth + 1;
-
-            // Skip if exceeds max depth
-            if new_depth > config.max_depth {
-                continue;
-            }
-
-            // Build new path
-            let mut new_path = state.path.clone();
-            new_path.push(edge.id());
-
-            // Add to results if within valid depth range
-            if new_depth >= config.min_depth {
-                results.push(TraversalResult::new(target, new_path.clone(), new_depth));
-
-                if results.len() >= config.limit {
-                    break;
-                }
-            }
-
-            // Continue traversal if not at max depth and not visited
-            if new_depth < config.max_depth && !visited.contains(&target) {
-                visited.insert(target);
-                queue.push_back(BfsState {
-                    node_id: target,
-                    path: new_path,
-                    depth: new_depth,
-                });
-            }
-        }
-    }
-
-    results
+    bfs_traverse_directed(edge_store, source_id, config, BfsDirection::Forward)
 }
 
 /// Performs BFS traversal in the reverse direction (following incoming edges).
@@ -227,64 +262,7 @@ pub fn bfs_traverse_reverse(
     source_id: u64,
     config: &TraversalConfig,
 ) -> Vec<TraversalResult> {
-    let mut results = Vec::new();
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-
-    // CRITICAL FIX: Mark source node as visited before traversal
-    visited.insert(source_id);
-
-    queue.push_back(BfsState {
-        node_id: source_id,
-        path: Vec::new(),
-        depth: 0,
-    });
-
-    while let Some(state) = queue.pop_front() {
-        if results.len() >= config.limit {
-            break;
-        }
-
-        let edges = edge_store.get_incoming(state.node_id);
-
-        for edge in edges {
-            if !config.rel_types.is_empty() {
-                let label = edge.label().to_string();
-                if !config.rel_types.contains(&label) {
-                    continue;
-                }
-            }
-
-            let source = edge.source();
-            let new_depth = state.depth + 1;
-
-            if new_depth > config.max_depth {
-                continue;
-            }
-
-            let mut new_path = state.path.clone();
-            new_path.push(edge.id());
-
-            if new_depth >= config.min_depth {
-                results.push(TraversalResult::new(source, new_path.clone(), new_depth));
-
-                if results.len() >= config.limit {
-                    break;
-                }
-            }
-
-            if new_depth < config.max_depth && !visited.contains(&source) {
-                visited.insert(source);
-                queue.push_back(BfsState {
-                    node_id: source,
-                    path: new_path,
-                    depth: new_depth,
-                });
-            }
-        }
-    }
-
-    results
+    bfs_traverse_directed(edge_store, source_id, config, BfsDirection::Reverse)
 }
 
 /// Performs bidirectional BFS (follows both directions).

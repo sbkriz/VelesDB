@@ -191,7 +191,6 @@ fn generate_product_embedding(product: &Product, dim: usize) -> Vec<f32> {
 // MAIN DEMONSTRATION
 // ============================================================================
 
-#[allow(deprecated)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║     VelesDB E-commerce Recommendation Engine Demo                ║");
@@ -225,7 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     let db = Database::open(&data_path)?;
     db.create_collection("products", 128, DistanceMetric::Cosine)?;
-    let collection = db.get_collection("products").ok_or("Collection not found")?;
+    let collection = db.get_vector_collection("products").ok_or("Collection not found")?;
 
     // Insert products with embeddings and metadata
     let points: Vec<Point> = products

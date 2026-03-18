@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 use velesdb_core::{velesql::Parser, Database, DistanceMetric, Point};
 
-#[allow(deprecated)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 VelesDB Mini Recommender Example\n");
 
@@ -20,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Create products collection
     db.create_collection("products", 128, DistanceMetric::Cosine)?;
-    let products = db.get_collection("products").ok_or("Collection not found")?;
+    let products = db.get_vector_collection("products").ok_or("Collection not found")?;
 
     // Step 2: Ingest products
     let product_data = [
@@ -88,7 +87,7 @@ fn generate_embedding(seed: u64) -> Vec<f32> {
 
 /// Find products similar to a given product
 fn find_similar_products(
-    products: &velesdb_core::Collection,
+    products: &velesdb_core::VectorCollection,
     liked_product_id: u64,
     top_k: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -118,7 +117,7 @@ fn find_similar_products(
 
 /// Recommend products in a specific category under a price limit
 fn recommend_in_category(
-    products: &velesdb_core::Collection,
+    products: &velesdb_core::VectorCollection,
     user_preferences: &[f32],
     category: &str,
     max_price: f64,
@@ -183,7 +182,7 @@ fn demo_velesql_queries() {
 }
 
 /// Analyze the product catalog
-fn analyze_catalog(products: &velesdb_core::Collection) {
+fn analyze_catalog(products: &velesdb_core::VectorCollection) {
     println!("\n📊 Catalog Analytics:");
 
     let mut category_counts: HashMap<String, usize> = HashMap::new();

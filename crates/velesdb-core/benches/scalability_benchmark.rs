@@ -15,6 +15,10 @@
 //! - Memory usage: peak RSS
 //! - Concurrent queries: multi-threaded search
 
+#[path = "bench_helpers.rs"]
+mod bench_helpers;
+
+use bench_helpers::generate_normalized_vector;
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
@@ -38,40 +42,6 @@ const THREAD_COUNTS: &[usize] = &[1, 2, 4, 8];
 
 /// Number of queries per thread in concurrent tests
 const QUERIES_PER_THREAD: usize = 100;
-
-// ============================================================================
-// Vector Generation
-// ============================================================================
-
-/// Generates a deterministic pseudo-random vector for benchmarking.
-/// Uses a simple hash-based approach for reproducibility.
-#[allow(clippy::cast_precision_loss)]
-fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
-    (0..dim)
-        .map(|i| {
-            let x = seed.wrapping_mul(2_654_435_761) ^ (i as u64).wrapping_mul(2_246_822_519);
-            let normalized = (x as f32) / (u64::MAX as f32);
-            normalized * 2.0 - 1.0 // Range [-1, 1]
-        })
-        .collect()
-}
-
-/// Normalizes a vector to unit length (for cosine similarity).
-fn normalize(v: &mut [f32]) {
-    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for x in v.iter_mut() {
-            *x /= norm;
-        }
-    }
-}
-
-/// Generates a normalized vector suitable for cosine similarity.
-fn generate_normalized_vector(dim: usize, seed: u64) -> Vec<f32> {
-    let mut v = generate_vector(dim, seed);
-    normalize(&mut v);
-    v
-}
 
 // ============================================================================
 // Memory Measurement (Cross-platform)

@@ -11,6 +11,38 @@ use crate::types::{
 };
 use crate::AppState;
 
+/// Convert a `Vec<SearchResult>` into a `SearchResponse`.
+pub(crate) fn build_search_response(results: Vec<velesdb_core::SearchResult>) -> SearchResponse {
+    SearchResponse {
+        results: results
+            .into_iter()
+            .map(|r| SearchResultResponse {
+                id: r.point.id,
+                score: r.score,
+                payload: r.point.payload,
+            })
+            .collect(),
+    }
+}
+
+/// Parse a JSON value into a `Filter`, returning a 400 response on failure.
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_filter_or_400(
+    filter_json: &serde_json::Value,
+    onboarding_metrics: &crate::OnboardingMetrics,
+) -> Result<velesdb_core::Filter, axum::response::Response> {
+    serde_json::from_value(filter_json.clone()).map_err(|e| {
+        onboarding_metrics.record_filter_parse_error();
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid filter: {e}"),
+            }),
+        )
+            .into_response()
+    })
+}
+
 pub(crate) fn dimension_mismatch_error(
     collection_name: &str,
     expected: usize,
@@ -168,17 +200,7 @@ pub(crate) fn execute_dense_search(
         .or_else(|| req.mode.as_ref().and_then(|m| mode_to_ef_search(m)));
 
     let result = if let Some(ref filter_json) = req.filter {
-        let filter: velesdb_core::Filter =
-            serde_json::from_value(filter_json.clone()).map_err(|e| {
-                state.onboarding_metrics.record_filter_parse_error();
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Invalid filter: {e}"),
-                    }),
-                )
-                    .into_response()
-            })?;
+        let filter = parse_filter_or_400(filter_json, &state.onboarding_metrics)?;
         collection.search_with_filter(&req.vector, req.top_k, &filter)
     } else if let Some(ef) = effective_ef {
         collection.search_with_ef(&req.vector, req.top_k, ef)
@@ -276,17 +298,7 @@ pub(crate) fn finish_search(
                 .db
                 .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
 
-            let response = SearchResponse {
-                results: results
-                    .into_iter()
-                    .map(|r| SearchResultResponse {
-                        id: r.point.id,
-                        score: r.score,
-                        payload: r.point.payload,
-                    })
-                    .collect(),
-            };
-            Json(response).into_response()
+            Json(build_search_response(results)).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
     }

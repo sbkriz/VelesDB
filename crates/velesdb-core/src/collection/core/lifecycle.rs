@@ -575,6 +575,12 @@ impl Collection {
         RangeIndex::new()
     }
 
+    /// Returns a reference to the collection's guard rails.
+    #[must_use]
+    pub fn guard_rails(&self) -> &std::sync::Arc<crate::guardrails::GuardRails> {
+        &self.guard_rails
+    }
+
     /// Returns the collection configuration.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
