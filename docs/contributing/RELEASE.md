@@ -38,16 +38,35 @@ Le script `bump-version.ps1` met à jour automatiquement :
 
 Ajouter une section pour la nouvelle version avec les changements.
 
-### 3. Commit et tag
+### 3. Commit et push (SANS tag)
 
 ```bash
 git add -A
 git commit -m "chore(release): bump version to 0.9.0"
-git tag -a v0.9.0 -m "v0.9.0 - Description"
-git push origin main --tags
+git push origin main
 ```
 
-### 4. Le workflow `release.yml` publie automatiquement
+### 4. Attendre que le CI passe sur main
+
+Le CI (`ci.yml`) valide le commit de release : tests, lint, security, conformance,
+perf smoke. **Ne pas créer le tag tant que le CI n'est pas vert.**
+
+```bash
+# Surveiller le CI
+gh run watch $(gh run list --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
+```
+
+Si le CI échoue, corriger et re-pusher. Aucun tag n'existe donc aucun rollback
+de version n'est nécessaire.
+
+### 5. Créer et pusher le tag (après CI vert)
+
+```bash
+git tag -a v0.9.0 -m "v0.9.0 - Description"
+git push origin v0.9.0
+```
+
+### 6. Le workflow `release.yml` publie automatiquement
 
 | Destination | Package |
 |-------------|---------|
@@ -56,7 +75,7 @@ git push origin main --tags
 | **PyPI** | velesdb |
 | **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk |
 
-### 5. Vérifier le déploiement
+### 7. Vérifier le déploiement
 
 - GitHub Actions : https://github.com/cyberlife-coder/VelesDB/actions
 - GitHub Releases : https://github.com/cyberlife-coder/VelesDB/releases
