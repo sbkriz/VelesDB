@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Normalizes the vector in-place if the distance engine uses cosine metric
     /// with pre-normalization.
+    #[inline]
     fn normalize_if_cosine(&self, vector: &mut [f32]) {
         if self.distance.is_pre_normalized()
             && self.distance.metric() == crate::DistanceMetric::Cosine
@@ -81,6 +82,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Performs the two-phase HNSW insertion when an entry point exists:
     /// 1. Greedy descent through upper layers above `node_layer`
     /// 2. Neighbor selection and bidirectional connection at layers 0..=`node_layer`
+    #[inline]
     fn insert_with_entry_point(
         &self,
         node_id: NodeId,

@@ -15,6 +15,7 @@ pub mod admin;
 pub mod collections;
 pub mod graph;
 pub mod health;
+pub mod helpers;
 pub mod indexes;
 pub mod match_query;
 pub mod points;

@@ -7,6 +7,7 @@ use rustc_hash::FxHashSet;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// VAMANA-style neighbor selection with alpha diversification.
+    #[inline]
     pub(crate) fn select_neighbors(
         &self,
         candidates: &[(NodeId, f32)],
@@ -72,6 +73,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// This method respects the global lock order: `vectors` → `layers` → `neighbors`
     /// to prevent deadlocks with `search_layer()` which also follows this order.
+    #[inline]
     pub(in crate::index::hnsw::native::graph) fn add_bidirectional_connection(
         &self,
         new_node: NodeId,

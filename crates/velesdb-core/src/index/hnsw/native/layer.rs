@@ -30,6 +30,7 @@ impl Layer {
     }
 
     /// Gets the neighbors of a node.
+    #[inline]
     pub(crate) fn get_neighbors(&self, node_id: NodeId) -> Vec<NodeId> {
         if node_id < self.neighbors.len() {
             self.neighbors[node_id].read().clone()
@@ -39,6 +40,7 @@ impl Layer {
     }
 
     /// Runs a closure with immutable access to a node's adjacency list under a read lock.
+    #[inline]
     pub(crate) fn with_neighbors<R>(
         &self,
         node_id: NodeId,
@@ -53,6 +55,7 @@ impl Layer {
     }
 
     /// Sets the neighbors for a node.
+    #[inline]
     pub(crate) fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
         if node_id < self.neighbors.len() {
             *self.neighbors[node_id].write() = neighbors;
@@ -60,6 +63,7 @@ impl Layer {
     }
 
     /// Mutates the neighbors for a node in-place under a single write lock.
+    #[inline]
     pub(crate) fn with_neighbors_mut<R>(
         &self,
         node_id: NodeId,

@@ -270,6 +270,13 @@ jobs:
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Upload lcov for SonarCloud
+        uses: actions/upload-artifact@ea165f8d65b6db9a6b7c67d0a616a1a049718a22 # v4.6.2
+        with:
+          name: lcov-report
+          path: lcov.info
+          retention-days: 1
+
   # ===========================================================================
   # VelesQL Conformance (cross-ecosystem contract checks)
   # ===========================================================================
@@ -401,12 +408,18 @@ jobs:
   sonarcloud:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
-    needs: [lint, test, security]
+    needs: [lint, test, security, coverage]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           fetch-depth: 0
+
+      - name: Download coverage report
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: lcov-report
+        continue-on-error: true
 
       - name: Set up JDK 17
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0

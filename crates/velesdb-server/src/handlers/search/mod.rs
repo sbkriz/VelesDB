@@ -17,9 +17,10 @@ use crate::types::{
 };
 use crate::AppState;
 
+use super::helpers::get_vector_collection_or_404;
 use pipeline::{
-    actionable_search_error, execute_search_request, finish_search, finish_search_ids,
-    validate_query_dimension,
+    actionable_search_error, build_search_response, execute_search_request, finish_search,
+    finish_search_ids, parse_filter_or_400, validate_query_dimension,
 };
 
 /// Search for similar vectors.
@@ -51,17 +52,9 @@ pub async fn search(
     let start = std::time::Instant::now();
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
@@ -96,17 +89,9 @@ pub async fn batch_search(
     let start = std::time::Instant::now();
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     if let Err(resp) = validate_batch_dimensions(&state, &name, &collection, &req) {
@@ -255,17 +240,9 @@ pub async fn multi_query_search(
     use velesdb_core::FusionStrategy;
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let strategy = match req.strategy.to_lowercase().as_str() {
@@ -317,18 +294,7 @@ pub async fn multi_query_search(
         state.onboarding_metrics.record_empty_search_results();
     }
 
-    let response = SearchResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
-            })
-            .collect(),
-    };
-
-    Json(response).into_response()
+    Json(build_search_response(results)).into_response()
 }
 
 /// Search using BM25 full-text search.
@@ -353,32 +319,15 @@ pub async fn text_search(
 ) -> impl IntoResponse {
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let results = if let Some(ref filter_json) = req.filter {
-        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
+        let filter = match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
             Ok(f) => f,
-            Err(e) => {
-                state.onboarding_metrics.record_filter_parse_error();
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Invalid filter: {}", e),
-                    }),
-                )
-                    .into_response();
-            }
+            Err(resp) => return resp,
         };
         collection.text_search_with_filter(&req.query, req.top_k, &filter)
     } else {
@@ -386,19 +335,7 @@ pub async fn text_search(
     };
 
     match results {
-        Ok(results) => {
-            let response = SearchResponse {
-                results: results
-                    .into_iter()
-                    .map(|r| SearchResultResponse {
-                        id: r.point.id,
-                        score: r.score,
-                        payload: r.point.payload,
-                    })
-                    .collect(),
-            };
-            Json(response).into_response()
-        }
+        Ok(results) => Json(build_search_response(results)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(actionable_search_error(&e)),
@@ -430,17 +367,9 @@ pub async fn hybrid_search(
 ) -> impl IntoResponse {
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let expected_dimension = collection.config().dimension;
@@ -449,18 +378,9 @@ pub async fn hybrid_search(
     }
 
     let search_result = if let Some(ref filter_json) = req.filter {
-        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
+        let filter = match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
             Ok(f) => f,
-            Err(e) => {
-                state.onboarding_metrics.record_filter_parse_error();
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Invalid filter: {}", e),
-                    }),
-                )
-                    .into_response();
-            }
+            Err(resp) => return resp,
         };
         collection.hybrid_search_with_filter(
             &req.vector,
@@ -478,17 +398,7 @@ pub async fn hybrid_search(
             if results.is_empty() {
                 state.onboarding_metrics.record_empty_search_results();
             }
-            let response = SearchResponse {
-                results: results
-                    .into_iter()
-                    .map(|r| SearchResultResponse {
-                        id: r.point.id,
-                        score: r.score,
-                        payload: r.point.payload,
-                    })
-                    .collect(),
-            };
-            Json(response).into_response()
+            Json(build_search_response(results)).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
     }
@@ -522,17 +432,9 @@ pub async fn search_ids(
     let start = std::time::Instant::now();
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let search_result = match execute_search_request(&state, &name, &collection, &mut req) {

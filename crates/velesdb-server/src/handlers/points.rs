@@ -15,6 +15,8 @@ use crate::types::{ErrorResponse, SparseVectorInput, StreamInsertRequest, Upsert
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
+use super::helpers::get_vector_collection_or_404;
+
 use velesdb_core::index::sparse::SparseVector;
 
 const STREAM_BATCH_SIZE: usize = 100;
@@ -225,26 +227,6 @@ pub async fn upsert_points(
         )
             .into_response(),
     }
-}
-
-/// Look up a vector collection by name, returning a 404 response on miss.
-#[allow(clippy::result_large_err)]
-fn get_vector_collection_or_404(
-    state: &AppState,
-    name: &str,
-) -> Result<VectorCollection, axum::response::Response> {
-    state.db.get_vector_collection(name).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!(
-                    "Collection '{}' not found or is not a vector collection",
-                    name
-                ),
-            }),
-        )
-            .into_response()
-    })
 }
 
 /// Convert an `UpsertPointsRequest` into a `Vec<Point>`, merging sparse inputs.
@@ -487,20 +469,9 @@ pub async fn get_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Collection '{}' not found or is not a vector collection",
-                        name
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let points = collection.get(&[id]);
@@ -540,20 +511,9 @@ pub async fn delete_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_vector_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Collection '{}' not found or is not a vector collection",
-                        name
-                    ),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     match collection.delete(&[id]) {
