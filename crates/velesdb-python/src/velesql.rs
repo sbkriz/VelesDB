@@ -178,6 +178,7 @@ impl ParsedStatement {
             SelectColumns::Mixed {
                 columns,
                 aggregations,
+                ..
             } => {
                 let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 result.extend(
@@ -187,6 +188,13 @@ impl ParsedStatement {
                 );
                 result
             }
+            SelectColumns::SimilarityScore(expr) => {
+                vec![expr
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| "similarity".to_string())]
+            }
+            SelectColumns::QualifiedWildcard(alias) => vec![format!("{alias}.*")],
         }
     }
 
@@ -297,7 +305,8 @@ impl ParsedStatement {
                     let dir = if item.descending { "DESC" } else { "ASC" };
                     let col = match &item.expr {
                         velesdb_core::velesql::OrderByExpr::Field(f) => f.clone(),
-                        velesdb_core::velesql::OrderByExpr::Similarity(_) => {
+                        velesdb_core::velesql::OrderByExpr::Similarity(_)
+                        | velesdb_core::velesql::OrderByExpr::SimilarityBare => {
                             "similarity()".to_string()
                         }
                         velesdb_core::velesql::OrderByExpr::Aggregate(agg) => {

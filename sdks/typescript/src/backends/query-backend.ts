@@ -11,7 +11,8 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
 } from '../types';
-import { NotFoundError, VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, collectionPath } from './shared';
 
 /** REST API shape for EXPLAIN responses. */
 export interface QueryExplainApiResponse {
@@ -65,13 +66,7 @@ export interface CollectionSanityApiResponse {
 }
 
 /** Minimal transport interface for query operations. */
-export interface QueryTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-
+export interface QueryTransport extends BaseTransport {
   parseNodeId(value: unknown): bigint | number;
 }
 
@@ -101,12 +96,7 @@ export async function query(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawData = response.data as any;
@@ -121,15 +111,9 @@ export async function query(
     };
   }
 
+  // v3.0.0: Results are projected rows — shape depends on SELECT clause.
   return {
-    results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
-      nodeId: transport.parseNodeId(r.id ?? r.node_id ?? r.nodeId),
-      vectorScore: (r.score ?? r.vector_score ?? r.vectorScore) as number | null,
-      graphScore: (r.graph_score ?? r.graphScore) as number | null,
-      fusedScore: (r.score ?? r.fused_score ?? r.fusedScore ?? 0) as number,
-      bindings: (r.payload ?? r.bindings) as Record<string, unknown> ?? {},
-      columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
-    })),
+    results: (rawData?.results ?? []) as Record<string, unknown>[],
     stats: {
       executionTimeMs: rawData?.timing_ms ?? 0,
       strategy: 'select',
@@ -152,9 +136,7 @@ export async function queryExplain(
     }
   );
 
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 
   const data = response.data!;
   return {
@@ -193,15 +175,10 @@ export async function collectionSanity(
 ): Promise<CollectionSanityResponse> {
   const response = await transport.requestJson<CollectionSanityApiResponse>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/sanity`
+    `${collectionPath(collection)}/sanity`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   const data = response.data!;
   return {

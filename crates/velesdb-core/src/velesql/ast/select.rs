@@ -67,13 +67,30 @@ pub enum SelectColumns {
     Columns(Vec<Column>),
     /// Select aggregate functions.
     Aggregations(Vec<AggregateFunction>),
-    /// Mixed: columns + aggregations.
+    /// Mixed: columns + aggregations + similarity scores + qualified wildcards.
     Mixed {
         /// Regular columns.
         columns: Vec<Column>,
         /// Aggregate functions.
         aggregations: Vec<AggregateFunction>,
+        /// similarity() score expressions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        similarity_scores: Vec<SimilarityScoreExpr>,
+        /// Qualified wildcards (e.g., `ctx.*`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        qualified_wildcards: Vec<String>,
     },
+    /// Select similarity() score only (zero-arg form).
+    SimilarityScore(SimilarityScoreExpr),
+    /// Select alias.* (qualified wildcard).
+    QualifiedWildcard(String),
+}
+
+/// A `similarity()` zero-arg expression in SELECT, with optional alias.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarityScoreExpr {
+    /// Optional alias (e.g., `similarity() AS relevance`).
+    pub alias: Option<String>,
 }
 
 /// A column reference.
@@ -119,8 +136,10 @@ pub struct SelectOrderBy {
 pub enum OrderByExpr {
     /// Simple field reference.
     Field(String),
-    /// Similarity function.
+    /// Similarity function with field and vector args.
     Similarity(SimilarityOrderBy),
+    /// Similarity zero-arg: uses pre-computed search score.
+    SimilarityBare,
     /// Aggregate function.
     Aggregate(AggregateFunction),
 }
@@ -132,4 +151,29 @@ pub struct SimilarityOrderBy {
     pub field: String,
     /// Vector to compare against.
     pub vector: VectorExpr,
+}
+
+impl SelectStatement {
+    /// Returns an empty `SelectStatement` with all fields at their defaults.
+    ///
+    /// Used by [`Query::new_dml`], [`Query::new_train`], and [`Query::new_match`]
+    /// to avoid repeating the 14-field struct literal.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            distinct: DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: Vec::new(),
+            joins: Vec::new(),
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        }
+    }
 }

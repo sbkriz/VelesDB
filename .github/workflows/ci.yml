@@ -142,6 +142,14 @@ jobs:
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
+      - name: Audit feature claims vs exports
+        run: python3 scripts/check-feature-claims.py
+        continue-on-error: true  # Advisory — does not block merge
+
+      - name: Audit performance claims consistency
+        run: python3 scripts/check-perf-claims.py --no-criterion
+        continue-on-error: true  # Advisory — does not block merge
+
       - name: Check doctests compile
         run: |
           cargo test --doc --package velesdb-core
@@ -274,7 +282,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload lcov for SonarCloud
-        uses: actions/upload-artifact@ea165f8d65b6db9a6b7c67d0a616a1a049718a22 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: lcov-report
           path: lcov.info

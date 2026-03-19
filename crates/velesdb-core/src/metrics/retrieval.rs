@@ -144,12 +144,31 @@ pub fn average_metrics<T: Eq + Hash + Copy>(
     }
 
     #[allow(clippy::cast_precision_loss)]
+    // Reason: n is the number of query-result pairs (bounded by input slice length);
+    // f64 is exact for integers up to 2^53, so no precision loss in practice.
     let n_f64 = n as f64;
     (
         total_recall / n_f64,
         total_precision / n_f64,
         total_mrr / n_f64,
     )
+}
+
+/// Computes the Discounted Cumulative Gain for a relevance slice truncated to `k`.
+#[allow(clippy::cast_precision_loss)]
+// Reason: i is a loop index (0..k where k ≤ slice length); f64 is exact for
+// integers up to 2^53, so casting a small index to f64 loses no precision.
+fn compute_dcg(relevances: &[f64], k: usize) -> f64 {
+    relevances
+        .iter()
+        .take(k)
+        .enumerate()
+        .map(|(i, &rel)| {
+            let gain = 2.0_f64.powf(rel) - 1.0;
+            let discount = (i as f64 + 2.0).log2();
+            gain / discount
+        })
+        .sum()
 }
 
 /// Calculates NDCG@k (Normalized Discounted Cumulative Gain).
@@ -178,34 +197,11 @@ pub fn ndcg_at_k(relevances: &[f64], k: usize) -> f64 {
 
     let k = k.min(relevances.len());
 
-    // Calculate DCG (Discounted Cumulative Gain)
-    let dcg: f64 = relevances
-        .iter()
-        .take(k)
-        .enumerate()
-        .map(|(i, &rel)| {
-            let gain = 2.0_f64.powf(rel) - 1.0;
-            #[allow(clippy::cast_precision_loss)]
-            let discount = (i as f64 + 2.0).log2();
-            gain / discount
-        })
-        .sum();
+    let dcg = compute_dcg(relevances, k);
 
-    // Calculate IDCG (Ideal DCG) - DCG with perfect ranking
     let mut sorted_relevances = relevances.to_vec();
     sorted_relevances.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-
-    let idcg: f64 = sorted_relevances
-        .iter()
-        .take(k)
-        .enumerate()
-        .map(|(i, &rel)| {
-            let gain = 2.0_f64.powf(rel) - 1.0;
-            #[allow(clippy::cast_precision_loss)]
-            let discount = (i as f64 + 2.0).log2();
-            gain / discount
-        })
-        .sum();
+    let idcg = compute_dcg(&sorted_relevances, k);
 
     if idcg == 0.0 {
         return 0.0;

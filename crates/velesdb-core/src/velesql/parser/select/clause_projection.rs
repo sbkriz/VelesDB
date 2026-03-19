@@ -2,9 +2,94 @@
 
 use super::super::{extract_identifier, Rule};
 use super::validation;
-use crate::velesql::ast::{AggregateArg, AggregateFunction, AggregateType, Column, SelectColumns};
+use crate::velesql::ast::{
+    AggregateArg, AggregateFunction, AggregateType, Column, SelectColumns, SimilarityScoreExpr,
+};
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
+
+/// Accumulator for parsed SELECT items before building `SelectColumns`.
+struct SelectItemAccumulator {
+    columns: Vec<Column>,
+    aggregations: Vec<AggregateFunction>,
+    similarity_scores: Vec<SimilarityScoreExpr>,
+    qualified_wildcards: Vec<String>,
+}
+
+impl SelectItemAccumulator {
+    fn new() -> Self {
+        Self {
+            columns: Vec::new(),
+            aggregations: Vec::new(),
+            similarity_scores: Vec::new(),
+            qualified_wildcards: Vec::new(),
+        }
+    }
+
+    fn into_select_columns(self) -> SelectColumns {
+        let type_count = self.count_nonempty_types();
+
+        // Single-type shorthand: exactly one kind of item present
+        if type_count == 1 {
+            return self.into_single_type();
+        }
+
+        // Mixed: 2+ item types
+        SelectColumns::Mixed {
+            columns: self.columns,
+            aggregations: self.aggregations,
+            similarity_scores: self.similarity_scores,
+            qualified_wildcards: self.qualified_wildcards,
+        }
+    }
+
+    /// Counts how many distinct item types are present.
+    fn count_nonempty_types(&self) -> usize {
+        [
+            !self.columns.is_empty(),
+            !self.aggregations.is_empty(),
+            !self.similarity_scores.is_empty(),
+            !self.qualified_wildcards.is_empty(),
+        ]
+        .iter()
+        .filter(|&&b| b)
+        .count()
+    }
+
+    /// Converts when exactly one item type is present.
+    /// Falls back to `Mixed` for multi-element similarity/wildcard.
+    fn into_single_type(self) -> SelectColumns {
+        if !self.columns.is_empty() {
+            return SelectColumns::Columns(self.columns);
+        }
+        if !self.aggregations.is_empty() {
+            return SelectColumns::Aggregations(self.aggregations);
+        }
+        if self.similarity_scores.len() == 1 {
+            return SelectColumns::SimilarityScore(
+                self.similarity_scores
+                    .into_iter()
+                    .next()
+                    .expect("checked len==1"),
+            );
+        }
+        if self.qualified_wildcards.len() == 1 {
+            return SelectColumns::QualifiedWildcard(
+                self.qualified_wildcards
+                    .into_iter()
+                    .next()
+                    .expect("checked len==1"),
+            );
+        }
+        // Multiple similarity scores or wildcards without other types → Mixed
+        SelectColumns::Mixed {
+            columns: self.columns,
+            aggregations: self.aggregations,
+            similarity_scores: self.similarity_scores,
+            qualified_wildcards: self.qualified_wildcards,
+        }
+    }
+}
 
 impl Parser {
     pub(crate) fn parse_select_list(
@@ -12,40 +97,61 @@ impl Parser {
     ) -> Result<SelectColumns, ParseError> {
         let inner = pair.into_inner().next();
         match inner {
-            Some(p) if p.as_rule() == Rule::select_item_list => {
-                let (columns, aggs) = Self::parse_select_item_list(p)?;
-                if aggs.is_empty() {
-                    Ok(SelectColumns::Columns(columns))
-                } else if columns.is_empty() {
-                    Ok(SelectColumns::Aggregations(aggs))
-                } else {
-                    Ok(SelectColumns::Mixed {
-                        columns,
-                        aggregations: aggs,
-                    })
-                }
-            }
+            Some(p) if p.as_rule() == Rule::select_item_list => Self::parse_select_item_list(p),
             _ => Ok(SelectColumns::All),
         }
     }
 
     pub(crate) fn parse_select_item_list(
         pair: pest::iterators::Pair<Rule>,
-    ) -> Result<(Vec<Column>, Vec<AggregateFunction>), ParseError> {
-        let mut columns = Vec::new();
-        let mut aggs = Vec::new();
+    ) -> Result<SelectColumns, ParseError> {
+        let mut acc = SelectItemAccumulator::new();
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::select_item {
                 for item in inner_pair.into_inner() {
                     match item.as_rule() {
-                        Rule::aggregation_item => aggs.push(Self::parse_aggregation_item(item)?),
-                        Rule::column => columns.push(Self::parse_column(item)?),
+                        Rule::similarity_select => {
+                            acc.similarity_scores
+                                .push(Self::parse_similarity_select(item));
+                        }
+                        Rule::aggregation_item => {
+                            acc.aggregations.push(Self::parse_aggregation_item(item)?);
+                        }
+                        Rule::qualified_wildcard => {
+                            acc.qualified_wildcards
+                                .push(Self::parse_qualified_wildcard(item));
+                        }
+                        Rule::column => acc.columns.push(Self::parse_column(item)?),
                         _ => {}
                     }
                 }
             }
         }
-        Ok((columns, aggs))
+        Ok(acc.into_select_columns())
+    }
+
+    /// Parses `similarity() [AS alias]`.
+    pub(crate) fn parse_similarity_select(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> SimilarityScoreExpr {
+        let mut alias = None;
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::identifier {
+                alias = Some(extract_identifier(&inner_pair));
+            }
+        }
+        SimilarityScoreExpr { alias }
+    }
+
+    /// Parses `alias.*` qualified wildcard.
+    pub(crate) fn parse_qualified_wildcard(pair: pest::iterators::Pair<Rule>) -> String {
+        let mut alias = String::new();
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::identifier {
+                alias = extract_identifier(&inner_pair);
+            }
+        }
+        alias
     }
 
     #[allow(dead_code)]
