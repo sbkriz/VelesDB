@@ -29,7 +29,7 @@ The `simd_native` module provides hand-tuned SIMD implementations using `core::a
 
 | Platform | Implementation | Instructions | Performance (768D) |
 |----------|----------------|-------------|-------------------|
-| **x86_64 AVX-512** | simd_native | 512-bit 4-acc | ~38-42ns |
+| **x86_64 AVX-512** | simd_native | 512-bit 2/4-acc | ~38-42ns |
 | **x86_64 AVX2** | simd_native | 256-bit 2/4-acc | ~40-82ns |
 | **aarch64** | simd_native | NEON 128-bit | ~60-100ns |
 | **WASM** | wide_simd | SIMD128 | ~80-120ns |
@@ -37,14 +37,36 @@ The `simd_native` module provides hand-tuned SIMD implementations using `core::a
 
 ### Tiered Dispatch Strategy (EPIC-077)
 
-AVX2 implementations adapt based on vector size to minimize register pressure:
+Implementations adapt based on vector size and ISA to minimize register pressure and maximize throughput:
 
-| Size Range | Accumulators | Use Case |
-|------------|--------------|----------|
-| >= 1024 elements | 4-acc | Large vectors (text-embedding-3-large) |
-| 64-1023 elements | 2-acc | Medium vectors (BERT, ada-002) |
-| 8-63 elements | 4-acc | Small vectors (legacy) |
-| < 8 elements | Scalar | Tiny vectors (avoid SIMD overhead) |
+**AVX-512 (cosine):**
+
+| Size Range | Accumulators | Stride | Use Case |
+|------------|--------------|--------|----------|
+| >= 512 elements | 4-acc (12 zmm regs) | 64 | Large vectors (ada-002, text-embedding-3-large) |
+| 16-511 elements | 2-acc (6 zmm regs) | 32 | Medium vectors (BERT, MiniLM) |
+| < 16 elements | Scalar | 1 | Tiny vectors |
+
+**AVX2 (cosine):**
+
+| Size Range | Accumulators | Stride | Use Case |
+|------------|--------------|--------|----------|
+| >= 512 elements | 4-acc (12 ymm regs) | 32 | Large vectors |
+| 8-511 elements | 2-acc (6 ymm regs) | 16 | Medium/small vectors |
+| < 8 elements | Scalar | 1 | Tiny vectors |
+
+**AVX2 (dot product, squared L2):**
+
+| Size Range | Accumulators | Stride | Use Case |
+|------------|--------------|--------|----------|
+| >= 256 elements | 4-acc | 32 | Large vectors |
+| 64-255 elements | 2-acc | 16 | Medium vectors |
+| 8-63 elements | 1-acc | 8 | Small vectors |
+| < 8 elements | Scalar | 1 | Tiny vectors |
+
+All AVX2 cosine kernels use vectorized 8-wide remainder handling, reducing the
+scalar tail from up to 31 elements to at most 7. AVX-512 kernels use masked
+loads for zero-cost remainder.
 
 ## Performance Benchmarks (March 2026)
 
@@ -52,22 +74,24 @@ AVX2 implementations adapt based on vector size to minimize register pressure:
 
 | Function | Latency | Throughput | vs Previous |
 |----------|---------|------------|-------------|
-| `dot_product_native` | **16.2ns** | 47.4 Gelem/s | Baseline |
-| `euclidean_native` | **19.7ns** | 39.0 Gelem/s | Improved |
-| `cosine_similarity_native` | **29.6ns** | 25.9 Gelem/s | Optimized (4-acc) |
-| `cosine_normalized_native` | **16.2ns** | 47.4 Gelem/s | Same as dot |
-| `hamming_distance_native` | **35.3ns** | 21.8M ops/s | Stable |
-| `jaccard_similarity_native` | **26.9ns** | 28.6 Gelem/s | Improved |
+| `dot_product_native` | **23.6ns** | 32.5 Gelem/s | Baseline |
+| `euclidean_native` | **22.7ns** | 33.8 Gelem/s | Improved |
+| `cosine_similarity_native` | **33.6ns** | 22.9 Gelem/s | Optimized (4-acc, single-sqrt finish) |
+| `cosine_normalized_native` | **23.6ns** | 32.5 Gelem/s | Same as dot |
+| `hamming_distance_native` | **34.3ns** | 22.4M ops/s | FP-domain 4-acc (no cross-domain penalty) + NEON + batch |
+| `jaccard_similarity_native` | **29.3ns** | 26.2 Gelem/s | Optimized (4-acc + NEON + batch) |
+
+*Measured March 20, 2026 on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.*
 
 ### Scaling by Dimension (simd_native)
 
 | Dimension | Cosine | Dot Product | Model |
 |-----------|--------|-------------|-------|
-| 128 | 6.9ns | 4.0ns | MiniLM |
-| 384 | 17.5ns | 8.3ns | all-MiniLM-L6-v2 |
-| 768 | 29.6ns | 16.2ns | BERT, ada-002 |
-| 1536 | 55.9ns | 31.3ns | text-embedding-3-small |
-| 3072 | 109.8ns | 69.4ns | text-embedding-3-large |
+| 128 | 8.1ns | 5.4ns | MiniLM |
+| 384 | 20.1ns | 12.0ns | all-MiniLM-L6-v2 |
+| 768 | 33.6ns | 23.6ns | BERT, ada-002 |
+| 1536 | 69.0ns | 43.8ns | text-embedding-3-small |
+| 3072 | 112.2ns | 91.2ns | text-embedding-3-large |
 
 ## Optimization Techniques
 

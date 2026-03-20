@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-cli.svg)](https://crates.io/crates/velesdb-cli)
 [![Build](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
-[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 Interactive VelesQL REPL and CLI for VelesDB.
 
@@ -834,13 +834,15 @@ LIMIT 20;
 
 > **Note:** `LEFT JOIN` and `RIGHT JOIN` are parsed but raise runtime errors. `INNER JOIN` is fully supported.
 
-### Subqueries
+### Subqueries (parsed, not yet executable)
+
+> **Note:** Subqueries are recognized by the VelesQL parser but raise runtime errors during execution. This syntax is reserved for future support.
 
 ```sql
--- IN subquery
+-- IN subquery (parsed, execution not yet supported)
 SELECT * FROM docs WHERE id IN (SELECT doc_id FROM comments) LIMIT 10;
 
--- Scalar subquery comparison
+-- Scalar subquery comparison (parsed, execution not yet supported)
 SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 20;
 ```
 
@@ -887,7 +889,7 @@ WITH (quantization = 'dual', oversampling = 4);
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` |
 | `ef_search` | integer | HNSW ef_search (16--4096) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
 | `rerank` | boolean | Enable reranking after quantized search |
@@ -912,7 +914,7 @@ Session settings control REPL search behavior. Set with `\set`, view with `\show
 
 | Setting | Range / Values | Default | Description |
 |---------|---------------|---------|-------------|
-| `mode` | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` | `balanced` | Search quality preset (sets `ef_search` automatically) |
+| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | `balanced` | Search quality preset (sets `ef_search` automatically) |
 | `ef_search` | 16--4096 (or `auto` from mode) | auto | HNSW graph exploration factor |
 | `timeout_ms` | >= 100 | 30000 | Query timeout in milliseconds. Also accepts the alias `timeout`. |
 | `rerank` | `true`/`false`, `on`/`off`, `1`/`0`, `yes`/`no` | `true` | Reranking after quantized search |
@@ -985,6 +987,6 @@ velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 
 ## License
 
-VelesDB Core License 1.0
+MIT License
 
-See [LICENSE](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE) for details.
+See [LICENSE](./LICENSE) for details.

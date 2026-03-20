@@ -47,8 +47,8 @@ curl http://localhost:8080/health
 Expected response:
 ```json
 {
-  "status": "healthy",
-  "version": "1.5.1"
+  "status": "ok",
+  "version": "1.6.0"
 }
 ```
 

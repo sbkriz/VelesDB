@@ -126,27 +126,34 @@ impl Parser {
     fn parse_temporal_arithmetic(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<TemporalExpr, ParseError> {
-        let mut inner = pair.into_inner();
+        let (left, is_subtract, right) = Self::extract_temporal_operands(pair)?;
+        Ok(Self::build_temporal_expr(left, is_subtract, right))
+    }
 
-        let left_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected left operand"))?;
-        let left = Self::parse_temporal_operand(left_pair)?;
+    /// Extracts the left operand, operator, and right operand from a temporal arithmetic node.
+    fn extract_temporal_operands(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(TemporalExpr, bool, TemporalExpr), ParseError> {
+        let parts: Vec<_> = pair.into_inner().collect();
+        if parts.len() < 3 {
+            return Err(ParseError::syntax(0, "", "Expected left operand, operator, right operand"));
+        }
+        let left = Self::parse_temporal_operand(parts[0].clone())?;
+        let is_subtract = parts[1].as_str() == "-";
+        let right = Self::parse_temporal_operand(parts[2].clone())?;
+        Ok((left, is_subtract, right))
+    }
 
-        let op_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected temporal operator"))?;
-        let is_subtract = op_pair.as_str() == "-";
-
-        let right_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected right operand"))?;
-        let right = Self::parse_temporal_operand(right_pair)?;
-
+    /// Builds an Add or Subtract temporal expression from parsed operands.
+    fn build_temporal_expr(
+        left: TemporalExpr,
+        is_subtract: bool,
+        right: TemporalExpr,
+    ) -> TemporalExpr {
         if is_subtract {
-            Ok(TemporalExpr::Subtract(Box::new(left), Box::new(right)))
+            TemporalExpr::Subtract(Box::new(left), Box::new(right))
         } else {
-            Ok(TemporalExpr::Add(Box::new(left), Box::new(right)))
+            TemporalExpr::Add(Box::new(left), Box::new(right))
         }
     }
 

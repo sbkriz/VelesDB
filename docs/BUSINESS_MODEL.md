@@ -2,11 +2,11 @@
 
 ## Open-Core Architecture
 
-VelesDB follows an open-core model under the ELv2 (Elastic License v2) license.
+VelesDB follows an open-core model under the VelesDB Core License 1.0 (based on ELv2).
 The core engine ships with full search, graph, and AI agent capabilities.
 Premium features are injected via the `DatabaseObserver` trait -- no code forks needed.
 
-## Core Features (ELv2 -- Source Available)
+## Core Features (VelesDB Core License 1.0 -- Source Available)
 
 - **Vector Search**: HNSW with SIMD acceleration (AVX-512/AVX2/NEON), sub-millisecond latency
 - **Knowledge Graph**: Full graph engine with BFS/DFS traversal, MATCH queries
@@ -62,8 +62,8 @@ This design ensures:
 | Capability | VelesDB | Typical Competitors |
 |------------|---------|---------------------|
 | Unified Vector + Graph engine | Yes | Separate systems |
-| Single binary (~15 MB) | Yes | Containers / clusters |
-| Sub-millisecond latency (57 us) | Yes | 50-100 ms (cloud) |
+| Self-contained single binary (~6 MB) | Yes | Containers / clusters |
+| Sub-millisecond latency (43 us) | Yes | 50-100 ms (cloud) |
 | WASM / Mobile native | Yes | Server-only |
 | SQL-like query language (VelesQL) | Yes | JSON DSL / SDK-only |
 
@@ -71,6 +71,6 @@ This design ensures:
 
 | Tier | Deployment | License |
 |------|------------|---------|
-| Community | Single-node, self-hosted | ELv2 |
+| Community | Single-node, self-hosted | VelesDB Core License 1.0 |
 | Professional | Multi-node, managed | Commercial |
 | Enterprise | On-premise cluster with SLA | Commercial |

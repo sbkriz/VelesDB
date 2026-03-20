@@ -1,5 +1,7 @@
 # VelesDB WASM Browser Demo
 
+> **Difficulty: Beginner** | Showcases: WebAssembly vector search, client-side computation, zero-server setup
+
 Interactive demo of VelesDB running entirely in the browser via WebAssembly.
 
 ## Features
@@ -10,18 +12,28 @@ Interactive demo of VelesDB running entirely in the browser via WebAssembly.
 
 ## Quick Start
 
-### Option 1: Open directly
+### Prerequisites
 
-Simply open `index.html` in a modern browser (Chrome, Firefox, Edge, Safari).
-
-### Option 2: Local server
+The demo loads the WASM module from npm CDN (unpkg/jsdelivr). If `velesdb-wasm` is not yet published on npm, build it locally first:
 
 ```bash
-# Python
-python -m http.server 8080
+# Build the WASM package locally
+cd crates/velesdb-wasm
+wasm-pack build --target web --out-dir ../../examples/wasm-browser-demo/pkg
 
-# Node.js
-npx serve .
+# Then update index.html to use the local path instead of CDN:
+# Change: import init from 'https://unpkg.com/velesdb-wasm@1.6.0/velesdb_wasm.js'
+# To:     import init from './pkg/velesdb_wasm.js'
+```
+
+### Run
+
+```bash
+cd examples/wasm-browser-demo
+
+# Serve locally (required for WASM module loading)
+python -m http.server 8080
+# or: npx serve .
 ```
 
 Then visit http://localhost:8080
@@ -29,6 +41,16 @@ Then visit http://localhost:8080
 ## Live Demo
 
 Open `index.html` directly in your browser - no build step required!
+
+## Expected Output
+
+When you open the page in a browser you will see an interactive panel where you can:
+1. Choose the number of vectors and dimensions
+2. Click "Insert" to generate and index random vectors
+3. Click "Search" to run a nearest-neighbor query
+4. Results appear instantly with IDs, scores, and latency in microseconds
+
+No console output or build step is needed -- everything runs visually in the page.
 
 ## How it Works
 
@@ -57,13 +79,16 @@ Typical results on modern hardware:
 
 ```html
 <script type="module">
-  import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@latest/velesdb_wasm.js';
+  // If published on npm:
+  // import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@1.6.0/velesdb_wasm.js';
+  // If built locally with wasm-pack:
+  import init, { VectorStore } from './pkg/velesdb_wasm.js';
 
   await init();
-  
+
   const store = new VectorStore(768, 'cosine');
   store.insert(1n, new Float32Array([0.1, 0.2, ...]));  // Note: ID is BigInt
-  
+
   const results = store.search(query, 10);
   // results: Array of [id: BigInt, score: number]
 </script>
@@ -71,4 +96,4 @@ Typical results on modern hardware:
 
 ## License
 
-VelesDB Core License 1.0
+MIT License

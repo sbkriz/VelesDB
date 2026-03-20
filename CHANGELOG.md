@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-03-20
+
+### Highlights
+
+Major release delivering **production-grade server security** (API key auth, TLS, graceful shutdown), **massive code quality overhaul** (~150 Codacy complexity violations resolved), **storage reliability hardening** (atomic index swap, WAL replay, Windows crash recovery), **performance optimizations** (HNSW lock gating, LRU single-lock, FxHashMap edges, ContiguousVectors), and **full SDK feature parity** across Python, TypeScript, LangChain, and LlamaIndex. Includes migration tooling for Qdrant/Pinecone sparse vectors, 100K scalability benchmarks, and the VelesDB Core License 1.0.
+
 ### Features
 
 - **API Key Authentication** (US-01) — Optional Bearer token auth for `velesdb-server`. Configure via `VELESDB_API_KEYS` env var or `[auth]` section in `velesdb.toml`. Multiple keys supported. Auth disabled by default (local dev mode). `/health` and `/ready` always bypass auth.
@@ -15,12 +21,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Server Configuration Module** (US-04) — Unified `ServerConfig` loading from TOML + CLI + env with priority chain (CLI > env > TOML > defaults). Startup validation with clear error messages.
 - **Readiness Endpoint** (US-05) — `GET /ready` returns 200 when DB is loaded, 503 during startup. `GET /health` now includes version field. Both bypass auth.
 - **OpenAPI Security Scheme** (US-08) — OpenAPI spec now documents Bearer authentication via `securitySchemes`.
+- **SDK Feature Parity** — 100% core features exposed across Python, LangChain, LlamaIndex, and TypeScript SDKs.
+- **Migration: Sparse Vector Extraction** — Extract sparse vectors from Qdrant and Pinecone sources during migration.
+- **100K Scalability Benchmark** — Weekly + push-to-main CI benchmark for 100K vector workloads.
+- **Search Guardrails** — Rate limiting and circuit breaker enforced in all search handlers.
+- **CLI Graph/Metadata Read** — Full collection read for Graph and Metadata types in REPL.
+
+### Performance
+
+- **Cosine SIMD finish optimization** — Replace `2×sqrt + div` with `dot / sqrt(na² × nb²)`, saves one `sqrtss` across AVX2, AVX-512, and NEON kernels. 768D: 34.0 ns → 33.6 ns (−1.2%).
+- **Hamming AVX2 FP-domain accumulation** — Replace INT-domain pipeline with FP-domain `xor_ps → and_ps(1.0) → add_ps` to eliminate domain-crossing penalty on Intel P-cores. 768D: 36.0 ns → 34.3 ns (−4.7%).
+- **NEON (ARM64) Hamming & Jaccard** — 1-acc/4-acc ILP kernel variants.
+- **AVX-512 Hamming & Jaccard** — 4-accumulator kernels for dim >= 512.
+- **AVX2 8-wide remainder** — Vectorized remainder for Hamming & Jaccard (scalar tail from 31 to 7 elements).
+- **Batch prefetch** — L1/L2 prefetch for Hamming & Jaccard batch operations.
+- **Native binary Hamming** — u64 POPCNT via AVX-512 XOR + extract.
+- **HNSW lock optimizations** — Lock-rank gating, SIMD dispatch cleanup (Phases 1-2).
+- **ContiguousVectors** — Replace `Vec<Vec<f32>>` with cache-friendly contiguous memory layout.
+- **LRU single-lock get** — Eliminate double-locking on cache reads.
+- **FxHashMap for edge_ids** — Faster graph edge lookup via hash-specialized map.
+- **SIMD kernel optimizations** — Quantization and half-precision improvements (Phase 3).
+- **OPQ rotation fix** — Correct OPQ rotation in non-Euclidean rescore path.
+
+### Fixed
+
+- **Storage reliability** — Atomic index swap, WAL replay hardening, Windows crash recovery.
+- **Concurrent HNSW save race** — Process-ID-based temp filenames for cross-process safety.
+- **Compound query execution** — Prevent double compound execution; apply LIMIT post-set-op.
+- **Short-circuit evaluation** — Restore And/Or condition short-circuit in where_eval.
+- **Aggregation deduplication** — Prevent inflated aggregation from duplicate columns.
+- **Python bindings** — Fix `PyGraphCollection::edge_count` O(N) allocation; `ScoredResult` tuple compat.
+- **TypeScript SDK** — Fix `generateUniqueId` counter overflow; patch minimatch ReDoS.
+- **LangChain/LlamaIndex** — Fix memory `clear()` ID collision.
+- **Tauri plugin** — Add missing graph API TypeScript wrappers; camelCase field names.
+- **Input validation** — Add validation to `batch_search` and `multi_query_search_with_score`.
+- **Server default** — Align `data_dir` with codebase convention (`./velesdb_data`).
+
+### Refactored
+
+- **~150 Codacy complexity violations resolved** — Cyclomatic complexity reduced to <=8 across workspace.
+- **Cross-crate DTO deduplication** (US-01) — Shared types extracted to common module.
+- **database.rs split** — 1419-line monolith split into focused sub-modules (Phase 6).
+- **search.rs pipeline extraction** — `search/pipeline.rs` module for handler reuse.
+- **Python collection.rs split** — 887-line file split into focused sub-modules.
+- **Server handlers deduplication** — Shared helpers for collection lookup, search response, filter parsing.
+- **SIMD horizontal sum deduplication** — Consolidated across distance kernels.
+- **WAL replay improvements** — Design-driven refactor with reduced complexity.
 
 ### Documentation
 
 - **Server Security Guide** (US-06) — `docs/guides/SERVER_SECURITY.md` covering authentication, TLS, graceful shutdown, and health endpoints.
 - **Configuration Reference Update** (US-07) — `docs/guides/CONFIGURATION.md` updated with auth, TLS, and shutdown options (env vars, CLI flags, TOML keys).
-- **Python SDK** (US-08) — README updated with server connection example using API key auth.
+- **Concurrency & Locking Guide** — End-user guide for concurrent access patterns.
+- **Migration Guide v1.5 to v1.6** — Step-by-step upgrade instructions.
+- **Benchmark metrics update** — Full re-benchmark (2026-03-11) with updated documentation.
 
 ### License
 
@@ -35,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **VelesQL coverage**: using VelesQL internally is permitted; exposing a general-purpose VelesQL endpoint to third parties requires a commercial license.
   - **Business model clarity**: explicit Core (source-available) / Enterprise (commercial) / Cloud (proprietary SaaS) tier structure for investor and acquirer readability.
   - **Expanded FAQ**: 24 developer-friendly Q&As covering RAG, SaaS embedding, API endpoints, cloud providers, MSPs, graph engine, embedded mode, premium features, VelesQL, benchmarks, and more.
+  - **CLI moved to MIT** — `velesdb-cli` relicensed from VelesDB Core License 1.0 to MIT. Scope: `velesdb-core` and `velesdb-server` remain under VelesDB Core License 1.0; all SDKs, bindings, tools, integrations, examples, and demos are MIT.
+
+### Security
+
+- **Input validation hardening** — Batch search and multi-query methods now validate inputs at API boundary.
+- **Shell injection fix** — Patched pr-governance.yml script injection vector.
+- **ReDoS mitigation** — Patched minimatch vulnerability in TypeScript SDK.
 
 ## [1.5.1] - 2026-03-09
 
@@ -180,7 +241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### REST API & VelesQL
 - REST API endpoints for sparse upsert and sparse search
-- VelesQL grammar extended with `SPARSE_NEAR` and `FUSE BY` clauses
+- VelesQL grammar extended with `SPARSE_NEAR` and `USING FUSION` clauses
 
 #### SDK Parity
 - Python SDK: `sparse_search()`, `train_pq()`, `stream_insert()` methods
@@ -195,7 +256,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - bincode serialization replaced with postcard (RUSTSEC-2025-0141 migration)
 - `Point` struct now includes `sparse_vector: Option<BTreeMap<String, SparseVector>>` field
-- VelesQL grammar extended with `SPARSE_NEAR` and `FUSE BY` clauses
+- VelesQL grammar extended with `SPARSE_NEAR` and `USING FUSION` clauses
 - Default PQ rescore oversampling reduced from 8x to configurable 4x
 - SIMD modules consolidated into `simd_native/` (EPIC-075)
 - Query planner integrates compiled plan cache (cache-aside pattern)
