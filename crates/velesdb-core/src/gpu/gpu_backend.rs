@@ -5,14 +5,20 @@
 
 mod shaders;
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
 use wgpu::util::DeviceExt;
 
-// Import for CPU fallback paths
-use crate::simd_native;
-
-/// Global GPU availability check (cached).
-static GPU_AVAILABLE: OnceLock<bool> = OnceLock::new();
+/// Lazily-initialized singleton GPU accelerator.
+///
+/// `None` means GPU probe was attempted and failed (no compatible adapter).
+///
+/// The probe is **one-shot**: `OnceLock` guarantees the initialization closure
+/// runs exactly once. If no GPU is found on that first probe, subsequent calls
+/// to [`GpuAccelerator::global()`] return `None` forever. A process restart is
+/// required if a GPU becomes available after the initial probe (e.g. hot-plug
+/// or driver recovery).
+static GPU_INSTANCE: OnceLock<Option<Arc<GpuAccelerator>>> = OnceLock::new();
 
 /// GPU accelerator for batch vector operations.
 ///
@@ -26,21 +32,86 @@ static GPU_AVAILABLE: OnceLock<bool> = OnceLock::new();
 /// }
 /// ```
 pub struct GpuAccelerator {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     cosine_pipeline: wgpu::ComputePipeline,
+    euclidean_pipeline: wgpu::ComputePipeline,
+    dot_product_pipeline: wgpu::ComputePipeline,
+    kmeans_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuAccelerator {
+    /// Returns a shared singleton GPU accelerator, initializing on first call.
+    ///
+    /// Probes the GPU exactly once. Subsequent calls return the cached `Arc`
+    /// (or `None` if no compatible GPU was found on the first probe).
+    #[must_use]
+    pub fn global() -> Option<Arc<Self>> {
+        GPU_INSTANCE
+            .get_or_init(|| Self::new().map(Arc::new))
+            .clone()
+    }
+
     /// Creates a new GPU accelerator if GPU is available.
     ///
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
-    // GPU initialization is inherently sequential: instance → adapter → device → queue →
-    // shader → pipeline. Splitting this into sub-functions would create artificial
-    // intermediate state without reducing cognitive complexity.
-    #[allow(clippy::too_many_lines)]
     pub fn new() -> Option<Self> {
+        let (device, queue) = Self::init_device()?;
+
+        let cosine_pipeline = Self::compile_pipeline(
+            &device,
+            shaders::COSINE_SHADER,
+            "batch_cosine",
+            "Cosine Similarity",
+        );
+        let euclidean_pipeline = Self::compile_pipeline(
+            &device,
+            shaders::EUCLIDEAN_SHADER,
+            "batch_euclidean",
+            "Euclidean Distance",
+        );
+        let dot_product_pipeline = Self::compile_pipeline(
+            &device,
+            shaders::DOT_PRODUCT_SHADER,
+            "batch_dot",
+            "Dot Product",
+        );
+        let kmeans_pipeline = Self::compile_pipeline(
+            &device,
+            shaders::PQ_KMEANS_ASSIGN_SHADER,
+            "kmeans_assign",
+            "PQ K-means Assignment",
+        );
+
+        Some(Self {
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            cosine_pipeline,
+            euclidean_pipeline,
+            dot_product_pipeline,
+            kmeans_pipeline,
+        })
+    }
+
+    /// Probes the system for a compatible GPU and returns a `(Device, Queue)` pair.
+    ///
+    /// Returns `None` if no adapter is found or device creation fails.
+    ///
+    /// Delegates to a background thread so `pollster::block_on` never panics
+    /// when called from within an async runtime (e.g. tokio in velesdb-server).
+    /// [`super::pq_gpu::PqGpuContext::new`] delegates to [`Self::global`], which
+    /// calls this method once via [`OnceLock`].
+    fn init_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        std::thread::spawn(Self::init_device_sync)
+            .join()
+            .ok()
+            .flatten()
+    }
+
+    /// Synchronous device initialization -- must NOT be called from inside an
+    /// async context (use [`init_device`] instead).
+    fn init_device_sync() -> Option<(wgpu::Device, wgpu::Queue)> {
         // Avoid probing GLES/EGL on headless Linux where some drivers may abort.
         let backends = Self::preferred_backends();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -54,7 +125,7 @@ impl GpuAccelerator {
             force_fallback_adapter: false,
         }))?;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
+        pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("VelesDB GPU"),
                 required_features: wgpu::Features::empty(),
@@ -63,36 +134,41 @@ impl GpuAccelerator {
             },
             None,
         ))
-        .ok()?;
+        .ok()
+    }
 
-        // Create compute shader for cosine similarity
+    /// Compiles a WGSL compute shader into a [`wgpu::ComputePipeline`].
+    ///
+    /// Uses the shared quad bind-group layout from [`super::helpers`].
+    fn compile_pipeline(
+        device: &wgpu::Device,
+        shader_source: &str,
+        entry_point: &str,
+        label: &str,
+    ) -> wgpu::ComputePipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cosine Similarity Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::COSINE_SHADER.into()),
+            label: Some(&format!("{label} Shader")),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        let bind_group_layout =
-            super::helpers::create_quad_bind_group_layout(&device, "Cosine Bind Group Layout");
+        let bind_group_layout = super::helpers::create_quad_bind_group_layout(
+            device,
+            &format!("{label} Bind Group Layout"),
+        );
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Cosine Pipeline Layout"),
+            label: Some(&format!("{label} Pipeline Layout")),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        let cosine_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Cosine Similarity Pipeline"),
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(&format!("{label} Pipeline")),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: Some("batch_cosine"),
+            entry_point: Some(entry_point),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
-        });
-
-        Some(Self {
-            device,
-            queue,
-            cosine_pipeline,
         })
     }
 
@@ -111,9 +187,30 @@ impl GpuAccelerator {
     }
 
     /// Checks if GPU acceleration is available (cached).
+    ///
+    /// Delegates to [`Self::global()`], so the first call initializes the
+    /// singleton and subsequent calls reuse the cached probe result.
     #[must_use]
     pub fn is_available() -> bool {
-        *GPU_AVAILABLE.get_or_init(|| Self::new().is_some())
+        Self::global().is_some()
+    }
+
+    /// Returns a reference to the underlying wgpu device.
+    #[must_use]
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Returns a reference to the underlying wgpu queue.
+    #[must_use]
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Returns a reference to the PQ k-means assignment pipeline.
+    #[must_use]
+    pub fn kmeans_pipeline(&self) -> &wgpu::ComputePipeline {
+        &self.kmeans_pipeline
     }
 
     /// Computes batch cosine similarities between a query and multiple vectors.
@@ -122,9 +219,28 @@ impl GpuAccelerator {
     ///
     /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
     /// or if the GPU map-async operation fails.
-    #[allow(clippy::too_many_lines)]
     pub fn batch_cosine_similarity(
         &self,
+        vectors: &[f32],
+        query: &[f32],
+        dimension: usize,
+    ) -> crate::error::Result<Vec<f32>> {
+        self.dispatch_batch_distance(&self.cosine_pipeline, vectors, query, dimension)
+    }
+
+    // RF-DEDUP: Shared GPU dispatch eliminates duplication across cosine/euclidean/dot batch methods.
+    /// Dispatches a batch distance computation on the GPU using the given pipeline.
+    ///
+    /// All three distance metrics (cosine, euclidean, dot product) share the same
+    /// buffer layout and dispatch pattern; only the compiled pipeline differs.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
+    /// or if the GPU map-async operation fails.
+    fn dispatch_batch_distance(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
         vectors: &[f32],
         query: &[f32],
         dimension: usize,
@@ -137,7 +253,31 @@ impl GpuAccelerator {
             return Ok(Vec::new());
         }
 
-        // Validate GPU shader parameter constraints
+        Self::validate_gpu_params(dimension, num_vectors)?;
+
+        let (results_buffer, staging_buffer, bind_group, results_size) =
+            self.create_distance_buffers(pipeline, vectors, query, dimension, num_vectors);
+
+        Self::encode_and_submit(
+            &self.device,
+            &self.queue,
+            pipeline,
+            &bind_group,
+            &results_buffer,
+            &staging_buffer,
+            results_size,
+            num_vectors,
+        );
+
+        // Read back results using shared helper
+        super::helpers::readback_buffer::<f32>(&self.device, &staging_buffer, num_vectors)
+            .ok_or_else(|| {
+                crate::error::Error::GpuError("GPU map-async operation failed".to_string())
+            })
+    }
+
+    /// Validates that `dimension` and `num_vectors` fit in `u32` for GPU shader params.
+    fn validate_gpu_params(dimension: usize, num_vectors: usize) -> crate::error::Result<()> {
         if u32::try_from(dimension).is_err() {
             return Err(crate::error::Error::GpuError(format!(
                 "dimension {dimension} exceeds u32::MAX"
@@ -148,8 +288,20 @@ impl GpuAccelerator {
                 "num_vectors {num_vectors} exceeds u32::MAX"
             )));
         }
+        Ok(())
+    }
 
-        // Create buffers
+    /// Creates GPU buffers and bind group for a batch distance dispatch.
+    ///
+    /// Returns `(results_buffer, staging_buffer, bind_group, results_size)`.
+    fn create_distance_buffers(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        vectors: &[f32],
+        query: &[f32],
+        dimension: usize,
+        num_vectors: usize,
+    ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup, u64) {
         let query_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -166,6 +318,8 @@ impl GpuAccelerator {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
+        // Reason: num_vectors * 4 bytes always fits in u64 (validated by u32 check above)
+        #[allow(clippy::cast_possible_truncation)]
         let results_size = (num_vectors * std::mem::size_of::<f32>()) as u64;
         let results_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Results Buffer"),
@@ -181,8 +335,7 @@ impl GpuAccelerator {
             mapped_at_creation: false,
         });
 
-        // Params: [dimension, num_vectors]
-        // SAFETY: dimension and num_vectors validated above to fit in u32
+        // Reason: dimension and num_vectors validated to fit in u32 by validate_gpu_params
         #[allow(clippy::cast_possible_truncation)]
         let params = [dimension as u32, num_vectors as u32];
         let params_buffer = self
@@ -193,10 +346,9 @@ impl GpuAccelerator {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
 
-        // Create bind group
-        let bind_group_layout = self.cosine_pipeline.get_bind_group_layout(0);
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cosine Bind Group"),
+            label: Some("Distance Bind Group"),
             layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -218,84 +370,113 @@ impl GpuAccelerator {
             ],
         });
 
-        // Dispatch compute
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Cosine Encoder"),
-            });
+        (results_buffer, staging_buffer, bind_group, results_size)
+    }
+
+    /// Encodes the compute pass and submits it to the GPU queue.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_and_submit(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        results_buffer: &wgpu::Buffer,
+        staging_buffer: &wgpu::Buffer,
+        results_size: u64,
+        num_vectors: usize,
+    ) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Distance Encoder"),
+        });
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Cosine Pass"),
+                label: Some("Distance Pass"),
                 timestamp_writes: None,
             });
-            compute_pass.set_pipeline(&self.cosine_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
 
-            // SAFETY: num_vectors is bounded by GPU buffer limits. div_ceil(256) reduces
-            // the value further. Even 4B vectors / 256 = 16M workgroups, fitting in u32.
+            // Reason: num_vectors validated to fit in u32; div_ceil(256) only reduces the value.
             #[allow(clippy::cast_possible_truncation)]
             let workgroups = num_vectors.div_ceil(256) as u32;
             compute_pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // Copy results to staging buffer
-        encoder.copy_buffer_to_buffer(&results_buffer, 0, &staging_buffer, 0, results_size);
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        // Read back results using shared helper
-        super::helpers::readback_buffer::<f32>(&self.device, &staging_buffer, num_vectors)
-            .ok_or_else(|| {
-                crate::error::Error::GpuError("GPU map-async operation failed".to_string())
-            })
+        encoder.copy_buffer_to_buffer(results_buffer, 0, staging_buffer, 0, results_size);
+        queue.submit(std::iter::once(encoder.finish()));
     }
 
     /// Computes batch Euclidean distances between a query and multiple vectors.
     ///
-    /// Currently uses CPU SIMD fallback; GPU pipeline ready via `EUCLIDEAN_SHADER`.
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
+    /// or if the GPU map-async operation fails.
     pub fn batch_euclidean_distance(
         &self,
         vectors: &[f32],
         query: &[f32],
         dimension: usize,
-    ) -> Vec<f32> {
-        batch_flat_simd(vectors, query, dimension, simd_native::euclidean_native)
+    ) -> crate::error::Result<Vec<f32>> {
+        self.dispatch_batch_distance(&self.euclidean_pipeline, vectors, query, dimension)
     }
 
     /// Computes batch dot products between a query and multiple vectors.
     ///
-    /// Currently uses CPU SIMD fallback; GPU pipeline ready via `DOT_PRODUCT_SHADER`.
+    /// # Errors
+    ///
+    /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
+    /// or if the GPU map-async operation fails.
+    pub fn batch_dot_product(
+        &self,
+        vectors: &[f32],
+        query: &[f32],
+        dimension: usize,
+    ) -> crate::error::Result<Vec<f32>> {
+        self.dispatch_batch_distance(&self.dot_product_pipeline, vectors, query, dimension)
+    }
+
+    /// Returns `true` if GPU reranking is likely faster than sequential SIMD.
+    ///
+    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch (buffer
+    /// upload + compute pass + poll + readback). SIMD with prefetch remains
+    /// faster until the payload exceeds ~1 MB of float data (262,144 f32s).
+    /// The threshold `rerank_k * dimension > 262_144` corresponds to roughly
+    /// 100K vectors at dim=3 or 170 vectors at dim=1536.
     #[must_use]
-    pub fn batch_dot_product(&self, vectors: &[f32], query: &[f32], dimension: usize) -> Vec<f32> {
-        batch_flat_simd(vectors, query, dimension, simd_native::dot_product_native)
-    }
-}
-
-/// Applies a SIMD distance function over flat-packed vectors.
-///
-/// RF-DEDUP: Eliminates identical loop patterns in `batch_euclidean_distance`
-/// and `batch_dot_product`.
-fn batch_flat_simd(
-    vectors: &[f32],
-    query: &[f32],
-    dimension: usize,
-    distance_fn: fn(&[f32], &[f32]) -> f32,
-) -> Vec<f32> {
-    if dimension == 0 || vectors.is_empty() {
-        return Vec::new();
-    }
-    let num_vectors = vectors.len() / dimension;
-    if num_vectors == 0 {
-        return Vec::new();
+    pub fn should_rerank_gpu(rerank_k: usize, dimension: usize) -> bool {
+        rerank_k * dimension > 262_144
     }
 
-    let mut results = Vec::with_capacity(num_vectors);
-    for i in 0..num_vectors {
-        let offset = i * dimension;
-        let vec = &vectors[offset..offset + dimension];
-        results.push(distance_fn(query, vec));
+    /// Computes batch distances using the appropriate GPU pipeline for the given metric.
+    ///
+    /// Returns `None` for metrics without GPU support (Hamming, Jaccard).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
+    /// or if the GPU map-async operation fails.
+    #[must_use]
+    pub fn batch_distance_for_metric(
+        &self,
+        metric: crate::distance::DistanceMetric,
+        vectors: &[f32],
+        query: &[f32],
+        dimension: usize,
+    ) -> Option<crate::error::Result<Vec<f32>>> {
+        match metric {
+            crate::distance::DistanceMetric::Cosine => {
+                Some(self.batch_cosine_similarity(vectors, query, dimension))
+            }
+            crate::distance::DistanceMetric::Euclidean => {
+                Some(self.batch_euclidean_distance(vectors, query, dimension))
+            }
+            crate::distance::DistanceMetric::DotProduct => {
+                Some(self.batch_dot_product(vectors, query, dimension))
+            }
+            // Hamming and Jaccard have no GPU shader pipeline.
+            _ => None,
+        }
     }
-    results
 }

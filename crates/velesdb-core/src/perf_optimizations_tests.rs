@@ -440,3 +440,62 @@ fn test_new_overflow_dimension_returns_error() {
     let err = result.unwrap_err();
     assert_eq!(err.code(), "VELES-033");
 }
+
+// =========================================================================
+// Phase 2: GPU zero-copy access methods
+// =========================================================================
+
+#[test]
+fn test_contiguous_vectors_as_flat_slice() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+    cv.push(&[5.0, 6.0, 7.0, 8.0]).expect("test");
+    cv.push(&[9.0, 10.0, 11.0, 12.0]).expect("test");
+
+    let flat = cv.as_flat_slice();
+    assert_eq!(flat.len(), 12);
+    assert_eq!(
+        flat,
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+    );
+}
+
+#[test]
+fn test_contiguous_vectors_as_flat_slice_empty() {
+    let cv = ContiguousVectors::new(4, 16).expect("test");
+    let flat = cv.as_flat_slice();
+    assert!(flat.is_empty());
+}
+
+#[test]
+fn test_contiguous_vectors_gather_flat() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+    cv.push(&[5.0, 6.0, 7.0, 8.0]).expect("test");
+    cv.push(&[9.0, 10.0, 11.0, 12.0]).expect("test");
+    cv.push(&[13.0, 14.0, 15.0, 16.0]).expect("test");
+
+    // Gather indices 0 and 2
+    let gathered = cv.gather_flat(&[0, 2]);
+    assert_eq!(gathered.len(), 8);
+    assert_eq!(gathered, vec![1.0, 2.0, 3.0, 4.0, 9.0, 10.0, 11.0, 12.0]);
+}
+
+#[test]
+fn test_contiguous_vectors_gather_flat_empty_indices() {
+    let mut cv = ContiguousVectors::new(4, 16).expect("test");
+    cv.push(&[1.0, 2.0, 3.0, 4.0]).expect("test");
+
+    let gathered = cv.gather_flat(&[]);
+    assert!(gathered.is_empty());
+}
+
+#[test]
+fn test_contiguous_vectors_gather_flat_all() {
+    let mut cv = ContiguousVectors::new(3, 16).expect("test");
+    cv.push(&[1.0, 2.0, 3.0]).expect("test");
+    cv.push(&[4.0, 5.0, 6.0]).expect("test");
+
+    let gathered = cv.gather_flat(&[0, 1]);
+    assert_eq!(gathered, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+}

@@ -21,7 +21,7 @@
 //! let ptr = guard.into_raw();
 //! ```
 
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
 use std::ptr::NonNull;
 
 /// RAII guard for raw allocations.
@@ -64,6 +64,29 @@ impl AllocGuard {
         // - Condition 2: `Layout` comes from std APIs and is therefore well-formed.
         // Reason: Raw allocation is required to build a panic-safe RAII guard.
         let ptr = unsafe { alloc(layout) };
+
+        NonNull::new(ptr).map(|ptr| Self {
+            ptr,
+            layout,
+            owns_memory: true,
+        })
+    }
+
+    /// Allocates zero-initialized memory with the given layout.
+    ///
+    /// Same as [`new`](Self::new) but guarantees all bytes are zero.
+    /// Use for buffers where sparse writes (e.g., `insert_at`) may leave gaps.
+    #[must_use]
+    pub fn new_zeroed(layout: Layout) -> Option<Self> {
+        if layout.size() == 0 {
+            return None;
+        }
+
+        // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
+        // - Condition 1: `layout.size() > 0` is checked above.
+        // - Condition 2: `Layout` comes from std APIs and is therefore well-formed.
+        // Reason: Zero-initialized allocation prevents UB from reading unwritten slots.
+        let ptr = unsafe { alloc_zeroed(layout) };
 
         NonNull::new(ptr).map(|ptr| Self {
             ptr,

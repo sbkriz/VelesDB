@@ -87,7 +87,7 @@ impl HnswIndex {
     /// Determines whether two-stage reranking should be used.
     ///
     /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.
-    fn should_two_stage_rerank(
+    pub(super) fn should_two_stage_rerank(
         &self,
         quality: SearchQuality,
         k: usize,
@@ -147,6 +147,13 @@ impl HnswIndex {
     }
 
     /// Updates the exponential moving average of reranking latency.
+    ///
+    /// The load-compute-store sequence is intentionally non-atomic (no CAS loop).
+    /// Two concurrent searches may each read the same `current` value and both
+    /// store their own blended result, causing one sample to be silently dropped.
+    /// This is acceptable because the EMA is a best-effort heuristic for latency
+    /// adaptation -- occasional lost samples do not affect search correctness and
+    /// the overhead of a CAS retry loop is not justified for an advisory metric.
     fn update_rerank_latency_ema(&self, sample_us: u64) {
         let current = self.rerank_latency_ema_us.load(Ordering::Relaxed);
         if current == 0 {
@@ -321,9 +328,9 @@ impl HnswIndex {
 
     /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
     ///
-    /// RF-2: Shared rerank pipeline used by both `search_with_rerank_with_ef`
-    /// and `search_with_rerank_quality` to eliminate 4 duplicated lines.
-    fn rerank_sort_and_truncate(
+    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`,
+    /// `search_with_rerank_quality`, and `search_batch_with_rerank`.
+    pub(super) fn rerank_sort_and_truncate(
         &self,
         query: &[f32],
         candidates: &[ScoredResult],
@@ -346,24 +353,124 @@ impl HnswIndex {
         reranked
     }
 
+    /// Re-ranks candidates using the best available compute path.
+    ///
+    /// Tries GPU dispatch first when the workload exceeds the GPU threshold
+    /// (rerank_k * dimension > 262,144 floats, ~1 MB) and a GPU is available.
+    /// Falls back to SIMD for small workloads, unsupported metrics, or GPU errors.
+    fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
+        #[cfg(feature = "gpu")]
+        {
+            use crate::gpu::GpuAccelerator;
+            if GpuAccelerator::should_rerank_gpu(candidates.len(), self.dimension) {
+                if let Some(results) = self.rerank_candidates_gpu(query, candidates) {
+                    return results;
+                }
+            }
+        }
+        self.rerank_candidates_simd(query, candidates)
+    }
+
+    /// Resolves candidate external IDs to internal indices.
+    ///
+    /// Shared by both SIMD and GPU reranking paths to eliminate duplication.
+    fn resolve_candidate_indices(&self, candidates: &[ScoredResult]) -> Vec<(u64, usize)> {
+        candidates
+            .iter()
+            .filter_map(|sr| {
+                let idx = self.mappings.get_idx(sr.id)?;
+                Some((sr.id, idx))
+            })
+            .collect()
+    }
+
+    /// Clamps a GPU-computed score to the mathematical range of the metric.
+    ///
+    /// GPU shaders use f32 with different reduction trees than CPU SIMD, so
+    /// floating-point rounding can push bounded metrics (Cosine, Jaccard)
+    /// slightly outside their theoretical range. Clamping guarantees
+    /// downstream assertions and comparisons are never violated.
+    ///
+    /// Only Cosine ([-1, 1]) and Jaccard ([0, 1]) are bounded.
+    /// DotProduct, Euclidean, and Hamming are unbounded.
+    #[cfg(feature = "gpu")]
+    #[inline]
+    pub(crate) fn clamp_score_for_metric(&self, score: f32) -> f32 {
+        match self.metric {
+            DistanceMetric::Cosine => score.clamp(-1.0, 1.0),
+            DistanceMetric::Jaccard => score.clamp(0.0, 1.0),
+            // DotProduct, Euclidean, Hamming: unbounded
+            _ => score,
+        }
+    }
+
+    /// Re-ranks candidates using GPU batch distance computation.
+    ///
+    /// Snapshots candidate vectors under a brief read lock, then releases
+    /// the lock before the GPU round-trip (buffer upload + compute + poll +
+    /// readback = 5-50 ms). This prevents writer starvation during GPU dispatch.
+    ///
+    /// Returns `None` if GPU is unavailable, the metric has no GPU shader,
+    /// or a GPU error occurs. The caller falls back to SIMD in that case.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn rerank_candidates_gpu(
+        &self,
+        query: &[f32],
+        candidates: &[ScoredResult],
+    ) -> Option<Vec<ScoredResult>> {
+        use crate::gpu::GpuAccelerator;
+
+        let gpu = GpuAccelerator::global()?;
+
+        // Snapshot vectors under a brief read lock, then release before GPU dispatch
+        let (entries, flat_vectors) = {
+            let inner = self.inner.read();
+            inner.with_contiguous_vectors(|vectors| {
+                let entries = self.resolve_candidate_indices(candidates);
+                if entries.is_empty() {
+                    return None;
+                }
+                let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
+                let flat = vectors.gather_flat(&indices);
+                Some((entries, flat))
+            })
+        }?;
+
+        // Lock released -- GPU dispatch is lock-free
+        let scores = gpu
+            .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
+            .ok()?;
+
+        // Guard: GPU must return exactly one score per entry. If mismatched
+        // (e.g., shader error or buffer desync), fall back to SIMD.
+        if scores.len() != entries.len() {
+            return None;
+        }
+
+        let reranked = entries
+            .iter()
+            .zip(scores.iter())
+            .map(|(&(id, _), &score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
+            .collect();
+
+        Some(reranked)
+    }
+
     /// Re-ranks candidates using SIMD-optimized exact distance computation.
     ///
-    /// F-05: Zero-copy reranking — reads vector slices directly from
+    /// F-05: Zero-copy reranking -- reads vector slices directly from
     /// `ContiguousVectors` (64-byte aligned, cache-friendly) instead of
     /// cloning via `ShardedVectors::get()`. Eliminates ~600KB of allocations
-    /// per search for k=100 × dim=1536.
-    fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
+    /// per search for k=100 x dim=1536.
+    pub(crate) fn rerank_candidates_simd(
+        &self,
+        query: &[f32],
+        candidates: &[ScoredResult],
+    ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
 
         inner.with_contiguous_vectors(|vectors| {
-            // Resolve external IDs → internal indices (no vector cloning)
-            let candidate_indices: Vec<(u64, usize)> = candidates
-                .iter()
-                .filter_map(|sr| {
-                    let idx = self.mappings.get_idx(sr.id)?;
-                    Some((sr.id, idx))
-                })
-                .collect();
+            let candidate_indices = self.resolve_candidate_indices(candidates);
 
             let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
             let mut reranked: Vec<ScoredResult> = Vec::with_capacity(candidate_indices.len());

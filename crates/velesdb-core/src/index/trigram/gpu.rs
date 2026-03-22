@@ -28,6 +28,8 @@ use crate::gpu::GpuAccelerator;
 use roaring::RoaringBitmap;
 #[cfg(feature = "gpu")]
 use std::collections::HashSet;
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
 
 /// GPU-accelerated trigram index operations.
 ///
@@ -35,7 +37,7 @@ use std::collections::HashSet;
 /// Falls back to CPU SIMD if GPU is unavailable.
 #[cfg(feature = "gpu")]
 pub struct GpuTrigramAccelerator {
-    accelerator: GpuAccelerator,
+    accelerator: Arc<GpuAccelerator>,
 }
 
 #[cfg(feature = "gpu")]
@@ -46,7 +48,7 @@ impl GpuTrigramAccelerator {
     ///
     /// Returns `Err` if no compatible GPU is available.
     pub fn new() -> Result<Self, String> {
-        let accelerator = GpuAccelerator::new().ok_or("GPU not available")?;
+        let accelerator = GpuAccelerator::global().ok_or("GPU not available")?;
         Ok(Self { accelerator })
     }
 

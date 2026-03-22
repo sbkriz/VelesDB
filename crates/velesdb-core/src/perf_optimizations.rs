@@ -17,7 +17,7 @@
 //! eliminating null pointer checks and making invariants explicit. Memory is managed
 //! via RAII with `AllocGuard` for panic-safe resize operations.
 
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fmt;
 use std::ptr::{self, NonNull};
 
@@ -102,11 +102,12 @@ impl ContiguousVectors {
         let capacity = capacity.max(16); // Minimum 16 vectors
         let layout = Self::layout(dimension, capacity)?;
 
-        // SAFETY: `alloc` requires a valid non-zero layout.
+        // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
         // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
         // - Condition 2: `layout` is built via `Layout::from_size_align` and therefore valid.
-        // Reason: Manual allocation is required for aligned contiguous SIMD-friendly storage.
-        let ptr = unsafe { alloc(layout) };
+        // Reason: Zero-initialized allocation guarantees all f32 slots are 0.0,
+        // preventing UB when `insert_at` creates sparse gaps (indices 0..N not all written).
+        let ptr = unsafe { alloc_zeroed(layout) };
 
         // EPIC-032/US-002: Use NonNull for type-level non-null guarantee
         let data = NonNull::new(ptr.cast::<f32>()).ok_or_else(|| {
@@ -171,6 +172,44 @@ impl ContiguousVectors {
     #[must_use]
     pub const fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Returns the raw contiguous buffer as a flat slice.
+    ///
+    /// The slice contains all vectors packed sequentially:
+    /// `[v0_d0, v0_d1, ..., v1_d0, ...]`.
+    /// Useful for GPU upload without copying.
+    #[inline]
+    #[must_use]
+    pub fn as_flat_slice(&self) -> &[f32] {
+        if self.count == 0 {
+            return &[];
+        }
+        let total = self.count * self.dimension;
+        // SAFETY: All `capacity * dimension` f32s are valid because both initial allocation
+        // (`alloc_zeroed`) and resize (`AllocGuard::new_zeroed`) zero-initialize the buffer.
+        // `count * dimension <= capacity * dimension`, `data` is non-null per `NonNull`
+        // invariant. Even sparse `insert_at` gaps contain valid 0.0 f32 values.
+        // Reason: Zero-copy GPU upload requires a contiguous &[f32] view.
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), total) }
+    }
+
+    /// Gathers vectors at the specified indices into a contiguous flat buffer.
+    ///
+    /// Returns a new `Vec<f32>` containing the selected vectors packed sequentially.
+    /// Useful for GPU upload when only a subset of vectors is needed (e.g., reranking).
+    ///
+    /// Out-of-bounds indices are silently skipped (the corresponding vector is omitted
+    /// from the result).
+    #[must_use]
+    pub fn gather_flat(&self, indices: &[usize]) -> Vec<f32> {
+        let mut result = Vec::with_capacity(indices.len() * self.dimension);
+        for &idx in indices {
+            if let Some(vec) = self.get(idx) {
+                result.extend_from_slice(vec);
+            }
+        }
+        result
     }
 
     /// Returns total memory usage in bytes.
@@ -406,8 +445,8 @@ impl ContiguousVectors {
     ) -> crate::error::Result<NonNull<f32>> {
         use crate::alloc_guard::AllocGuard;
 
-        // Allocate new buffer with RAII guard (PERF-002)
-        let guard = AllocGuard::new(new_layout).ok_or_else(|| {
+        // Allocate zero-initialized buffer with RAII guard (PERF-002)
+        let guard = AllocGuard::new_zeroed(new_layout).ok_or_else(|| {
             crate::error::Error::AllocationFailed(format!(
                 "Failed to allocate {} bytes for ContiguousVectors resize",
                 new_layout.size()
@@ -473,7 +512,7 @@ impl ContiguousVectors {
         use crate::alloc_guard::AllocGuard;
 
         let new_layout = Self::layout(self.dimension, self.count)?;
-        let guard = AllocGuard::new(new_layout).ok_or_else(|| {
+        let guard = AllocGuard::new_zeroed(new_layout).ok_or_else(|| {
             crate::error::Error::AllocationFailed(format!(
                 "Reorder: failed to allocate {} bytes",
                 new_layout.size()

@@ -46,8 +46,7 @@ fn batch_cosine(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// WGSL compute shader for batch Euclidean distance (ready for GPU pipeline).
-#[allow(dead_code)]
+/// WGSL compute shader for batch Euclidean distance.
 pub(super) const EUCLIDEAN_SHADER: &str = r"
 struct Params {
     dimension: u32,
@@ -80,8 +79,51 @@ fn batch_euclidean(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// WGSL compute shader for batch dot product (P2-GPU-2).
-#[allow(dead_code)]
+/// WGSL compute shader for PQ k-means assignment.
+///
+/// For each vector, finds the nearest centroid by L2 distance.
+pub(super) const PQ_KMEANS_ASSIGN_SHADER: &str = r"
+struct Params {
+    num_vectors: u32,
+    num_centroids: u32,
+    subspace_dim: u32,
+    _padding: u32,
+}
+
+@group(0) @binding(0) var<storage, read> vectors: array<f32>;
+@group(0) @binding(1) var<storage, read> centroids: array<f32>;
+@group(0) @binding(2) var<storage, read_write> assignments: array<u32>;
+@group(0) @binding(3) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn kmeans_assign(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= params.num_vectors) { return; }
+
+    let sd = params.subspace_dim;
+    let k = params.num_centroids;
+    let vec_offset = idx * sd;
+
+    var best_dist: f32 = 3.4028235e+38;
+    var best_idx: u32 = 0u;
+
+    for (var c: u32 = 0u; c < k; c = c + 1u) {
+        let cent_offset = c * sd;
+        var dist: f32 = 0.0;
+        for (var d: u32 = 0u; d < sd; d = d + 1u) {
+            let diff = vectors[vec_offset + d] - centroids[cent_offset + d];
+            dist = dist + diff * diff;
+        }
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx = c;
+        }
+    }
+    assignments[idx] = best_idx;
+}
+";
+
+/// WGSL compute shader for batch dot product.
 pub(super) const DOT_PRODUCT_SHADER: &str = r"
 struct Params {
     dimension: u32,
