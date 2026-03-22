@@ -50,17 +50,15 @@ impl Database {
     }
 
     /// Resolves the collection referenced by a TRAIN statement.
-    #[allow(deprecated)]
+    ///
+    /// Uses `resolve_writable_collection` (not `resolve_collection`) because
+    /// training a quantizer on a metadata-only collection is nonsensical —
+    /// metadata collections have no vectors to train on.
     fn resolve_train_collection(
         &self,
         stmt: &crate::velesql::TrainStatement,
     ) -> Result<crate::Collection> {
-        self.get_collection(&stmt.collection)
-            .or_else(|| {
-                self.get_vector_collection(&stmt.collection)
-                    .map(|vc| vc.inner)
-            })
-            .ok_or_else(|| Error::CollectionNotFound(stmt.collection.clone()))
+        self.resolve_writable_collection(&stmt.collection)
     }
 
     /// Checks if a quantizer is already trained, returning an error unless `force` is set.
