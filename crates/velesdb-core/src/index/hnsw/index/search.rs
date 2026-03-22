@@ -147,6 +147,13 @@ impl HnswIndex {
     }
 
     /// Updates the exponential moving average of reranking latency.
+    ///
+    /// The load-compute-store sequence is intentionally non-atomic (no CAS loop).
+    /// Two concurrent searches may each read the same `current` value and both
+    /// store their own blended result, causing one sample to be silently dropped.
+    /// This is acceptable because the EMA is a best-effort heuristic for latency
+    /// adaptation -- occasional lost samples do not affect search correctness and
+    /// the overhead of a CAS retry loop is not justified for an advisory metric.
     fn update_rerank_latency_ema(&self, sample_us: u64) {
         let current = self.rerank_latency_ema_us.load(Ordering::Relaxed);
         if current == 0 {
@@ -349,8 +356,8 @@ impl HnswIndex {
     /// Re-ranks candidates using the best available compute path.
     ///
     /// Tries GPU dispatch first when the workload exceeds the GPU threshold
-    /// (rerank_k * dimension > 65536) and a GPU is available. Falls back to
-    /// SIMD for small workloads, unsupported metrics, or GPU errors.
+    /// (rerank_k * dimension > 262,144 floats, ~1 MB) and a GPU is available.
+    /// Falls back to SIMD for small workloads, unsupported metrics, or GPU errors.
     fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
         #[cfg(feature = "gpu")]
         {
@@ -399,6 +406,10 @@ impl HnswIndex {
 
     /// Re-ranks candidates using GPU batch distance computation.
     ///
+    /// Snapshots candidate vectors under a brief read lock, then releases
+    /// the lock before the GPU round-trip (buffer upload + compute + poll +
+    /// readback = 5-50 ms). This prevents writer starvation during GPU dispatch.
+    ///
     /// Returns `None` if GPU is unavailable, the metric has no GPU shader,
     /// or a GPU error occurs. The caller falls back to SIMD in that case.
     #[cfg(feature = "gpu")]
@@ -410,31 +421,33 @@ impl HnswIndex {
         use crate::gpu::GpuAccelerator;
 
         let gpu = GpuAccelerator::global()?;
-        let inner = self.inner.read();
 
-        inner.with_contiguous_vectors(|vectors| {
-            let entries = self.resolve_candidate_indices(candidates);
-            if entries.is_empty() {
-                return None;
-            }
+        // Snapshot vectors under a brief read lock, then release before GPU dispatch
+        let (entries, flat_vectors) = {
+            let inner = self.inner.read();
+            inner.with_contiguous_vectors(|vectors| {
+                let entries = self.resolve_candidate_indices(candidates);
+                if entries.is_empty() {
+                    return None;
+                }
+                let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
+                let flat = vectors.gather_flat(&indices);
+                Some((entries, flat))
+            })
+        }?;
 
-            // Gather vectors into contiguous flat buffer for GPU upload
-            let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
-            let flat_vectors = vectors.gather_flat(&indices);
+        // Lock released -- GPU dispatch is lock-free
+        let scores = gpu
+            .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
+            .ok()?;
 
-            // Dispatch GPU batch distance; None = unsupported metric
-            let scores = gpu
-                .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
-                .ok()?;
+        let reranked = entries
+            .iter()
+            .zip(scores.iter())
+            .map(|(&(id, _), &score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
+            .collect();
 
-            let reranked = entries
-                .iter()
-                .zip(scores.iter())
-                .map(|(&(id, _), &score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
-                .collect();
-
-            Some(reranked)
-        })
+        Some(reranked)
     }
 
     /// Re-ranks candidates using SIMD-optimized exact distance computation.

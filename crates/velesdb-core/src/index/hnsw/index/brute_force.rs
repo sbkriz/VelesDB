@@ -88,6 +88,10 @@ impl HnswIndex {
 
     /// GPU brute-force inner implementation using `ContiguousVectors`.
     ///
+    /// Snapshots all valid vectors under a brief read lock, then releases
+    /// the lock before the GPU round-trip (buffer upload + compute + poll +
+    /// readback = 5-50 ms). This prevents writer starvation during GPU dispatch.
+    ///
     /// Separated from `search_brute_force_gpu` to keep the `#[cfg]` blocks
     /// minimal and the logic testable.
     ///
@@ -102,33 +106,34 @@ impl HnswIndex {
         use crate::gpu::GpuAccelerator;
 
         let gpu = GpuAccelerator::global()?;
-        let inner = self.inner.read();
 
-        inner.with_contiguous_vectors(|vectors| {
-            // Build (index, external_id) pairs for valid entries only.
-            // Deleted vectors have no mapping, so they are skipped.
-            let (indices, id_map) = self.build_brute_force_id_map(vectors.len());
-            if id_map.is_empty() {
-                return Some(Vec::new());
-            }
+        // Snapshot vectors under a brief read lock, then release before GPU dispatch
+        let (id_map, flat_vectors) = {
+            let inner = self.inner.read();
+            inner.with_contiguous_vectors(|vectors| {
+                let (indices, id_map) = self.build_brute_force_id_map(vectors.len());
+                if id_map.is_empty() {
+                    return None;
+                }
+                let flat = vectors.gather_flat(&indices);
+                Some((id_map, flat))
+            })
+        }?;
 
-            // Single contiguous gather — replaces per-vector Vec allocations
-            let flat_vectors = vectors.gather_flat(&indices);
+        // Lock released -- GPU dispatch is lock-free
+        let scores = gpu
+            .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
+            .ok()?;
 
-            let scores = gpu
-                .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
-                .ok()?;
+        let mut results: Vec<ScoredResult> = id_map
+            .into_iter()
+            .zip(scores)
+            .map(|(id, score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
+            .collect();
 
-            let mut results: Vec<ScoredResult> = id_map
-                .into_iter()
-                .zip(scores)
-                .map(|(id, score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
-                .collect();
-
-            self.metric.sort_scored_results(&mut results);
-            results.truncate(k);
-            Some(results)
-        })
+        self.metric.sort_scored_results(&mut results);
+        results.truncate(k);
+        Some(results)
     }
 
     /// Builds parallel `indices` and `id_map` vectors for GPU brute-force.

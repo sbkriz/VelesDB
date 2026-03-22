@@ -142,6 +142,9 @@ fn create_kmeans_buffers(
         usage: wgpu::BufferUsages::STORAGE,
     });
 
+    // Reason: n is bounded by training set size (thousands of vectors).
+    // n * 4 bytes is well within u64::MAX even for billions of vectors.
+    #[allow(clippy::cast_possible_truncation)]
     let assignments_size = (n * std::mem::size_of::<u32>()) as u64;
     let assignments = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Assignments Buffer"),
@@ -247,6 +250,10 @@ fn dispatch_and_readback(
 
     // Read back results using shared helper.
     let assignments_u32 = super::helpers::readback_buffer::<u32>(device, &buffers.staging, n)?;
+    // Reason: u32 → usize is lossless on all platforms where wgpu runs
+    // (32-bit and 64-bit). `From<u32>` is not implemented for `usize` in
+    // libstd, so we use the infallible `as` cast.
+    #[allow(clippy::cast_lossless)]
     let assignments: Vec<usize> = assignments_u32.iter().map(|&a| a as usize).collect();
 
     Some(assignments)

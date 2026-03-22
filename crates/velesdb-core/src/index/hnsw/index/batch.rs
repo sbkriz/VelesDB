@@ -262,7 +262,7 @@ impl HnswIndex {
     ///
     /// - **Recall**: 100% (exact)
     /// - **Latency**: O(n/cores) on CPU, O(n/GPU-threads) on GPU
-    /// - **GPU threshold**: 10K vectors (below this, rayon is faster)
+    /// - **GPU threshold**: 100K vectors (below this, rayon is faster)
     ///
     /// # Panics
     ///
@@ -326,8 +326,9 @@ impl HnswIndex {
 
     /// Minimum dataset size for GPU brute-force dispatch.
     ///
-    /// Below this threshold, rayon parallel SIMD is faster due to zero
+    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch.
+    /// Below 100K vectors, rayon parallel SIMD is faster due to zero
     /// GPU buffer upload overhead.
     #[cfg(feature = "gpu")]
-    const GPU_BRUTE_FORCE_THRESHOLD: usize = 10_000;
+    const GPU_BRUTE_FORCE_THRESHOLD: usize = 100_000;
 }

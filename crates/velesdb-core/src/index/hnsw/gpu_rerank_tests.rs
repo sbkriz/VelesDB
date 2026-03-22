@@ -145,9 +145,9 @@ fn test_gpu_rerank_end_to_end_balanced_vs_fast() {
 // =========================================================================
 
 /// Verifies that GPU reranking is NOT used when the workload is below the
-/// threshold (rerank_k * dimension <= 65536).
+/// threshold (rerank_k * dimension <= 262,144).
 ///
-/// With dim=4 and 5 candidates, the product is 20 which is far below 65536.
+/// With dim=4 and 5 candidates, the product is 20 which is far below 262,144.
 /// The SIMD path should handle reranking, and results should still be correct.
 #[test]
 fn test_gpu_rerank_fallback_below_threshold() {
@@ -157,20 +157,21 @@ fn test_gpu_rerank_fallback_below_threshold() {
         use crate::gpu::GpuAccelerator;
         assert!(
             !GpuAccelerator::should_rerank_gpu(5, 4),
-            "5 * 4 = 20 < 65536, should NOT use GPU"
+            "5 * 4 = 20 < 262_144, should NOT use GPU"
         );
         assert!(
             !GpuAccelerator::should_rerank_gpu(100, 64),
-            "100 * 64 = 6400 < 65536, should NOT use GPU"
+            "100 * 64 = 6400 < 262_144, should NOT use GPU"
         );
-        // 512 * 128 = 65536, which is NOT > 65536
+        // 1000 * 128 = 128_000, below the new 262_144 threshold
         assert!(
-            !GpuAccelerator::should_rerank_gpu(512, 128),
-            "512 * 128 = 65536, NOT > 65536, should NOT use GPU"
+            !GpuAccelerator::should_rerank_gpu(1000, 128),
+            "1000 * 128 = 128_000 < 262_144, should NOT use GPU"
         );
+        // 400 * 1536 = 614_400, above the threshold
         assert!(
-            GpuAccelerator::should_rerank_gpu(1000, 128),
-            "1000 * 128 = 128000 > 65536, should use GPU"
+            GpuAccelerator::should_rerank_gpu(400, 1536),
+            "400 * 1536 = 614_400 > 262_144, should use GPU"
         );
     }
 
@@ -197,22 +198,22 @@ fn test_gpu_rerank_fallback_below_threshold() {
 }
 
 /// Verifies the threshold boundary precisely: rerank_k * dimension must
-/// EXCEED 65536 (strictly greater) for GPU dispatch.
+/// EXCEED 262,144 (strictly greater) for GPU dispatch.
 #[test]
 #[cfg(feature = "gpu")]
 fn test_gpu_rerank_threshold_boundary() {
     use crate::gpu::GpuAccelerator;
 
-    // Exactly at boundary: 256 * 256 = 65536, and `65536 > 65_536` is false
-    let at_boundary = GpuAccelerator::should_rerank_gpu(256, 256);
+    // Exactly at boundary: 2048 * 128 = 262_144, and `262_144 > 262_144` is false
+    let at_boundary = GpuAccelerator::should_rerank_gpu(2048, 128);
     assert!(
         !at_boundary,
-        "Exactly at threshold (65536) should NOT trigger GPU"
+        "Exactly at threshold (262_144) should NOT trigger GPU"
     );
 
-    // One above: 257 * 256 = 65792 > 65536
+    // One above: 2049 * 128 = 262_272 > 262_144
     assert!(
-        GpuAccelerator::should_rerank_gpu(257, 256),
+        GpuAccelerator::should_rerank_gpu(2049, 128),
         "Above threshold should trigger GPU"
     );
 }
@@ -354,7 +355,7 @@ fn test_batch_search_fallback_without_gpu() {
 /// Verifies that `brute_force_search_gpu_dispatch` produces the same top-k
 /// results as the rayon-based `brute_force_search_parallel`.
 ///
-/// Uses `brute_force_search_gpu_dispatch` directly (bypassing the 10K
+/// Uses `brute_force_search_gpu_dispatch` directly (bypassing the 100K
 /// threshold in `brute_force_search_parallel`) so the test can run with
 /// a smaller dataset.
 #[test]

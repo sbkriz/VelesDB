@@ -12,6 +12,12 @@ use wgpu::util::DeviceExt;
 /// Lazily-initialized singleton GPU accelerator.
 ///
 /// `None` means GPU probe was attempted and failed (no compatible adapter).
+///
+/// The probe is **one-shot**: `OnceLock` guarantees the initialization closure
+/// runs exactly once. If no GPU is found on that first probe, subsequent calls
+/// to [`GpuAccelerator::global()`] return `None` forever. A process restart is
+/// required if a GPU becomes available after the initial probe (e.g. hot-plug
+/// or driver recovery).
 static GPU_INSTANCE: OnceLock<Option<Arc<GpuAccelerator>>> = OnceLock::new();
 
 /// GPU accelerator for batch vector operations.
@@ -433,11 +439,14 @@ impl GpuAccelerator {
 
     /// Returns `true` if GPU reranking is likely faster than sequential SIMD.
     ///
-    /// The threshold is calibrated for the GPU buffer upload overhead (~50us per MB).
-    /// Below this, SIMD with prefetch is faster due to zero upload cost.
+    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch (buffer
+    /// upload + compute pass + poll + readback). SIMD with prefetch remains
+    /// faster until the payload exceeds ~1 MB of float data (262,144 f32s).
+    /// The threshold `rerank_k * dimension > 262_144` corresponds to roughly
+    /// 100K vectors at dim=3 or 170 vectors at dim=1536.
     #[must_use]
     pub fn should_rerank_gpu(rerank_k: usize, dimension: usize) -> bool {
-        rerank_k * dimension > 65_536
+        rerank_k * dimension > 262_144
     }
 
     /// Computes batch distances using the appropriate GPU pipeline for the given metric.

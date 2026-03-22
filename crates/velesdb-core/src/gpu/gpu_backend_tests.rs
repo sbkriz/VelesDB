@@ -553,17 +553,20 @@ fn test_gpu_global_thread_safe() {
 
 #[test]
 fn test_should_rerank_gpu_threshold() {
-    // Below threshold: 100 * 128 = 12_800 < 65_536
+    // Below threshold: 100 * 128 = 12_800 < 262_144
     assert!(!GpuAccelerator::should_rerank_gpu(100, 128));
 
-    // Above threshold: 200 * 768 = 153_600 > 65_536
-    assert!(GpuAccelerator::should_rerank_gpu(200, 768));
+    // Below threshold (was above old 65K): 200 * 768 = 153_600 < 262_144
+    assert!(!GpuAccelerator::should_rerank_gpu(200, 768));
 
-    // Exactly at threshold: 512 * 128 = 65_536 (not strictly greater)
-    assert!(!GpuAccelerator::should_rerank_gpu(512, 128));
-
-    // Large: 400 * 1536 = 614_400 >> 65_536
+    // Above threshold: 400 * 1536 = 614_400 > 262_144
     assert!(GpuAccelerator::should_rerank_gpu(400, 1536));
+
+    // Exactly at threshold: 2048 * 128 = 262_144 (not strictly greater)
+    assert!(!GpuAccelerator::should_rerank_gpu(2048, 128));
+
+    // Just above threshold: 2049 * 128 = 262_272 > 262_144
+    assert!(GpuAccelerator::should_rerank_gpu(2049, 128));
 }
 
 #[test]
