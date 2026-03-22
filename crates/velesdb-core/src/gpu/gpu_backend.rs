@@ -27,8 +27,8 @@ static GPU_INSTANCE: OnceLock<Option<Arc<GpuAccelerator>>> = OnceLock::new();
 /// ```ignore
 /// use velesdb_core::gpu::GpuAccelerator;
 ///
-/// if let Some(gpu) = GpuAccelerator::new() {
-///     let results = gpu.batch_cosine_similarity(&vectors, &query);
+/// if let Some(gpu) = GpuAccelerator::global() {
+///     let results = gpu.batch_cosine_similarity(&vectors, &query, dimension)?;
 /// }
 /// ```
 pub struct GpuAccelerator {
@@ -56,7 +56,7 @@ impl GpuAccelerator {
     ///
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
-    pub fn new() -> Option<Self> {
+    pub(crate) fn new() -> Option<Self> {
         let (device, queue) = Self::init_device()?;
 
         let cosine_pipeline = Self::compile_pipeline(
@@ -139,7 +139,14 @@ impl GpuAccelerator {
 
     /// Compiles a WGSL compute shader into a [`wgpu::ComputePipeline`].
     ///
-    /// Uses the shared quad bind-group layout from [`super::helpers`].
+    /// Uses the shared quad bind-group layout from [`super::helpers`]:
+    /// binding 0 = storage(read), binding 1 = storage(read),
+    /// binding 2 = storage(read_write), binding 3 = uniform.
+    ///
+    /// All four shaders (cosine, euclidean, dot_product, kmeans) share this
+    /// structural layout. The uniform buffer's internal data layout (e.g.,
+    /// 2-field params for distance vs 4-field for kmeans) is interpreted
+    /// by the shader code, not constrained by the bind group layout.
     fn compile_pipeline(
         device: &wgpu::Device,
         shader_source: &str,
@@ -374,6 +381,8 @@ impl GpuAccelerator {
     }
 
     /// Encodes the compute pass and submits it to the GPU queue.
+    // Reason: GPU encode needs device, queue, pipeline, bind_group, and 3 buffer
+    // refs — bundling into a struct would add lifetime complexity for a private fn.
     #[allow(clippy::too_many_arguments)]
     fn encode_and_submit(
         device: &wgpu::Device,
@@ -446,12 +455,17 @@ impl GpuAccelerator {
     /// 100K vectors at dim=3 or 170 vectors at dim=1536.
     #[must_use]
     pub fn should_rerank_gpu(rerank_k: usize, dimension: usize) -> bool {
-        rerank_k * dimension > 262_144
+        rerank_k.saturating_mul(dimension) > 262_144
     }
 
     /// Computes batch distances using the appropriate GPU pipeline for the given metric.
     ///
-    /// Returns `None` for metrics without GPU support (Hamming, Jaccard).
+    /// Returns `Option<Result<Vec<f32>>>` to communicate two distinct failure modes:
+    /// - `None` — the metric has no GPU shader (Hamming, Jaccard). Caller should
+    ///   fall back to CPU.
+    /// - `Some(Err(...))` — the GPU dispatch failed (buffer overflow, map-async
+    ///   error). Caller should fall back to CPU.
+    /// - `Some(Ok(scores))` — successful GPU computation.
     ///
     /// # Errors
     ///

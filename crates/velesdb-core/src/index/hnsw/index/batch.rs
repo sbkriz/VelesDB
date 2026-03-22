@@ -188,13 +188,20 @@ impl HnswIndex {
     ) -> Vec<Vec<ScoredResult>> {
         self.validate_batch_dimensions(queries);
 
+        // Perfect mode or very small collections: delegate to search_with_quality
+        // per-query for brute-force 100% recall (matches single-query behavior).
+        if matches!(quality, SearchQuality::Perfect)
+            || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
+        {
+            return queries
+                .par_iter()
+                .map(|query| self.search_with_quality(query, k, quality))
+                .collect();
+        }
+
         let ef_search = quality.ef_search(k);
 
         // Two-stage GPU/SIMD reranking for Balanced/Accurate/Custom qualities.
-        // Note: Perfect and Adaptive are not reranked here — Perfect uses high
-        // ef_search (≥4096) which already yields near-exact recall, and Adaptive
-        // escalation is per-query (not batch-compatible). Both fall through to
-        // the HNSW-only path below, matching pre-existing single-query behavior.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
             return self.search_batch_with_rerank(queries, k, rerank_k, ef_search);
         }
@@ -240,12 +247,27 @@ impl HnswIndex {
             .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
             .collect();
 
-        // Phase 2: Rerank each query's candidates and truncate to k
-        queries
-            .iter()
-            .zip(all_candidates.iter())
-            .map(|(query, candidates)| self.rerank_sort_and_truncate(query, candidates, k))
-            .collect()
+        // Phase 2: Rerank in parallel, collecting per-query latencies to avoid
+        // EMA race (concurrent Relaxed store would lose ~N-1 samples).
+        let timed_results: Vec<(Vec<ScoredResult>, u64)> = queries
+            .par_iter()
+            .zip(all_candidates.par_iter())
+            .map(|(query, candidates)| {
+                self.rerank_sort_and_truncate_timed(query, candidates, k)
+            })
+            .collect();
+
+        // Update EMA once with mean latency from the entire batch
+        let n = timed_results.len() as u64;
+        if n > 0 {
+            let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
+            let mean_us = total_us / n;
+            if mean_us > 0 {
+                self.update_rerank_latency_ema(mean_us);
+            }
+        }
+
+        timed_results.into_iter().map(|(r, _)| r).collect()
     }
 
     /// Performs exact brute-force search in parallel using rayon.

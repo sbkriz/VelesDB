@@ -154,7 +154,7 @@ impl HnswIndex {
     /// This is acceptable because the EMA is a best-effort heuristic for latency
     /// adaptation -- occasional lost samples do not affect search correctness and
     /// the overhead of a CAS retry loop is not justified for an advisory metric.
-    fn update_rerank_latency_ema(&self, sample_us: u64) {
+    pub(super) fn update_rerank_latency_ema(&self, sample_us: u64) {
         let current = self.rerank_latency_ema_us.load(Ordering::Relaxed);
         if current == 0 {
             self.rerank_latency_ema_us
@@ -328,16 +328,33 @@ impl HnswIndex {
 
     /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
     ///
-    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`,
-    /// `search_with_rerank_quality`, and `search_batch_with_rerank`.
+    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`
+    /// and `search_with_rerank_quality`.
     pub(super) fn rerank_sort_and_truncate(
         &self,
         query: &[f32],
         candidates: &[ScoredResult],
         k: usize,
     ) -> Vec<ScoredResult> {
+        let (results, elapsed) = self.rerank_sort_and_truncate_timed(query, candidates, k);
+        if elapsed > 0 {
+            self.update_rerank_latency_ema(elapsed);
+        }
+        results
+    }
+
+    /// Reranks, sorts, and truncates without updating the EMA.
+    ///
+    /// Returns `(results, elapsed_us)` so the caller can aggregate latencies
+    /// from a parallel batch and update the EMA once (avoiding lost samples).
+    pub(super) fn rerank_sort_and_truncate_timed(
+        &self,
+        query: &[f32],
+        candidates: &[ScoredResult],
+        k: usize,
+    ) -> (Vec<ScoredResult>, u64) {
         if candidates.is_empty() {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
 
         let rerank_start = Instant::now();
@@ -349,8 +366,7 @@ impl HnswIndex {
 
         let elapsed_micros = rerank_start.elapsed().as_micros();
         let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
-        self.update_rerank_latency_ema(elapsed);
-        reranked
+        (reranked, elapsed)
     }
 
     /// Re-ranks candidates using the best available compute path.
@@ -432,6 +448,12 @@ impl HnswIndex {
                 }
                 let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
                 let flat = vectors.gather_flat(&indices);
+                // Early validation: gather_flat may skip invalidated indices,
+                // producing fewer elements. Detect before paying GPU round-trip.
+                let expected_len = indices.len() * self.dimension;
+                if flat.len() != expected_len {
+                    return None;
+                }
                 Some((entries, flat))
             })
         }?;

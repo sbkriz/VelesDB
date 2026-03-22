@@ -147,31 +147,20 @@ fn test_gpu_rerank_end_to_end_balanced_vs_fast() {
 /// Verifies that GPU reranking is NOT used when the workload is below the
 /// threshold (rerank_k * dimension <= 262,144).
 ///
-/// With dim=4 and 5 candidates, the product is 20 which is far below 262,144.
-/// The SIMD path should handle reranking, and results should still be correct.
+/// Also verifies that search produces correct results via the SIMD path.
 #[test]
 fn test_gpu_rerank_fallback_below_threshold() {
-    // Verify the threshold decision directly
     #[cfg(feature = "gpu")]
     {
         use crate::gpu::GpuAccelerator;
+        // Pure arithmetic — no GPU needed to test the threshold function
         assert!(
             !GpuAccelerator::should_rerank_gpu(5, 4),
-            "5 * 4 = 20 < 262_144, should NOT use GPU"
+            "5 * 4 = 20, should NOT use GPU"
         );
         assert!(
             !GpuAccelerator::should_rerank_gpu(100, 64),
-            "100 * 64 = 6400 < 262_144, should NOT use GPU"
-        );
-        // 1000 * 128 = 128_000, below the new 262_144 threshold
-        assert!(
-            !GpuAccelerator::should_rerank_gpu(1000, 128),
-            "1000 * 128 = 128_000 < 262_144, should NOT use GPU"
-        );
-        // 400 * 1536 = 614_400, above the threshold
-        assert!(
-            GpuAccelerator::should_rerank_gpu(400, 1536),
-            "400 * 1536 = 614_400 > 262_144, should use GPU"
+            "100 * 64 = 6400, should NOT use GPU"
         );
     }
 
@@ -188,8 +177,6 @@ fn test_gpu_rerank_fallback_below_threshold() {
     let results = index.search_with_quality(&query, 3, SearchQuality::Balanced);
 
     assert!(!results.is_empty(), "Should return results via SIMD path");
-
-    // With Cosine metric, id=1 ([1,0,0,0]) should be the best match for query [1,0,0,0]
     assert_eq!(
         results[0].id, 1,
         "Exact match should be top result, got id={}",
@@ -197,17 +184,22 @@ fn test_gpu_rerank_fallback_below_threshold() {
     );
 }
 
-/// Verifies the threshold boundary precisely: rerank_k * dimension must
-/// EXCEED 262,144 (strictly greater) for GPU dispatch.
+/// Verifies threshold boundary and monotonicity.
+///
+/// `should_rerank_gpu` returns true when `rerank_k * dimension > 262_144`
+/// (strictly greater). Tests the exact boundary and extreme values.
 #[test]
 #[cfg(feature = "gpu")]
-fn test_gpu_rerank_threshold_boundary() {
+fn test_gpu_rerank_threshold_boundary_and_monotonicity() {
     use crate::gpu::GpuAccelerator;
+    // Pure arithmetic — no GPU instance needed
 
-    // Exactly at boundary: 2048 * 128 = 262_144, and `262_144 > 262_144` is false
-    let at_boundary = GpuAccelerator::should_rerank_gpu(2048, 128);
+    // Trivial: always false
+    assert!(!GpuAccelerator::should_rerank_gpu(1, 1));
+
+    // Exactly at boundary: 2048 * 128 = 262_144, NOT strictly greater
     assert!(
-        !at_boundary,
+        !GpuAccelerator::should_rerank_gpu(2048, 128),
         "Exactly at threshold (262_144) should NOT trigger GPU"
     );
 
@@ -216,6 +208,9 @@ fn test_gpu_rerank_threshold_boundary() {
         GpuAccelerator::should_rerank_gpu(2049, 128),
         "Above threshold should trigger GPU"
     );
+
+    // Large payload: always true
+    assert!(GpuAccelerator::should_rerank_gpu(100_000, 1536));
 }
 
 // =========================================================================

@@ -45,8 +45,8 @@ if GpuAccelerator::is_available() {
 ```rust
 use velesdb_core::gpu::GpuAccelerator;
 
-// Create accelerator (returns None if no GPU)
-if let Some(gpu) = GpuAccelerator::new() {
+// Obtain the singleton accelerator (returns None if no GPU)
+if let Some(gpu) = GpuAccelerator::global() {
     let query = vec![1.0, 0.0, 0.0];
     let vectors = vec![
         1.0, 0.0, 0.0,  // Vector 1
@@ -55,14 +55,14 @@ if let Some(gpu) = GpuAccelerator::new() {
     ];
     let dimension = 3;
 
-    // Batch cosine similarity
-    let similarities = gpu.batch_cosine_similarity(&vectors, &query, dimension);
-    
-    // Batch Euclidean distance
-    let distances = gpu.batch_euclidean_distance(&vectors, &query, dimension);
-    
-    // Batch dot product
-    let dots = gpu.batch_dot_product(&vectors, &query, dimension);
+    // Batch cosine similarity (returns Result)
+    let similarities = gpu.batch_cosine_similarity(&vectors, &query, dimension)?;
+
+    // Batch Euclidean distance (returns Result)
+    let distances = gpu.batch_euclidean_distance(&vectors, &query, dimension)?;
+
+    // Batch dot product (returns Result)
+    let dots = gpu.batch_dot_product(&vectors, &query, dimension)?;
 }
 ```
 
@@ -149,7 +149,7 @@ match backend {
 
 | Method | Description |
 |--------|-------------|
-| `new()` | Create accelerator (None if unavailable) |
+| `global()` | Obtain singleton accelerator (None if unavailable) |
 | `is_available()` | Check GPU availability (cached) |
 | `batch_cosine_similarity()` | Batch cosine similarities |
 | `batch_euclidean_distance()` | Batch Euclidean distances |
