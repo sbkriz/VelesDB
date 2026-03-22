@@ -56,7 +56,7 @@ fn bench_batch_cosine(c: &mut Criterion) {
         // GPU benchmark (if available)
         #[cfg(feature = "gpu")]
         {
-            if let Some(gpu) = GpuAccelerator::new() {
+            if let Some(gpu) = GpuAccelerator::global() {
                 group.bench_function(
                     BenchmarkId::new("gpu_wgpu", format!("{batch_size}x{dim}")),
                     |b| {
@@ -92,7 +92,7 @@ fn bench_single_cosine(c: &mut Criterion) {
     // GPU for single vector (to show overhead)
     #[cfg(feature = "gpu")]
     {
-        if let Some(gpu) = GpuAccelerator::new() {
+        if let Some(gpu) = GpuAccelerator::global() {
             group.bench_function(BenchmarkId::new("gpu_wgpu", format!("{dim}d")), |b| {
                 b.iter(|| {
                     let results = gpu.batch_cosine_similarity(&vector, &query, dim).unwrap();

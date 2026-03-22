@@ -61,6 +61,10 @@ impl HnswIndex {
 
     /// Performs GPU-accelerated brute-force search if available.
     ///
+    /// Uses `ContiguousVectors::gather_flat()` to produce a single contiguous
+    /// buffer for GPU upload, avoiding per-vector heap allocations from the
+    /// older `collect_for_parallel()` path.
+    ///
     /// Returns `None` if GPU feature is not enabled or GPU is not available.
     ///
     /// # Panics
@@ -72,52 +76,7 @@ impl HnswIndex {
 
         #[cfg(feature = "gpu")]
         {
-            use crate::gpu::GpuAccelerator;
-
-            let gpu = GpuAccelerator::new()?;
-
-            // Collect vectors for GPU processing
-            let vectors_snapshot = self.vectors.collect_for_parallel();
-
-            if vectors_snapshot.is_empty() {
-                return Some(Vec::new());
-            }
-
-            // Flatten vectors for GPU (contiguous memory layout)
-            let mut flat_vectors: Vec<f32> =
-                Vec::with_capacity(vectors_snapshot.len() * self.dimension);
-            let mut id_map: Vec<u64> = Vec::with_capacity(vectors_snapshot.len());
-
-            for (idx, vec) in &vectors_snapshot {
-                if let Some(id) = self.mappings.get_id(*idx) {
-                    flat_vectors.extend(vec);
-                    id_map.push(id);
-                }
-            }
-
-            if id_map.is_empty() {
-                return Some(Vec::new());
-            }
-
-            // GPU batch cosine similarity
-            let Ok(similarities) =
-                gpu.batch_cosine_similarity(&flat_vectors, query, self.dimension)
-            else {
-                return None;
-            };
-
-            // Combine IDs with similarities
-            let mut results: Vec<ScoredResult> = id_map
-                .into_iter()
-                .zip(similarities)
-                .map(|(id, score)| ScoredResult::new(id, score))
-                .collect();
-
-            // Sort by similarity (descending for cosine)
-            self.metric.sort_scored_results(&mut results);
-
-            results.truncate(k);
-            Some(results)
+            self.search_brute_force_gpu_inner(query, k)
         }
 
         #[cfg(not(feature = "gpu"))]
@@ -125,6 +84,68 @@ impl HnswIndex {
             let _ = (query, k); // Suppress unused warnings
             None
         }
+    }
+
+    /// GPU brute-force inner implementation using `ContiguousVectors`.
+    ///
+    /// Separated from `search_brute_force_gpu` to keep the `#[cfg]` blocks
+    /// minimal and the logic testable.
+    ///
+    /// RF-DEDUP: `pub(crate)` so `batch.rs` can reuse this for
+    /// `brute_force_search_gpu_dispatch` instead of duplicating the logic.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn search_brute_force_gpu_inner(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> Option<Vec<ScoredResult>> {
+        use crate::gpu::GpuAccelerator;
+
+        let gpu = GpuAccelerator::global()?;
+        let inner = self.inner.read();
+
+        inner.with_contiguous_vectors(|vectors| {
+            // Build (index, external_id) pairs for valid entries only.
+            // Deleted vectors have no mapping, so they are skipped.
+            let (indices, id_map) = self.build_brute_force_id_map(vectors.len());
+            if id_map.is_empty() {
+                return Some(Vec::new());
+            }
+
+            // Single contiguous gather — replaces per-vector Vec allocations
+            let flat_vectors = vectors.gather_flat(&indices);
+
+            let scores = gpu
+                .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
+                .ok()?;
+
+            let mut results: Vec<ScoredResult> = id_map
+                .into_iter()
+                .zip(scores)
+                .map(|(id, score)| ScoredResult::new(id, self.clamp_score_for_metric(score)))
+                .collect();
+
+            self.metric.sort_scored_results(&mut results);
+            results.truncate(k);
+            Some(results)
+        })
+    }
+
+    /// Builds parallel `indices` and `id_map` vectors for GPU brute-force.
+    ///
+    /// Iterates all internal indices `0..count`, keeping only those that have
+    /// a valid external ID mapping (i.e., not deleted).
+    #[cfg(feature = "gpu")]
+    fn build_brute_force_id_map(&self, count: usize) -> (Vec<usize>, Vec<u64>) {
+        let mut indices = Vec::with_capacity(count);
+        let mut id_map = Vec::with_capacity(count);
+        for idx in 0..count {
+            if let Some(id) = self.mappings.get_id(idx) {
+                indices.push(idx);
+                id_map.push(id);
+            }
+        }
+        (indices, id_map)
     }
 
     /// Performs brute-force SIMD search with buffer reuse optimization.

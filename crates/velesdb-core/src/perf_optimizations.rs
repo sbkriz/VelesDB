@@ -173,6 +173,44 @@ impl ContiguousVectors {
         self.capacity
     }
 
+    /// Returns the raw contiguous buffer as a flat slice.
+    ///
+    /// The slice contains all vectors packed sequentially:
+    /// `[v0_d0, v0_d1, ..., v1_d0, ...]`.
+    /// Useful for GPU upload without copying.
+    #[inline]
+    #[must_use]
+    pub fn as_flat_slice(&self) -> &[f32] {
+        if self.count == 0 {
+            return &[];
+        }
+        let total = self.count * self.dimension;
+        // SAFETY: `count * dimension` elements are initialized (each `push`/`insert_at`
+        // copies exactly `dimension` f32s), `data` is non-null per `NonNull` invariant,
+        // and the allocation covers at least `capacity * dimension` f32s where
+        // `count <= capacity`.
+        // Reason: Zero-copy GPU upload requires a contiguous &[f32] view.
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), total) }
+    }
+
+    /// Gathers vectors at the specified indices into a contiguous flat buffer.
+    ///
+    /// Returns a new `Vec<f32>` containing the selected vectors packed sequentially.
+    /// Useful for GPU upload when only a subset of vectors is needed (e.g., reranking).
+    ///
+    /// Out-of-bounds indices are silently skipped (the corresponding vector is omitted
+    /// from the result).
+    #[must_use]
+    pub fn gather_flat(&self, indices: &[usize]) -> Vec<f32> {
+        let mut result = Vec::with_capacity(indices.len() * self.dimension);
+        for &idx in indices {
+            if let Some(vec) = self.get(idx) {
+                result.extend_from_slice(vec);
+            }
+        }
+        result
+    }
+
     /// Returns total memory usage in bytes.
     #[inline]
     #[must_use]

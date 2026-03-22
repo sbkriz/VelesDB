@@ -155,6 +155,11 @@ impl HnswIndex {
 
     /// Performs batch search for multiple queries in parallel.
     ///
+    /// When quality requires two-stage reranking and vector storage is enabled,
+    /// the method first runs HNSW search for all queries (rayon), then reranks
+    /// each query's candidates using GPU or SIMD as appropriate. Otherwise,
+    /// falls back to HNSW-only search.
+    ///
     /// # Arguments
     ///
     /// * `queries` - Slice of query vectors (as slices)
@@ -163,13 +168,13 @@ impl HnswIndex {
     ///
     /// # Returns
     ///
-    /// Vector of results, one per query, each containing (id, score) tuples.
+    /// Vector of results, one per query, each containing scored results.
     ///
     /// # Performance
     ///
-    /// - Uses rayon for parallel query processing
-    /// - Scales with available CPU cores
-    /// - Each query is independent, enabling high parallelism
+    /// - Uses rayon for parallel HNSW search across all queries
+    /// - GPU reranking batches all candidates per query for efficient dispatch
+    /// - Falls back to SIMD reranking below GPU threshold
     ///
     /// # Panics
     ///
@@ -181,7 +186,28 @@ impl HnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> Vec<Vec<ScoredResult>> {
-        // Validate all query dimensions first
+        self.validate_batch_dimensions(queries);
+
+        let ef_search = quality.ef_search(k);
+
+        // Try GPU-accelerated batch reranking when conditions are met
+        if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
+            return self.search_batch_with_rerank(queries, k, rerank_k, ef_search);
+        }
+
+        // Fast path: HNSW-only search for each query (rayon parallel)
+        queries
+            .par_iter()
+            .map(|query| self.search_hnsw_only(query, k, ef_search))
+            .collect()
+    }
+
+    /// Validates that all query vectors have the correct dimension.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any query dimension doesn't match the index dimension.
+    fn validate_batch_dimensions(&self, queries: &[&[f32]]) {
         for (i, query) in queries.iter().enumerate() {
             assert_eq!(
                 query.len(),
@@ -191,20 +217,37 @@ impl HnswIndex {
                 query.len()
             );
         }
+    }
 
-        // RF-2: Reuse search_hnsw_only to avoid duplicating the
-        // search → map-neighbours → ScoredResult pipeline.
-        let ef_search = quality.ef_search(k);
-        queries
+    /// Batch search with two-stage reranking for all queries.
+    ///
+    /// Phase 1: HNSW search with oversampled `rerank_k` candidates (rayon).
+    /// Phase 2: Rerank each query's candidates via GPU or SIMD.
+    fn search_batch_with_rerank(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        rerank_k: usize,
+        ef_search: usize,
+    ) -> Vec<Vec<ScoredResult>> {
+        // Phase 1: HNSW search for all queries with oversampled candidate pool
+        let all_candidates: Vec<Vec<ScoredResult>> = queries
             .par_iter()
-            .map(|query| self.search_hnsw_only(query, k, ef_search))
+            .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
+            .collect();
+
+        // Phase 2: Rerank each query's candidates and truncate to k
+        queries
+            .iter()
+            .zip(all_candidates.iter())
+            .map(|(query, candidates)| self.rerank_sort_and_truncate(query, candidates, k))
             .collect()
     }
 
     /// Performs exact brute-force search in parallel using rayon.
     ///
-    /// This method computes exact distances to all vectors in the index,
-    /// guaranteeing **100% recall**. Uses all available CPU cores.
+    /// For large datasets (>10K vectors), automatically attempts GPU-accelerated
+    /// search via `search_brute_force_gpu_inner` before falling back to rayon.
     ///
     /// # Arguments
     ///
@@ -218,8 +261,8 @@ impl HnswIndex {
     /// # Performance
     ///
     /// - **Recall**: 100% (exact)
-    /// - **Latency**: O(n/cores) where n = dataset size
-    /// - **Best for**: Small datasets (<10k) or when recall is critical
+    /// - **Latency**: O(n/cores) on CPU, O(n/GPU-threads) on GPU
+    /// - **GPU threshold**: 10K vectors (below this, rayon is faster)
     ///
     /// # Panics
     ///
@@ -228,6 +271,39 @@ impl HnswIndex {
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
+        // Try GPU path for large datasets where GPU upload overhead is amortized
+        #[cfg(feature = "gpu")]
+        if self.len() > Self::GPU_BRUTE_FORCE_THRESHOLD {
+            if let Some(results) = self.search_brute_force_gpu_inner(query, k) {
+                return results;
+            }
+        }
+
+        self.brute_force_search_rayon(query, k)
+    }
+
+    /// GPU brute-force dispatch accessible from tests.
+    ///
+    /// RF-DEDUP: delegates to `search_brute_force_gpu_inner` in `brute_force.rs`
+    /// without the 10K threshold gate, so tests can exercise the GPU path
+    /// with smaller datasets.
+    ///
+    /// Returns `None` if GPU is unavailable.
+    #[cfg(all(test, feature = "gpu"))]
+    #[must_use]
+    pub(crate) fn brute_force_search_gpu_dispatch(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> Option<Vec<ScoredResult>> {
+        self.search_brute_force_gpu_inner(query, k)
+    }
+
+    /// Rayon-based brute-force search over `ShardedVectors`.
+    ///
+    /// Extracted from `brute_force_search_parallel` so the GPU gate in that
+    /// method stays compact.
+    fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         // EPIC-A.2: Use collect_for_parallel for rayon par_iter support
         let vectors_snapshot = self.vectors.collect_for_parallel();
 
@@ -247,4 +323,11 @@ impl HnswIndex {
         results.truncate(k);
         results
     }
+
+    /// Minimum dataset size for GPU brute-force dispatch.
+    ///
+    /// Below this threshold, rayon parallel SIMD is faster due to zero
+    /// GPU buffer upload overhead.
+    #[cfg(feature = "gpu")]
+    const GPU_BRUTE_FORCE_THRESHOLD: usize = 10_000;
 }

@@ -37,6 +37,8 @@ mod vector_store;
 // Tests
 // ============================================================================
 #[cfg(test)]
+mod gpu_rerank_tests;
+#[cfg(test)]
 mod index_tests;
 #[cfg(test)]
 mod mappings_tests;

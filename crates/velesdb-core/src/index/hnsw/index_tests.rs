@@ -1789,6 +1789,86 @@ fn test_search_brute_force_gpu_fallback_to_none_without_gpu() {
 }
 
 #[test]
+#[cfg(feature = "gpu")]
+fn test_brute_force_gpu_euclidean() {
+    // RED: GPU brute-force must dispatch Euclidean, not hardcode Cosine.
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+
+    // Insert vectors at known positions so distances are deterministic.
+    // vec0 = origin, vec1 = unit along x, vec2 = 2 units along x.
+    index.insert(10, &[0.0, 0.0, 0.0, 0.0]);
+    index.insert(20, &[1.0, 0.0, 0.0, 0.0]);
+    index.insert(30, &[2.0, 0.0, 0.0, 0.0]);
+
+    let query = [0.0, 0.0, 0.0, 0.0]; // closest to vec0
+
+    if let Some(results) = index.search_brute_force_gpu(&query, 3) {
+        assert_eq!(results.len(), 3, "Should return 3 results");
+
+        // Euclidean: ascending order (lower distance = better).
+        // Expected order: id=10 (dist 0), id=20 (dist 1), id=30 (dist 2).
+        assert_eq!(results[0].id, 10, "Closest should be id=10 (at origin)");
+        assert_eq!(results[1].id, 20, "Second closest should be id=20");
+        assert_eq!(results[2].id, 30, "Farthest should be id=30");
+
+        // Verify actual distances
+        assert!(
+            results[0].score.abs() < 0.01,
+            "Distance to origin should be ~0, got {}",
+            results[0].score
+        );
+        assert!(
+            (results[1].score - 1.0).abs() < 0.01,
+            "Distance to (1,0,0,0) should be ~1, got {}",
+            results[1].score
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_brute_force_gpu_dot_product() {
+    // RED: GPU brute-force must dispatch DotProduct, not hardcode Cosine.
+    let index = HnswIndex::new(4, DistanceMetric::DotProduct).unwrap();
+
+    // Insert vectors with different dot products to the query.
+    index.insert(10, &[1.0, 0.0, 0.0, 0.0]); // dot with query = 1
+    index.insert(20, &[2.0, 0.0, 0.0, 0.0]); // dot with query = 2
+    index.insert(30, &[3.0, 0.0, 0.0, 0.0]); // dot with query = 3
+
+    let query = [1.0, 0.0, 0.0, 0.0];
+
+    if let Some(results) = index.search_brute_force_gpu(&query, 3) {
+        assert_eq!(results.len(), 3, "Should return 3 results");
+
+        // DotProduct: descending order (higher = better).
+        // Expected order: id=30 (dot 3), id=20 (dot 2), id=10 (dot 1).
+        assert_eq!(
+            results[0].id, 30,
+            "Highest dot product should be id=30, got id={}",
+            results[0].id
+        );
+        assert_eq!(
+            results[1].id, 20,
+            "Second highest dot product should be id=20, got id={}",
+            results[1].id
+        );
+        assert_eq!(
+            results[2].id, 10,
+            "Lowest dot product should be id=10, got id={}",
+            results[2].id
+        );
+
+        // Verify actual scores
+        assert!(
+            (results[0].score - 3.0).abs() < 0.01,
+            "Dot product with (3,0,0,0) should be ~3, got {}",
+            results[0].score
+        );
+    }
+}
+
+#[test]
 fn test_compute_backend_selection() {
     // TDD: Verify compute backend selection works
     use crate::gpu::ComputeBackend;
