@@ -212,7 +212,7 @@ impl FusionStrategy {
 ///     >>> collections = db.list_collections()
 #[pyclass]
 pub struct Database {
-    inner: CoreDatabase,
+    inner: Arc<CoreDatabase>,
     path: PathBuf,
 }
 
@@ -235,7 +235,7 @@ impl Database {
         let db = CoreDatabase::open(&path_buf)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {}", e)))?;
         Ok(Self {
-            inner: db,
+            inner: Arc::new(db),
             path: path_buf,
         })
     }
@@ -638,15 +638,13 @@ impl Database {
         &self.path
     }
 
-    /// Open an independent `Arc<CoreDatabase>` handle from the same path.
+    /// Return a shared `Arc<CoreDatabase>` handle to the already-opened database.
     ///
     /// Used by subsystems (e.g., AgentMemory) that need `Arc` ownership.
-    /// Each call creates a **separate** in-memory instance that reads/writes
-    /// the same on-disk data. Changes are visible across handles after flush.
+    /// The handle shares the same in-memory registries and file lock as the
+    /// parent `Database`, avoiding VELES-031 re-entrant lock errors.
     pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
-        CoreDatabase::open(&self.path)
-            .map(Arc::new)
-            .map_err(|e| format!("Failed to open shared database: {e}"))
+        Ok(Arc::clone(&self.inner))
     }
 }
 
