@@ -113,6 +113,7 @@ class GraphLoader:
         """Load a single entity into the collection. Returns True on success."""
         metadata = {"name": entity.name, "type": entity.entity_type, **entity.properties}
 
+        # embedding_fn errors (service down, OOM) propagate to caller intentionally.
         vector = None
         if generate_embeddings and self.embedding_fn:
             vector = self.embedding_fn(f"{entity.entity_type}: {entity.name}")
