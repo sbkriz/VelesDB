@@ -190,7 +190,11 @@ impl HnswIndex {
 
         let ef_search = quality.ef_search(k);
 
-        // Try GPU-accelerated batch reranking when conditions are met
+        // Two-stage GPU/SIMD reranking for Balanced/Accurate/Custom qualities.
+        // Note: Perfect and Adaptive are not reranked here — Perfect uses high
+        // ef_search (≥4096) which already yields near-exact recall, and Adaptive
+        // escalation is per-query (not batch-compatible). Both fall through to
+        // the HNSW-only path below, matching pre-existing single-query behavior.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
             return self.search_batch_with_rerank(queries, k, rerank_k, ef_search);
         }
@@ -246,7 +250,7 @@ impl HnswIndex {
 
     /// Performs exact brute-force search in parallel using rayon.
     ///
-    /// For large datasets (>10K vectors), automatically attempts GPU-accelerated
+    /// For large datasets (>100K vectors), automatically attempts GPU-accelerated
     /// search via `search_brute_force_gpu_inner` before falling back to rayon.
     ///
     /// # Arguments
@@ -285,7 +289,7 @@ impl HnswIndex {
     /// GPU brute-force dispatch accessible from tests.
     ///
     /// RF-DEDUP: delegates to `search_brute_force_gpu_inner` in `brute_force.rs`
-    /// without the 10K threshold gate, so tests can exercise the GPU path
+    /// without the 100K threshold gate, so tests can exercise the GPU path
     /// with smaller datasets.
     ///
     /// Returns `None` if GPU is unavailable.
