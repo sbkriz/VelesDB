@@ -441,6 +441,12 @@ impl HnswIndex {
             .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
             .ok()?;
 
+        // Guard: GPU must return exactly one score per entry. If mismatched
+        // (e.g., shader error or buffer desync), fall back to SIMD.
+        if scores.len() != entries.len() {
+            return None;
+        }
+
         let reranked = entries
             .iter()
             .zip(scores.iter())

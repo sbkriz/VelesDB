@@ -125,6 +125,12 @@ impl HnswIndex {
             .batch_distance_for_metric(self.metric, &flat_vectors, query, self.dimension)?
             .ok()?;
 
+        // Guard: GPU must return exactly one score per vector. If mismatched
+        // (e.g., shader error or buffer desync), fall back to CPU search.
+        if scores.len() != id_map.len() {
+            return None;
+        }
+
         let mut results: Vec<ScoredResult> = id_map
             .into_iter()
             .zip(scores)
