@@ -170,30 +170,20 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         }
 
         let first_node = assignments[0].0;
-        let ep_snapshot = *self.entry_point.read();
-
-        // Bootstrap: if index was empty, establish the first node as entry point
-        // before Phase B so other nodes have a valid starting point for search.
-        let connect_start = if ep_snapshot.is_none() {
-            let (node_id, layer) = assignments[0];
-            self.promote_entry_point(node_id, layer);
-            1
-        } else {
-            0
-        };
+        let connect_start = self.bootstrap_entry_point(&assignments);
 
         // Phase B: Parallel connect — each node searches and connects from
         // the entry point. Uses read locks + per-node neighbor write locks.
         let ep_id = self.entry_point.read().unwrap_or(first_node);
-        assignments[connect_start..]
-            .par_iter()
-            .try_for_each(|(node_id, layer)| -> crate::error::Result<()> {
+        assignments[connect_start..].par_iter().try_for_each(
+            |(node_id, layer)| -> crate::error::Result<()> {
                 let batch_idx = node_id - first_node;
                 let query: &[f32] = &processed[batch_idx];
                 let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
                 self.connect_node(*node_id, query, *layer, current_ep);
                 Ok(())
-            })?;
+            },
+        )?;
 
         // Phase C: Promote the highest-layer node as entry point + update count.
         // Runs after all connects complete — no unconnected node is ever visible.
@@ -204,6 +194,21 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             .fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
+    }
+
+    /// Establishes the first node as entry point if the index is empty.
+    ///
+    /// Returns the number of nodes consumed by bootstrapping (0 or 1).
+    /// Consumed nodes are excluded from the parallel connect phase because
+    /// they have no valid entry point to search from.
+    fn bootstrap_entry_point(&self, assignments: &[(NodeId, usize)]) -> usize {
+        if self.entry_point.read().is_none() {
+            let (node_id, layer) = assignments[0];
+            self.promote_entry_point(node_id, layer);
+            1
+        } else {
+            0
+        }
     }
 
     /// Sets the index to searching mode after bulk insertions.
