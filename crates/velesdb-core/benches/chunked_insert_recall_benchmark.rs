@@ -120,7 +120,7 @@ fn bench_chunked_insert_recall(c: &mut Criterion) {
     println!("\n=== Chunked Insert Recall@{K} (n={DATASET_SIZE}, dim={DIM}, M=16, ef_c=200) ===");
     println!("Sequential recall:  {:.1}%", sequential_recall * 100.0);
     println!("Parallel recall:    {:.1}%", parallel_recall * 100.0);
-    println!("Delta (par - seq):  {delta:+.2}%");
+    println!("Delta (par - seq):  {:+.2}%", delta * 100.0);
 
     assert!(
         parallel_recall >= MIN_PARALLEL_RECALL,
