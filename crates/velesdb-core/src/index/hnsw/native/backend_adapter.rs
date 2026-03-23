@@ -211,6 +211,18 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         }
     }
 
+    /// Computes the chunk size for batched Phase B insertion.
+    ///
+    /// Balances parallelism (larger chunks) against entry-point staleness
+    /// (smaller chunks refresh the EP more often). The formula scales
+    /// linearly with batch size, clamped to `[1000, 5000]`.
+    #[must_use]
+    pub(in crate::index::hnsw::native) fn compute_chunk_size(batch_len: usize) -> usize {
+        const DEFAULT_CHUNK: usize = 1000;
+        const MAX_CHUNK: usize = 5000;
+        (batch_len / 50).max(DEFAULT_CHUNK).min(MAX_CHUNK)
+    }
+
     /// Sets the index to searching mode after bulk insertions.
     ///
     /// For `NativeHnsw`, this is currently a no-op as our implementation
