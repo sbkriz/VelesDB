@@ -354,3 +354,7 @@ harness = false
 name = "scalability_quick"
 harness = false
 required-features = ["internal-bench"]
+
+[[bench]]
+name = "chunked_insert_recall_benchmark"
+harness = false

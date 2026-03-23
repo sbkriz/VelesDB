@@ -3,9 +3,10 @@
 #![allow(deprecated)] // SimdDistance deprecated in favor of CachedSimdDistance
 
 use super::backend_adapter::*;
-use super::distance::SimdDistance;
+use super::distance::{DistanceEngine, SimdDistance};
 use super::graph::NativeHnsw;
 use crate::distance::DistanceMetric;
+use crate::metrics::recall_at_k;
 use tempfile::tempdir;
 
 // =========================================================================
@@ -39,7 +40,11 @@ fn test_parallel_insert_small_batch() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     let vectors: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 32]).collect();
-    let data: Vec<(&[f32], usize)> = vectors.iter().enumerate().map(|(i, v)| (v.as_slice(), i)).collect();
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
 
     hnsw.parallel_insert(&data).expect("test");
 
@@ -54,7 +59,11 @@ fn test_parallel_insert_large_batch() {
     // Use 50 vectors to stay under Rayon parallelization threshold (100)
     // This avoids deadlocks when tests run in parallel
     let vectors: Vec<Vec<f32>> = (0..50).map(|i| vec![i as f32 * 0.01; 32]).collect();
-    let data: Vec<(&[f32], usize)> = vectors.iter().enumerate().map(|(i, v)| (v.as_slice(), i)).collect();
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
 
     hnsw.parallel_insert(&data).expect("test");
 
@@ -265,5 +274,136 @@ fn test_native_backend_len_and_is_empty() {
     assert_eq!(
         <NativeHnsw<SimdDistance> as NativeHnswBackend>::len(&hnsw),
         1
+    );
+}
+
+// =========================================================================
+// TDD Tests: chunked Phase B for large batch insert (#364 — RED)
+// =========================================================================
+
+#[test]
+fn test_compute_chunk_size_boundaries() {
+    // Formula: (batch_len / 50).max(1000).min(5000)
+    assert_eq!(NativeHnsw::<SimdDistance>::compute_chunk_size(100), 1000);
+    assert_eq!(NativeHnsw::<SimdDistance>::compute_chunk_size(1_000), 1000);
+    assert_eq!(NativeHnsw::<SimdDistance>::compute_chunk_size(10_000), 1000);
+    assert_eq!(
+        NativeHnsw::<SimdDistance>::compute_chunk_size(100_000),
+        2000
+    );
+    assert_eq!(
+        NativeHnsw::<SimdDistance>::compute_chunk_size(500_000),
+        5000
+    );
+}
+
+#[test]
+fn test_parallel_insert_chunked_count() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Generate 2000 deterministic 32-D vectors using index-based values
+    let vectors: Vec<Vec<f32>> = (0..2000)
+        .map(|i| (0..32).map(|j| ((i * 32 + j) as f32) * 0.001).collect())
+        .collect();
+
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+
+    hnsw.parallel_insert(&data)
+        .expect("parallel_insert of 2000 vectors should succeed");
+
+    assert_eq!(hnsw.len(), 2000);
+}
+
+#[test]
+fn test_parallel_insert_chunked_ep_update() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Generate 2000 deterministic 32-D vectors
+    let vectors: Vec<Vec<f32>> = (0..2000)
+        .map(|i| (0..32).map(|j| ((i * 32 + j) as f32) * 0.001).collect())
+        .collect();
+
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+
+    hnsw.parallel_insert(&data)
+        .expect("parallel_insert of 2000 vectors should succeed");
+
+    // With 2000 nodes and deterministic PRNG (fixed seed 0x5DEE_CE66_D1A4_B5B5),
+    // node 0 is never assigned the highest layer. The entry point must have been
+    // promoted to a higher-layer node during chunked insertion.
+    let ep = *hnsw.entry_point.read();
+    let ep_id = ep.expect("entry_point should be Some after inserting 2000 vectors");
+    assert_ne!(
+        ep_id, 0,
+        "entry point should have been promoted beyond node 0 with 2000 inserts"
+    );
+}
+
+#[test]
+fn test_parallel_insert_chunked_recall() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Generate 2000 deterministic 32-D vectors with enough spread for recall testing
+    let vectors: Vec<Vec<f32>> = (0..2000)
+        .map(|i| (0..32).map(|j| ((i * 32 + j) as f32) * 0.001).collect())
+        .collect();
+
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+
+    hnsw.parallel_insert(&data)
+        .expect("parallel_insert of 2000 vectors should succeed");
+
+    // Brute-force distance engine (same metric as the index)
+    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let k = 10;
+    let ef_search = 128;
+    let num_queries = 50;
+
+    let mut total_recall = 0.0;
+
+    for q_idx in 0..num_queries {
+        // Deterministic query vector derived from query index
+        let query: Vec<f32> = (0..32)
+            .map(|j| ((q_idx * 7 + j * 13) as f32) * 0.002)
+            .collect();
+
+        // HNSW search
+        let hnsw_results = hnsw.search(&query, k, ef_search);
+        let hnsw_ids: Vec<usize> = hnsw_results.iter().map(|&(id, _)| id).collect();
+
+        // Brute-force ground truth: compute distance to every vector, sort, take top-k
+        let mut distances: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(id, v)| (id, bf_engine.distance(&query, v)))
+            .collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let ground_truth: Vec<usize> = distances.iter().take(k).map(|&(id, _)| id).collect();
+
+        total_recall += recall_at_k(&ground_truth, &hnsw_ids);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    // Reason: num_queries is a small constant (50); f64 is exact for integers up to 2^53.
+    let avg_recall = total_recall / num_queries as f64;
+
+    assert!(
+        avg_recall >= 0.90,
+        "average recall@{k} should be >= 0.90, got {avg_recall:.4}"
     );
 }
