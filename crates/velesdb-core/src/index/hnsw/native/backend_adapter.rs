@@ -173,15 +173,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let connect_start = self.bootstrap_entry_point(&assignments);
 
         self.connect_batch_chunked(&assignments[connect_start..], &processed, first_node)?;
-
-        // Phase C: final promotion across all assignments + bootstrap count
-        if let Some(best) = assignments.iter().max_by_key(|(_, layer)| *layer) {
-            self.promote_entry_point(best.0, best.1);
-        }
-        if connect_start > 0 {
-            self.count
-                .fetch_add(connect_start, std::sync::atomic::Ordering::Relaxed);
-        }
+        self.finalize_batch(&assignments, connect_start);
 
         Ok(())
     }
@@ -201,6 +193,22 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         }
     }
 
+    /// Final promotion of the highest-layer node and bootstrap count update.
+    ///
+    /// Called after `connect_batch_chunked` completes. Ensures the global
+    /// entry point reflects the best candidate across the entire batch, and
+    /// accounts for any bootstrapped node that was not counted by the
+    /// chunked phase.
+    fn finalize_batch(&self, assignments: &[(NodeId, usize)], connect_start: usize) {
+        if let Some(best) = assignments.iter().max_by_key(|(_, layer)| *layer) {
+            self.promote_entry_point(best.0, best.1);
+        }
+        if connect_start > 0 {
+            self.count
+                .fetch_add(connect_start, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     /// Computes the chunk size for batched Phase B insertion.
     ///
     /// Balances parallelism (larger chunks) against entry-point staleness
@@ -210,7 +218,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     pub(in crate::index::hnsw::native) fn compute_chunk_size(batch_len: usize) -> usize {
         const DEFAULT_CHUNK: usize = 1000;
         const MAX_CHUNK: usize = 5000;
-        (batch_len / 50).max(DEFAULT_CHUNK).min(MAX_CHUNK)
+        (batch_len / 50).clamp(DEFAULT_CHUNK, MAX_CHUNK)
     }
 
     /// Connects nodes in chunks, refreshing the entry point between chunks.
