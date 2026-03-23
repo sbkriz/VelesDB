@@ -528,10 +528,7 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if serialization or WAL write fails. On partial failure,
     /// entries written before the error are durable (WAL is append-only).
-    pub fn store_batch(
-        &mut self,
-        entries: &[(u64, &serde_json::Value)],
-    ) -> io::Result<()> {
+    pub fn store_batch(&mut self, entries: &[(u64, &serde_json::Value)]) -> io::Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -543,7 +540,14 @@ impl LogPayloadStorage {
             let mut record_buf = Vec::with_capacity(256);
 
             for &(id, payload) in entries {
-                write_store_record(&mut wal, id, payload, &mut offset, &mut index, &mut record_buf)?;
+                write_store_record(
+                    &mut wal,
+                    id,
+                    payload,
+                    &mut offset,
+                    &mut index,
+                    &mut record_buf,
+                )?;
             }
 
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
@@ -563,7 +567,14 @@ impl PayloadStorage for LogPayloadStorage {
             let mut offset = self.write_offset.write();
             let mut record_buf = Vec::new();
 
-            write_store_record(&mut wal, id, payload, &mut offset, &mut index, &mut record_buf)?;
+            write_store_record(
+                &mut wal,
+                id,
+                payload,
+                &mut offset,
+                &mut index,
+                &mut record_buf,
+            )?;
 
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
         }

@@ -258,9 +258,7 @@ impl HnswIndex {
         let timed_results: Vec<(Vec<ScoredResult>, u64)> = queries
             .par_iter()
             .zip(all_candidates.par_iter())
-            .map(|(query, candidates)| {
-                self.rerank_sort_and_truncate_timed(query, candidates, k)
-            })
+            .map(|(query, candidates)| self.rerank_sort_and_truncate_timed(query, candidates, k))
             .collect();
 
         // Update EMA once with mean latency from the entire batch

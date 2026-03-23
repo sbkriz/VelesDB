@@ -46,8 +46,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     )]
     pub(in crate::index::hnsw::native) fn pre_expand_layers(&self, total_nodes: usize) {
         let max_layer = if self.max_connections > 1 && total_nodes > 1 {
-            let log_m =
-                (total_nodes as f64).ln() / (self.max_connections as f64).ln();
+            let log_m = (total_nodes as f64).ln() / (self.max_connections as f64).ln();
             (log_m.ceil() as usize + 2).min(15)
         } else {
             15
