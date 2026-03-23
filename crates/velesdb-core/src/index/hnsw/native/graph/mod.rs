@@ -57,6 +57,10 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Maximum consecutive candidates without improving top-k before early termination.
     /// Default: `ef_construction / 4`. Set to `0` to disable.
     pub(crate) stagnation_limit: usize,
+    /// Node capacity pre-allocated by `pre_expand_layers()`. Allows `expand_layers()`
+    /// to skip the write lock when the insert falls within the pre-allocated range.
+    /// Transient: not serialized to disk.
+    pub(in crate::index::hnsw::native) pre_allocated_capacity: AtomicUsize,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -150,6 +154,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             level_mult,
             alpha,
             stagnation_limit: ef_construction / 4,
+            pre_allocated_capacity: AtomicUsize::new(0),
         }
     }
 

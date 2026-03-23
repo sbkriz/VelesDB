@@ -344,6 +344,63 @@ fn test_batch_search_fallback_without_gpu() {
 }
 
 // =========================================================================
+// Step 3.4 — Batch Adaptive matches single-query Adaptive
+// =========================================================================
+
+/// Verifies that `search_batch_parallel` with `Adaptive` quality produces
+/// results consistent with individual `search_with_quality(Adaptive)` calls.
+///
+/// Adaptive uses spread-based two-phase escalation, which is per-query and
+/// not batch-compatible. The batch path delegates to `search_with_quality`
+/// per-query to maintain behavioral consistency.
+#[test]
+fn test_batch_search_adaptive_matches_individual() {
+    let dim = 64;
+    let k = 5;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    let mut seed: u64 = 77;
+    for id in 0u64..500 {
+        let v = lcg_vector(&mut seed, dim);
+        index.insert(id, &v);
+    }
+    index.set_searching_mode();
+
+    let adaptive = SearchQuality::Adaptive {
+        min_ef: 32,
+        max_ef: 256,
+    };
+
+    let queries: Vec<Vec<f32>> = (0..8).map(|_| lcg_vector(&mut seed, dim)).collect();
+    let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
+
+    let batch_results = index.search_batch_parallel(&query_refs, k, adaptive);
+    let individual_results: Vec<Vec<crate::scored_result::ScoredResult>> = queries
+        .iter()
+        .map(|q| index.search_with_quality(q, k, adaptive))
+        .collect();
+
+    assert_eq!(batch_results.len(), individual_results.len());
+
+    for (i, (batch, individual)) in batch_results.iter().zip(&individual_results).enumerate() {
+        assert_eq!(
+            batch.len(),
+            individual.len(),
+            "Query {i}: result count mismatch"
+        );
+
+        // Top-1 must match (same algorithm, same data)
+        if !batch.is_empty() && !individual.is_empty() {
+            assert_eq!(
+                batch[0].id, individual[0].id,
+                "Query {i}: top-1 ID mismatch (batch={}, individual={})",
+                batch[0].id, individual[0].id,
+            );
+        }
+    }
+}
+
+// =========================================================================
 // Step 4.1 — RED: GPU brute-force parallel matches rayon
 // =========================================================================
 

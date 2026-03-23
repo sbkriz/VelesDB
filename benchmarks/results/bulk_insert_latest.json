@@ -1,0 +1,106 @@
+{
+  "engine": "VelesDB",
+  "version": "1.6.0",
+  "cpu": "Intel(R) Core(TM) i9-14900KF",
+  "ram_gb": 64,
+  "os": "Windows 10.0.26200",
+  "date": "2026-03-23",
+  "results": [
+    {
+      "count": 10000,
+      "dimension": 384,
+      "batch_size": 1000,
+      "total_time_s": 4.229,
+      "throughput_vec_s": 2364.7,
+      "batch_latency_p50_ms": 446.1,
+      "batch_latency_p95_ms": 553.0,
+      "batch_latency_p99_ms": 555.8,
+      "disk_size_mb": 30.9,
+      "path": "dict"
+    },
+    {
+      "count": 50000,
+      "dimension": 384,
+      "batch_size": 5000,
+      "total_time_s": 45.802,
+      "throughput_vec_s": 1091.7,
+      "batch_latency_p50_ms": 4958.1,
+      "batch_latency_p95_ms": 6333.1,
+      "batch_latency_p99_ms": 6446.3,
+      "disk_size_mb": 160.3,
+      "path": "dict"
+    },
+    {
+      "count": 10000,
+      "dimension": 768,
+      "batch_size": 1000,
+      "total_time_s": 5.545,
+      "throughput_vec_s": 1803.3,
+      "batch_latency_p50_ms": 581.7,
+      "batch_latency_p95_ms": 707.9,
+      "batch_latency_p99_ms": 737.6,
+      "disk_size_mb": 111.1,
+      "path": "dict"
+    },
+    {
+      "count": 50000,
+      "dimension": 768,
+      "batch_size": 5000,
+      "total_time_s": 77.019,
+      "throughput_vec_s": 649.2,
+      "batch_latency_p50_ms": 8288.6,
+      "batch_latency_p95_ms": 11052.1,
+      "batch_latency_p99_ms": 11100.6,
+      "disk_size_mb": 334.2,
+      "path": "dict"
+    },
+    {
+      "count": 10000,
+      "dimension": 384,
+      "batch_size": 1000,
+      "total_time_s": 4.304,
+      "throughput_vec_s": 2323.4,
+      "batch_latency_p50_ms": 464.1,
+      "batch_latency_p95_ms": 550.1,
+      "batch_latency_p99_ms": 559.7,
+      "disk_size_mb": 30.9,
+      "path": "numpy"
+    },
+    {
+      "count": 50000,
+      "dimension": 384,
+      "batch_size": 5000,
+      "total_time_s": 45.008,
+      "throughput_vec_s": 1110.9,
+      "batch_latency_p50_ms": 4783.3,
+      "batch_latency_p95_ms": 6301.0,
+      "batch_latency_p99_ms": 6433.5,
+      "disk_size_mb": 160.3,
+      "path": "numpy"
+    },
+    {
+      "count": 10000,
+      "dimension": 768,
+      "batch_size": 1000,
+      "total_time_s": 5.392,
+      "throughput_vec_s": 1854.5,
+      "batch_latency_p50_ms": 526.4,
+      "batch_latency_p95_ms": 755.3,
+      "batch_latency_p99_ms": 781.3,
+      "disk_size_mb": 111.1,
+      "path": "numpy"
+    },
+    {
+      "count": 50000,
+      "dimension": 768,
+      "batch_size": 5000,
+      "total_time_s": 81.434,
+      "throughput_vec_s": 614.0,
+      "batch_latency_p50_ms": 8599.0,
+      "batch_latency_p95_ms": 13346.9,
+      "batch_latency_p99_ms": 14386.0,
+      "disk_size_mb": 334.2,
+      "path": "numpy"
+    }
+  ]
+}

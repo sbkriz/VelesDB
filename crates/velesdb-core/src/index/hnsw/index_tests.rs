@@ -540,7 +540,7 @@ fn test_hnsw_insert_batch_parallel() {
     ];
 
     // Act
-    let inserted = index.insert_batch_parallel(vectors);
+    let inserted = index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
     index.set_searching_mode();
 
     // Assert
@@ -569,7 +569,7 @@ fn test_hnsw_insert_batch_parallel_skips_duplicates() {
         (1, vec![0.0, 1.0, 0.0]), // Duplicate ID
         (2, vec![0.0, 0.0, 1.0]), // New
     ];
-    let inserted = index.insert_batch_parallel(vectors);
+    let inserted = index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
     index.set_searching_mode();
 
     // Assert - Only 1 new vector should be inserted
@@ -595,7 +595,7 @@ fn test_hnsw_insert_batch_sequential() {
     ];
 
     // Act
-    let inserted = index.insert_batch_sequential(vectors);
+    let inserted = index.insert_batch_sequential(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
 
     // Assert
     assert_eq!(inserted, 5);
@@ -620,7 +620,7 @@ fn test_hnsw_insert_batch_sequential_skips_duplicates() {
         (1, vec![0.0, 1.0, 0.0]), // Duplicate ID
         (2, vec![0.0, 0.0, 1.0]), // New
     ];
-    let inserted = index.insert_batch_sequential(vectors);
+    let inserted = index.insert_batch_sequential(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
 
     // Assert - Only 1 new vector should be inserted
     assert_eq!(inserted, 1);
@@ -632,7 +632,7 @@ fn test_hnsw_insert_batch_sequential_skips_duplicates() {
 fn test_hnsw_insert_batch_sequential_empty() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    let vectors: Vec<(u64, Vec<f32>)> = vec![];
+    let vectors: Vec<(u64, &[f32])> = vec![];
 
     // Act
     let inserted = index.insert_batch_sequential(vectors);
@@ -648,7 +648,7 @@ fn test_hnsw_insert_batch_sequential_empty() {
 fn test_hnsw_insert_batch_sequential_wrong_dimension() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    let vectors: Vec<(u64, Vec<f32>)> = vec![(1, vec![1.0, 0.0])]; // Wrong dim
+    let vectors: Vec<(u64, &[f32])> = vec![(1, &[1.0, 0.0])]; // Wrong dim
 
     // Act - should panic
     index.insert_batch_sequential(vectors);
@@ -1044,7 +1044,7 @@ fn test_hnsw_large_batch_parallel_insert() {
         })
         .collect();
 
-    let inserted = index.insert_batch_parallel(vectors);
+    let inserted = index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
     index.set_searching_mode();
 
     assert_eq!(inserted, 200, "Should insert 200 vectors");
@@ -1721,7 +1721,7 @@ fn test_drop_stress_parallel_insert_then_drop() {
             .collect();
 
         // Parallel insert
-        let inserted = index.insert_batch_parallel(batch);
+        let inserted = index.insert_batch_parallel(batch.iter().map(|(id, v)| (*id, v.as_slice())));
         assert!(inserted > 0, "Should insert at least some vectors");
 
         // Immediate drop without set_searching_mode
@@ -2033,7 +2033,7 @@ mod proptest_tests {
                 .collect();
 
             // Use parallel insert (recommended API)
-            let count = index.insert_batch_parallel(batch);
+            let count = index.insert_batch_parallel(batch.iter().map(|(id, v)| (*id, v.as_slice())));
 
             prop_assert_eq!(count, batch_size, "Batch insert count mismatch");
             prop_assert_eq!(index.len(), batch_size, "Index len mismatch after batch");

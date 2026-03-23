@@ -163,6 +163,27 @@ class Collection:
         """
         ...
 
+    def upsert_bulk_numpy(
+        self,
+        vectors: "numpy.ndarray",
+        ids: List[int],
+        payloads: Optional[List[Optional[Dict[str, Any]]]] = None,
+    ) -> int:
+        """Bulk insert from numpy arrays for maximum throughput.
+
+        Bypasses Python dict parsing overhead. Vectors are read directly
+        from the numpy array without intermediate Python object conversion.
+
+        Args:
+            vectors: numpy.ndarray of shape (n, dimension), dtype float32
+            ids: list of int or numpy uint64 array (length n)
+            payloads: Optional list of payload dicts (length n)
+
+        Returns:
+            Number of inserted points
+        """
+        ...
+
     def stream_insert(self, points: List[Dict[str, Any]]) -> int:
         """Insert points via the streaming ingestion channel.
 

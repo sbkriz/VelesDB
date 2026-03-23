@@ -303,7 +303,7 @@ impl NativeHnswIndex {
         // Track newly registered IDs so we can roll back on failure
         let mut newly_registered_ids: Vec<u64> = Vec::new();
 
-        let data: Vec<(Vec<f32>, usize)> = items
+        let data: Vec<(&[f32], usize)> = items
             .iter()
             .filter_map(|(id, vec)| {
                 let is_new = self.mappings.register(*id);
@@ -318,14 +318,12 @@ impl NativeHnswIndex {
                     );
                     return None;
                 };
-                Some((vec.clone(), idx))
+                Some((vec.as_slice(), idx))
             })
             .collect();
 
-        let refs: Vec<(&Vec<f32>, usize)> = data.iter().map(|(v, i)| (v, *i)).collect();
-
         // If parallel_insert fails, roll back all newly registered mappings
-        if let Err(e) = self.inner.read().parallel_insert(&refs) {
+        if let Err(e) = self.inner.read().parallel_insert(&data) {
             for id in &newly_registered_ids {
                 self.mappings.remove(*id);
             }
@@ -334,7 +332,7 @@ impl NativeHnswIndex {
 
         if self.enable_vector_storage {
             for (vec, idx) in data {
-                self.vectors.insert(idx, &vec);
+                self.vectors.insert(idx, vec);
             }
         }
         Ok(())

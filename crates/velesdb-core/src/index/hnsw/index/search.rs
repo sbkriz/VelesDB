@@ -328,8 +328,9 @@ impl HnswIndex {
 
     /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
     ///
-    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`
-    /// and `search_with_rerank_quality`.
+    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`,
+    /// `search_with_rerank_quality`. The batch path in `batch.rs` uses
+    /// `rerank_sort_and_truncate_timed` directly for aggregated EMA updates.
     pub(super) fn rerank_sort_and_truncate(
         &self,
         query: &[f32],

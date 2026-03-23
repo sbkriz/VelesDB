@@ -37,7 +37,7 @@ fn bench_search_latency(c: &mut Criterion) {
     let engine_native = SimdDistance::new(DistanceMetric::Euclidean);
     let native_hnsw = NativeHnsw::new(engine_native, 32, 200, num_vectors);
     for v in &vectors {
-        native_hnsw.insert(v.clone()).expect("bench");
+        native_hnsw.insert(v).expect("bench");
     }
 
     // === Build DualPrecisionHnsw (new) ===
@@ -110,7 +110,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
                 let engine = SimdDistance::new(DistanceMetric::Euclidean);
                 let hnsw = NativeHnsw::new(engine, 32, 200, num_vectors);
                 for v in &vectors {
-                    hnsw.insert(v.clone()).expect("bench");
+                    hnsw.insert(v).expect("bench");
                 }
                 black_box(hnsw.len())
             });

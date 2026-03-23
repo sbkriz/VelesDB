@@ -89,7 +89,7 @@ pub trait NativeHnswBackend: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
-    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()>;
+    fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()>;
 
     /// Sets the index to searching mode after bulk insertions.
     fn set_searching_mode(&mut self, mode: bool);
@@ -151,24 +151,59 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     ///
     /// # Note
     ///
-    /// Unlike sequential insert, parallel insert may result in slightly different
-    /// graph structures due to race conditions during neighbor selection.
-    /// This is expected behavior and doesn't affect correctness.
-    pub fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()> {
+    /// Graph structure may differ from sequential insertion due to concurrent
+    /// neighbor selection. This does not affect search correctness.
+    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()> {
         // For small batches, sequential is faster due to parallelization overhead
         if data.len() < 100 {
             for (vec, _idx) in data {
-                self.insert((*vec).clone())?;
+                self.insert(vec)?;
             }
             return Ok(());
         }
 
-        // Parallel insertion using rayon
-        data.par_iter()
-            .try_for_each(|(vec, _idx)| -> crate::error::Result<()> {
-                self.insert((*vec).clone())?;
+        // Phase A: Batch allocate — stores vectors, assigns layers (single lock scopes)
+        let vectors: Vec<&[f32]> = data.iter().map(|(v, _)| *v).collect();
+        let (assignments, processed) = self.allocate_batch(&vectors)?;
+        if assignments.is_empty() {
+            return Ok(());
+        }
+
+        let first_node = assignments[0].0;
+        let ep_snapshot = *self.entry_point.read();
+
+        // Bootstrap: if index was empty, establish the first node as entry point
+        // before Phase B so other nodes have a valid starting point for search.
+        let connect_start = if ep_snapshot.is_none() {
+            let (node_id, layer) = assignments[0];
+            self.promote_entry_point(node_id, layer);
+            1
+        } else {
+            0
+        };
+
+        // Phase B: Parallel connect — each node searches and connects from
+        // the entry point. Uses read locks + per-node neighbor write locks.
+        let ep_id = self.entry_point.read().unwrap_or(first_node);
+        assignments[connect_start..]
+            .par_iter()
+            .try_for_each(|(node_id, layer)| -> crate::error::Result<()> {
+                let batch_idx = node_id - first_node;
+                let query: &[f32] = &processed[batch_idx];
+                let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
+                self.connect_node(*node_id, query, *layer, current_ep);
                 Ok(())
-            })
+            })?;
+
+        // Phase C: Promote the highest-layer node as entry point + update count.
+        // Runs after all connects complete — no unconnected node is ever visible.
+        if let Some(best) = assignments.iter().max_by_key(|(_, layer)| *layer) {
+            self.promote_entry_point(best.0, best.1);
+        }
+        self.count
+            .fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+
+        Ok(())
     }
 
     /// Sets the index to searching mode after bulk insertions.
@@ -390,6 +425,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             level_mult,
             alpha: 1.0,
             stagnation_limit: graph.ef_construction / 4,
+            pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -551,7 +587,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
 
     fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<()> {
         let (vector, expected_idx) = data;
-        let assigned_id = self.insert(vector.to_vec())?;
+        let assigned_id = self.insert(vector)?;
         if assigned_id != expected_idx {
             tracing::warn!(
                 "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id}"
@@ -560,7 +596,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
         Ok(())
     }
 
-    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()> {
+    fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()> {
         NativeHnsw::parallel_insert(self, data)
     }
 

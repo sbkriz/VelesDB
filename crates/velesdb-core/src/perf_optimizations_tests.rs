@@ -47,7 +47,7 @@ fn test_contiguous_vectors_push_batch() {
         .collect();
 
     let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-    let added = cv.push_batch(refs.into_iter()).expect("test");
+    let added = cv.push_batch(&refs).expect("test");
 
     assert_eq!(added, 50);
     assert_eq!(cv.len(), 50);

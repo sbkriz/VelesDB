@@ -66,7 +66,7 @@ fn bench_hnsw_insert_parallel(c: &mut Criterion) {
 
                 b.iter(|| {
                     let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
-                    let inserted = index.insert_batch_parallel(vectors.clone());
+                    let inserted = index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
                     index.set_searching_mode();
                     black_box(inserted)
                 });

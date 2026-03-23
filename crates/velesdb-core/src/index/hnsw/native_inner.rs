@@ -70,7 +70,7 @@ impl NativeHnswInner {
     /// Returns an error if allocation, insertion, or ID-mapping consistency fails.
     pub fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<usize> {
         let (vector, expected_idx) = data;
-        let assigned_id = self.inner.insert(vector.to_vec())?;
+        let assigned_id = self.inner.insert(vector)?;
         if assigned_id != expected_idx {
             tracing::warn!(
                 "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id} \
@@ -85,7 +85,7 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
-    pub fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()> {
+    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()> {
         self.inner.parallel_insert(data)
     }
 

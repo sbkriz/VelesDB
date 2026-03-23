@@ -98,6 +98,89 @@ impl Collection {
         })
     }
 
+    /// Bulk insert from numpy arrays for maximum throughput.
+    ///
+    /// Bypasses Python dict parsing overhead by accepting vectors as a 2D
+    /// numpy array and IDs as a 1D array. Payloads are optional.
+    ///
+    /// Args:
+    ///     vectors: numpy.ndarray of shape (n, dimension), dtype float32
+    ///     ids: numpy.ndarray of shape (n,), dtype uint64 (or list of int)
+    ///     payloads: Optional list of payload dicts (same length as ids)
+    ///
+    /// Returns:
+    ///     Number of inserted points
+    ///
+    /// Example:
+    ///     >>> import numpy as np
+    ///     >>> vectors = np.random.randn(1000, 384).astype(np.float32)
+    ///     >>> ids = np.arange(1000, dtype=np.uint64)
+    ///     >>> count = collection.upsert_bulk_numpy(vectors, ids)
+    #[pyo3(signature = (vectors, ids, payloads=None))]
+    fn upsert_bulk_numpy(
+        &self,
+        vectors: numpy::PyReadonlyArray2<f32>,
+        ids: Vec<u64>,
+        payloads: Option<Vec<Option<HashMap<String, PyObject>>>>,
+    ) -> PyResult<usize> {
+        Python::with_gil(|py| {
+            let array = vectors.as_array();
+            let n = array.nrows();
+            let _dim = array.ncols();
+
+            if ids.len() != n {
+                return Err(PyValueError::new_err(format!(
+                    "ids length ({}) must match vectors row count ({n})",
+                    ids.len()
+                )));
+            }
+
+            if let Some(ref p) = payloads {
+                if p.len() != n {
+                    return Err(PyValueError::new_err(format!(
+                        "payloads length ({}) must match vectors row count ({n})",
+                        p.len()
+                    )));
+                }
+            }
+
+            let mut core_points = Vec::with_capacity(n);
+
+            for i in 0..n {
+                let row = array.row(i);
+                let vec_slice = row.as_slice().ok_or_else(|| {
+                    PyValueError::new_err("numpy array must be C-contiguous")
+                })?;
+
+                let payload = if let Some(ref p_list) = payloads {
+                    match &p_list[i] {
+                        Some(dict) => {
+                            let json_map: serde_json::Map<String, serde_json::Value> = dict
+                                .iter()
+                                .filter_map(|(k, v)| {
+                                    python_to_json(py, v).map(|jv| (k.clone(), jv))
+                                })
+                                .collect();
+                            Some(serde_json::Value::Object(json_map))
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+
+                core_points.push(Point::new(ids[i], vec_slice.to_vec(), payload));
+            }
+
+            // Release GIL-dependent references before calling into core
+            drop(array);
+
+            self.inner
+                .upsert_bulk(&core_points)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_bulk: {e}")))
+        })
+    }
+
     /// Get points by their IDs.
     #[pyo3(signature = (ids))]
     fn get(&self, ids: Vec<u64>) -> PyResult<Vec<Option<HashMap<String, PyObject>>>> {

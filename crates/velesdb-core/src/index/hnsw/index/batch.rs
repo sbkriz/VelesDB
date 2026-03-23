@@ -8,7 +8,7 @@ use rayon::prelude::*;
 impl HnswIndex {
     /// Prepares vectors for batch insertion: validates dimensions and registers IDs.
     ///
-    /// Returns a vector of (`internal_index`, vector) pairs ready for insertion.
+    /// Returns a vector of (`internal_index`, vector slice) pairs ready for insertion.
     /// Duplicates are automatically skipped.
     ///
     /// # Performance
@@ -16,15 +16,16 @@ impl HnswIndex {
     /// - Single pass over input (no intermediate collection)
     /// - Pre-allocated output vector
     /// - Inline dimension validation
+    /// - Zero-copy: stores borrowed slices, no cloning
     #[inline]
-    pub(crate) fn prepare_batch_insert<I>(&self, vectors: I) -> Vec<(usize, Vec<f32>)>
+    pub(crate) fn prepare_batch_insert<'a, I>(&self, vectors: I) -> Vec<(usize, &'a [f32])>
     where
-        I: IntoIterator<Item = (u64, Vec<f32>)>,
+        I: IntoIterator<Item = (u64, &'a [f32])>,
     {
         let iter = vectors.into_iter();
         let (lower, upper) = iter.size_hint();
         let capacity = upper.unwrap_or(lower);
-        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(capacity);
+        let mut to_insert: Vec<(usize, &'a [f32])> = Vec::with_capacity(capacity);
 
         for (id, vector) in iter {
             // Inline validation for hot path
@@ -80,9 +81,9 @@ impl HnswIndex {
     /// let inserted = index.insert_batch_parallel(vectors);
     /// println!("Inserted {} vectors", inserted);
     /// ```
-    pub fn insert_batch_parallel<I>(&self, vectors: I) -> usize
+    pub fn insert_batch_parallel<'a, I>(&self, vectors: I) -> usize
     where
-        I: IntoIterator<Item = (u64, Vec<f32>)>,
+        I: IntoIterator<Item = (u64, &'a [f32])>,
     {
         let to_insert = self.prepare_batch_insert(vectors);
         let count = to_insert.len();
@@ -92,8 +93,8 @@ impl HnswIndex {
         }
 
         // Prepare references for HNSW batch insertion
-        let refs_for_hnsw: Vec<(&Vec<f32>, usize)> =
-            to_insert.iter().map(|(idx, vec)| (vec, *idx)).collect();
+        let refs_for_hnsw: Vec<(&[f32], usize)> =
+            to_insert.iter().map(|(idx, vec)| (*vec, *idx)).collect();
 
         // RF-1: Insert into HNSW graph BEFORE storing vectors.
         // If parallel_insert fails, we avoid orphaned vectors in sidecar storage.
@@ -128,15 +129,15 @@ impl HnswIndex {
         since = "0.8.5",
         note = "Use insert_batch_parallel instead - 15x faster (29k/s vs 1.9k/s)"
     )]
-    pub fn insert_batch_sequential<I>(&self, vectors: I) -> usize
+    pub fn insert_batch_sequential<'a, I>(&self, vectors: I) -> usize
     where
-        I: IntoIterator<Item = (u64, Vec<f32>)>,
+        I: IntoIterator<Item = (u64, &'a [f32])>,
     {
         let to_insert = self.prepare_batch_insert(vectors);
         let mut inserted = 0;
 
         for (idx, vec) in &to_insert {
-            if let Err(e) = self.inner.write().insert((vec.as_slice(), *idx)) {
+            if let Err(e) = self.inner.write().insert((*vec, *idx)) {
                 tracing::error!("insert_batch_sequential: insert failed: {e}");
                 // Roll back the mapping registered by prepare_batch_insert
                 if let Some(id) = self.mappings.get_id(*idx) {
@@ -188,10 +189,15 @@ impl HnswIndex {
     ) -> Vec<Vec<ScoredResult>> {
         self.validate_batch_dimensions(queries);
 
-        // Perfect mode or very small collections: delegate to search_with_quality
-        // per-query for brute-force 100% recall (matches single-query behavior).
-        if matches!(quality, SearchQuality::Perfect)
-            || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
+        // Perfect, Adaptive, or very small collections: delegate to search_with_quality
+        // per-query to match single-query behavior.
+        // - Perfect: uses brute-force for 100% recall
+        // - Adaptive: uses spread-based two-phase escalation (not batch-compatible)
+        // - Small (≤100): uses brute-force for fully-connected graph safety
+        if matches!(
+            quality,
+            SearchQuality::Perfect | SearchQuality::Adaptive { .. }
+        ) || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
         {
             return queries
                 .par_iter()

@@ -312,16 +312,39 @@ impl ContiguousVectors {
     ///
     /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
-    pub fn push_batch<'a>(
-        &mut self,
-        vectors: impl Iterator<Item = &'a [f32]>,
-    ) -> crate::error::Result<usize> {
-        let mut added = 0;
-        for vector in vectors {
-            self.push(vector)?;
-            added += 1;
+    pub fn push_batch(&mut self, vectors: &[&[f32]]) -> crate::error::Result<usize> {
+        if vectors.is_empty() {
+            return Ok(0);
         }
-        Ok(added)
+        // Validate all dimensions upfront to prevent partial writes on error.
+        for vector in vectors {
+            if vector.len() != self.dimension {
+                return Err(crate::error::Error::DimensionMismatch {
+                    expected: self.dimension,
+                    actual: vector.len(),
+                });
+            }
+        }
+        self.ensure_capacity(self.count + vectors.len())?;
+        for vector in vectors {
+            let offset = self.count * self.dimension;
+            // SAFETY: ensure_capacity (called above) guarantees room for
+            // self.count + vectors.len() elements, and all dimensions were
+            // validated above so offset + dimension is within bounds.
+            // - Condition 1: offset + dimension is within allocated buffer.
+            // - Condition 2: Both pointers are valid and aligned for f32.
+            // - Condition 3: &mut self guarantees exclusive access — no data race.
+            // Reason: Batch push with single pre-allocation.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    vector.as_ptr(),
+                    self.data.as_ptr().add(offset),
+                    self.dimension,
+                );
+            }
+            self.count += 1;
+        }
+        Ok(vectors.len())
     }
 
     /// Gets a vector by index.

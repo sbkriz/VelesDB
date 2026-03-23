@@ -173,7 +173,7 @@ mod tests {
             // Reason: cast_precision_loss acceptable for test data generation.
             #[allow(clippy::cast_precision_loss)]
             let v: Vec<f32> = (0..dim).map(|d| (i * dim + d) as f32).collect();
-            hnsw.insert(v).unwrap();
+            hnsw.insert(&v).unwrap();
         }
         hnsw
     }

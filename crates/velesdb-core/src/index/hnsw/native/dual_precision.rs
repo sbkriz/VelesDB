@@ -153,7 +153,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             }
         }
 
-        self.inner.insert(vector)
+        self.inner.insert(&vector)
     }
 
     /// Trains the quantizer on accumulated samples.

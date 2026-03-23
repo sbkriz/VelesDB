@@ -108,6 +108,54 @@ fn compute_store_crc(id: u64, payload: &[u8]) -> u32 {
     crc32_hash(&buf)
 }
 
+/// Serializes a payload and writes a CRC-protected WAL store record.
+///
+/// Shared by `store()` (per-point) and `store_batch()` (batched) to avoid
+/// duplicating the record-building logic.
+///
+/// Reuses `record_buf` to avoid per-call heap allocation in batch mode.
+fn write_store_record(
+    wal: &mut io::BufWriter<File>,
+    id: u64,
+    payload: &serde_json::Value,
+    offset: &mut u64,
+    index: &mut FxHashMap<u64, u64>,
+    record_buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    let record_start = *offset;
+
+    // Header: Marker(0xC3) | ID(8) | Len placeholder(4)
+    record_buf.clear();
+    record_buf.push(CRC_STORE_MARKER);
+    record_buf.extend_from_slice(&id.to_le_bytes());
+    let len_pos = record_buf.len();
+    record_buf.extend_from_slice(&0u32.to_le_bytes());
+
+    // Serialize directly into record_buf — zero intermediate allocation
+    let payload_start = record_buf.len();
+    serde_json::to_writer(&mut *record_buf, payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let payload_len = record_buf.len() - payload_start;
+
+    // Patch length field now that we know the serialized size
+    let len_u32 = u32::try_from(payload_len)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
+    record_buf[len_pos..len_pos + 4].copy_from_slice(&len_u32.to_le_bytes());
+
+    // CRC over the record prefix (everything before the CRC field)
+    let crc = crc32_hash(record_buf);
+    record_buf.extend_from_slice(&crc.to_le_bytes());
+
+    wal.write_all(record_buf)?;
+
+    let bytes_written = 1 + 8 + 4 + u64::from(len_u32) + 4;
+    *offset += bytes_written;
+    // Marker(1) + ID(8) = 9 bytes before the length field
+    index.insert(id, record_start + 9);
+
+    Ok(())
+}
+
 /// Computes CRC32 for a WAL delete record (marker + id).
 fn compute_delete_crc(id: u64) -> u32 {
     let mut buf = [0u8; 1 + 8];
@@ -469,44 +517,55 @@ impl LogPayloadStorage {
             }
         }
     }
-}
 
-impl PayloadStorage for LogPayloadStorage {
-    fn store(&mut self, id: u64, payload: &serde_json::Value) -> io::Result<()> {
-        let payload_bytes = serde_json::to_vec(payload)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    /// Stores multiple payloads in a single batch operation.
+    ///
+    /// Optimized for bulk imports: acquires WAL + index + offset locks once,
+    /// writes all records sequentially, and performs a **single** durability
+    /// sync at the end instead of per-point fsync.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or WAL write fails. On partial failure,
+    /// entries written before the error are durable (WAL is append-only).
+    pub fn store_batch(
+        &mut self,
+        entries: &[(u64, &serde_json::Value)],
+    ) -> io::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
 
-        let len_u32 = u32::try_from(payload_bytes.len())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
-
-        let crc = compute_store_crc(id, &payload_bytes);
-
-        // Scoped block: all lock guards are released before the auto-snapshot
-        // check, which itself acquires locks (see `create_snapshot`).
         {
             let mut wal = self.wal.write();
             let mut index = self.index.write();
             let mut offset = self.write_offset.write();
+            let mut record_buf = Vec::with_capacity(256);
 
-            let record_start = *offset;
+            for &(id, payload) in entries {
+                write_store_record(&mut wal, id, payload, &mut offset, &mut index, &mut record_buf)?;
+            }
 
-            // H-3: Build complete record in one buffer to minimize partial-write window.
-            // CRC-protected format: Marker(0xC3) | ID(8) | Len(4) | Data(N) | CRC32(4)
-            let mut record = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len() + 4);
-            record.push(CRC_STORE_MARKER);
-            record.extend_from_slice(&id.to_le_bytes());
-            record.extend_from_slice(&len_u32.to_le_bytes());
-            record.extend_from_slice(&payload_bytes);
-            record.extend_from_slice(&crc.to_le_bytes());
-            wal.write_all(&record)?;
-
-            // Sync WAL according to durability mode (resync offset on failure).
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
+        }
 
-            // Marker(1) + ID(8) = 9 bytes before the length field
-            let bytes_written = 1 + 8 + 4 + u64::from(len_u32) + 4;
-            *offset += bytes_written;
-            index.insert(id, record_start + 9);
+        self.maybe_auto_snapshot();
+        Ok(())
+    }
+}
+
+impl PayloadStorage for LogPayloadStorage {
+    fn store(&mut self, id: u64, payload: &serde_json::Value) -> io::Result<()> {
+        // Scoped block: lock guards released before auto-snapshot (which acquires locks).
+        {
+            let mut wal = self.wal.write();
+            let mut index = self.index.write();
+            let mut offset = self.write_offset.write();
+            let mut record_buf = Vec::new();
+
+            write_store_record(&mut wal, id, payload, &mut offset, &mut index, &mut record_buf)?;
+
+            Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
         }
 
         self.maybe_auto_snapshot();
