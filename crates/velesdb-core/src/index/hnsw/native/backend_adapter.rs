@@ -245,6 +245,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             chunk
                 .par_iter()
                 .try_for_each(|(node_id, layer)| -> crate::error::Result<()> {
+                    // Invariant: node_id >= first_node (allocate_batch assigns sequential IDs from first_node)
                     let batch_idx = node_id - first_node;
                     let query: &[f32] = &processed[batch_idx];
                     let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);

@@ -338,8 +338,9 @@ fn test_parallel_insert_chunked_ep_update() {
     hnsw.parallel_insert(&data)
         .expect("parallel_insert of 2000 vectors should succeed");
 
-    // With 2000 nodes, the entry point should have been promoted beyond node 0.
-    // The probability of node 0 being assigned the highest layer is < 0.1%.
+    // With 2000 nodes and deterministic PRNG (fixed seed 0x5DEE_CE66_D1A4_B5B5),
+    // node 0 is never assigned the highest layer. The entry point must have been
+    // promoted to a higher-layer node during chunked insertion.
     let ep = *hnsw.entry_point.read();
     let ep_id = ep.expect("entry_point should be Some after inserting 2000 vectors");
     assert_ne!(

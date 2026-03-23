@@ -11,6 +11,12 @@
 //! cargo test -p velesdb-core --test chunked_insert_recall \
 //!     --features persistence -- --ignored --nocapture --test-threads=1
 //! ```
+//!
+//! # Metric coverage
+//!
+//! This test uses Euclidean distance. The criterion benchmark
+//! (`chunked_insert_recall_benchmark`) uses Cosine similarity,
+//! providing multi-metric validation of the chunked insert path.
 
 use velesdb_core::index::hnsw::{HnswParams, SearchQuality};
 use velesdb_core::index::HnswIndex;
