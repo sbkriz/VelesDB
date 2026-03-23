@@ -172,26 +172,16 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let first_node = assignments[0].0;
         let connect_start = self.bootstrap_entry_point(&assignments);
 
-        // Phase B: Parallel connect — each node searches and connects from
-        // the entry point. Uses read locks + per-node neighbor write locks.
-        let ep_id = self.entry_point.read().unwrap_or(first_node);
-        assignments[connect_start..].par_iter().try_for_each(
-            |(node_id, layer)| -> crate::error::Result<()> {
-                let batch_idx = node_id - first_node;
-                let query: &[f32] = &processed[batch_idx];
-                let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
-                self.connect_node(*node_id, query, *layer, current_ep);
-                Ok(())
-            },
-        )?;
+        self.connect_batch_chunked(&assignments[connect_start..], &processed, first_node)?;
 
-        // Phase C: Promote the highest-layer node as entry point + update count.
-        // Runs after all connects complete — no unconnected node is ever visible.
+        // Phase C: final promotion across all assignments + bootstrap count
         if let Some(best) = assignments.iter().max_by_key(|(_, layer)| *layer) {
             self.promote_entry_point(best.0, best.1);
         }
-        self.count
-            .fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+        if connect_start > 0 {
+            self.count
+                .fetch_add(connect_start, std::sync::atomic::Ordering::Relaxed);
+        }
 
         Ok(())
     }
@@ -221,6 +211,47 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         const DEFAULT_CHUNK: usize = 1000;
         const MAX_CHUNK: usize = 5000;
         (batch_len / 50).max(DEFAULT_CHUNK).min(MAX_CHUNK)
+    }
+
+    /// Connects nodes in chunks, refreshing the entry point between chunks.
+    ///
+    /// Each chunk runs `par_iter` over its assignments, then promotes the
+    /// highest-layer node and increments the count. This keeps the entry
+    /// point fresher than a single monolithic `par_iter` over the entire
+    /// batch, improving recall for large insertions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any node connection fails.
+    fn connect_batch_chunked(
+        &self,
+        assignments: &[(NodeId, usize)],
+        processed: &[std::borrow::Cow<'_, [f32]>],
+        first_node: NodeId,
+    ) -> crate::error::Result<()> {
+        let chunk_size = Self::compute_chunk_size(assignments.len());
+
+        for chunk in assignments.chunks(chunk_size) {
+            let ep_id = (*self.entry_point.read()).unwrap_or(first_node);
+
+            chunk
+                .par_iter()
+                .try_for_each(|(node_id, layer)| -> crate::error::Result<()> {
+                    let batch_idx = node_id - first_node;
+                    let query: &[f32] = &processed[batch_idx];
+                    let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
+                    self.connect_node(*node_id, query, *layer, current_ep);
+                    Ok(())
+                })?;
+
+            // Inter-chunk: promote best entry point and increment count
+            if let Some(best) = chunk.iter().max_by_key(|(_, layer)| *layer) {
+                self.promote_entry_point(best.0, best.1);
+            }
+            self.count
+                .fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     /// Sets the index to searching mode after bulk insertions.
