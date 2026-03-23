@@ -62,7 +62,7 @@ pub trait HnswBackend: Send + Sync {
     /// # Arguments
     ///
     /// * `data` - Slice of (vector reference, internal index) pairs
-    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]);
+    fn parallel_insert(&self, data: &[(&[f32], usize)]);
 
     /// Sets the index to searching mode after bulk insertions.
     ///

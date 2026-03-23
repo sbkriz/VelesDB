@@ -167,7 +167,7 @@ fn bench_insert_throughput(c: &mut Criterion) {
                 b.iter(|| {
                     let mut cv = ContiguousVectors::new(dim, count).expect("bench");
                     let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-                    let added = cv.push_batch(refs.into_iter()).expect("bench");
+                    let added = cv.push_batch(&refs).expect("bench");
                     black_box(added)
                 })
             },

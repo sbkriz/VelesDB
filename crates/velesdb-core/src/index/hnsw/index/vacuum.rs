@@ -146,7 +146,7 @@ impl HnswIndex {
         let new_vectors = ShardedVectors::new(self.dimension);
 
         // 4. Bulk insert into new structures
-        let refs_for_hnsw: Vec<(&Vec<f32>, usize)> = active_vectors
+        let refs_for_hnsw: Vec<(&[f32], usize)> = active_vectors
             .iter()
             .enumerate()
             .map(|(idx, (id, vec))| {
@@ -158,7 +158,7 @@ impl HnswIndex {
                 );
                 // Store in new vectors
                 new_vectors.insert(idx, vec);
-                (vec, idx)
+                (vec.as_slice(), idx)
             })
             .collect();
 

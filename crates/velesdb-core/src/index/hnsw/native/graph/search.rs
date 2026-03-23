@@ -72,7 +72,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
 
         let candidates =
-            self.search_layer(query, vec![current_ep], ef_search, 0, self.stagnation_limit);
+            self.search_layer(query, &[current_ep], ef_search, 0, self.stagnation_limit);
         candidates.into_iter().take(k).collect()
     }
 
@@ -146,7 +146,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
 
         let candidates =
-            self.search_layer(query, entry_points, ef_search, 0, self.stagnation_limit);
+            self.search_layer(query, &entry_points, ef_search, 0, self.stagnation_limit);
         candidates.into_iter().take(k).collect()
     }
 
@@ -273,7 +273,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     pub(in crate::index::hnsw::native::graph) fn search_layer(
         &self,
         query: &[f32],
-        entry_points: Vec<NodeId>,
+        entry_points: &[NodeId],
         ef: usize,
         layer: usize,
         stagnation_limit: usize,
@@ -289,7 +289,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let prefetch_distance = crate::simd_native::calculate_prefetch_distance(dimension);
             let mut stagnation_count: usize = 0;
 
-            for ep in entry_points {
+            for &ep in entry_points {
                 // SAFETY: ep is a valid node_id from entry_point or random probe,
                 // always IDs of successfully inserted nodes.
                 // - Condition 1: ep < vectors.len().
@@ -376,10 +376,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         result_vec
     }
 
-    /// Prepares the query vector for search. Returns `Cow::Borrowed` for non-cosine
-    /// metrics (zero-allocation) or `Cow::Owned` with normalized copy for cosine.
+    /// Prepares a query vector for search or insertion. Returns `Cow::Borrowed`
+    /// for non-cosine metrics (zero-allocation) or `Cow::Owned` with normalized
+    /// copy for cosine.
     #[inline]
-    fn prepare_query<'a>(&self, query: &'a [f32]) -> Cow<'a, [f32]> {
+    pub(in crate::index::hnsw::native) fn prepare_query<'a>(
+        &self,
+        query: &'a [f32],
+    ) -> Cow<'a, [f32]> {
         if self.distance.is_pre_normalized()
             && self.distance.metric() == crate::DistanceMetric::Cosine
         {
