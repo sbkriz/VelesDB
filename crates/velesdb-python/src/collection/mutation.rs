@@ -148,9 +148,9 @@ impl Collection {
 
             for i in 0..n {
                 let row = array.row(i);
-                let vec_slice = row.as_slice().ok_or_else(|| {
-                    PyValueError::new_err("numpy array must be C-contiguous")
-                })?;
+                let vec_slice = row
+                    .as_slice()
+                    .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
 
                 let payload = if let Some(ref p_list) = payloads {
                     match &p_list[i] {

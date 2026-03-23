@@ -149,7 +149,8 @@ fn bench_parallel_insert(c: &mut Criterion) {
                     },
                     |(index, vecs)| {
                         // Measure: parallel batch insert
-                        let inserted = index.insert_batch_parallel(vecs.iter().map(|(id, v)| (*id, v.as_slice())));
+                        let inserted = index
+                            .insert_batch_parallel(vecs.iter().map(|(id, v)| (*id, v.as_slice())));
                         index.set_searching_mode();
                         black_box(inserted)
                     },

@@ -121,8 +121,11 @@ fn bench_parallel_insert(c: &mut Criterion) {
         b.iter(|| {
             let distance = SimdDistance::new(DistanceMetric::Euclidean);
             let hnsw = NativeHnsw::new(distance, 16, 200, N_VECTORS);
-            let data: Vec<(&[f32], usize)> =
-                vectors.iter().enumerate().map(|(i, v)| (v.as_slice(), i)).collect();
+            let data: Vec<(&[f32], usize)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (v.as_slice(), i))
+                .collect();
             hnsw.parallel_insert(&data).expect("bench");
             black_box(&hnsw);
         });
