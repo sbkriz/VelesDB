@@ -9,7 +9,6 @@ use crate::scored_result::ScoredResult;
 impl VectorIndex for HnswIndex {
     #[inline]
     fn insert(&self, id: u64, vector: &[f32]) {
-        // Inline validation for hot path performance
         assert_eq!(
             vector.len(),
             self.dimension,
@@ -18,49 +17,39 @@ impl VectorIndex for HnswIndex {
             vector.len()
         );
 
-        // Register the ID and get internal index with ShardedMappings
-        // Check if ID already exists - hnsw_rs doesn't support updates!
-        // register() returns None if ID already exists
-        let Some(idx) = self.mappings.register(id) else {
-            return; // ID already exists, skip insertion
-        };
+        let result = self.upsert_mapping(id);
 
-        // Insert into HNSW index (RF-1: using HnswInner method)
-        // Perf: Minimize lock hold time by not explicitly dropping
-        if let Err(e) = self.inner.write().insert((vector, idx)) {
-            // Roll back the mapping to avoid orphaned entries
-            self.mappings.remove(id);
+        if let Err(e) = self.inner.write().insert((vector, result.idx)) {
+            self.rollback_upsert(id, &result);
             tracing::error!("HnswIndex::insert failed for id={id}: {e}");
             return;
         }
 
-        // Perf: Conditionally store vector for SIMD re-ranking
-        // When disabled, saves ~50% memory and ~2x insert speed
         if self.enable_vector_storage {
-            self.vectors.insert(idx, vector);
+            self.vectors.insert(result.idx, vector);
         }
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        // Perf: Use Balanced quality for best latency/recall tradeoff
-        // ef_search=128 provides ~95% recall with minimal latency
         self.search_with_quality(query, k, SearchQuality::Balanced)
     }
 
     /// Performs a **soft delete** of the vector.
     ///
-    /// # Important
+    /// Removes the ID from mappings and cleans up stored vector data.
+    /// The HNSW graph node becomes a tombstone, filtered out during search.
     ///
-    /// This removes the ID from the mappings but **does NOT remove the vector
-    /// from the HNSW graph** (`hnsw_rs` doesn't support true deletion).
-    /// The vector will no longer appear in search results, but memory is not freed.
-    ///
-    /// For workloads with many deletions, consider periodic index rebuilding
-    /// to reclaim memory and maintain optimal graph structure.
+    /// For workloads with many deletions, consider periodic `vacuum()` to
+    /// rebuild the graph and reclaim memory.
     fn remove(&self, id: u64) -> bool {
-        // EPIC-A.1: Lock-free removal with ShardedMappings
-        // Soft delete: vector remains in HNSW graph but is excluded from results
-        self.mappings.remove(id).is_some()
+        if let Some(old_idx) = self.mappings.remove(id) {
+            if self.enable_vector_storage {
+                self.vectors.remove(old_idx);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     fn len(&self) -> usize {

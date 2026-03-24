@@ -2,33 +2,44 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
+use crate::index::hnsw::upsert::UpsertResult;
 use crate::scored_result::ScoredResult;
 use rayon::prelude::*;
+
+/// Prepared batch of vectors ready for HNSW graph insertion.
+///
+/// Contains both the data needed for `parallel_insert` and the rollback
+/// information needed to restore mappings on failure.
+pub(crate) struct PreparedBatch<'a> {
+    /// `(internal_idx, vector_slice)` pairs for HNSW insertion.
+    pub to_insert: Vec<(usize, &'a [f32])>,
+    /// `(external_id, upsert_result)` pairs for rollback on failure.
+    pub rollback_info: Vec<(u64, UpsertResult)>,
+}
 
 impl HnswIndex {
     /// Prepares vectors for batch insertion: validates dimensions and registers IDs.
     ///
-    /// Returns a vector of (`internal_index`, vector slice) pairs ready for insertion.
-    /// Duplicates are automatically skipped.
+    /// Returns a [`PreparedBatch`] containing insertion data and rollback
+    /// information. Existing IDs are replaced (upsert semantics): the old
+    /// mapping is updated and stale vector data is removed.
     ///
     /// # Performance
     ///
     /// - Single pass over input (no intermediate collection)
-    /// - Pre-allocated output vector
+    /// - Pre-allocated output vectors
     /// - Inline dimension validation
     /// - Zero-copy: stores borrowed slices, no cloning
     #[inline]
-    pub(crate) fn prepare_batch_insert<'a, I>(&self, vectors: I) -> Vec<(usize, &'a [f32])>
+    pub(crate) fn prepare_batch_insert<'a, I>(&self, vectors: I) -> PreparedBatch<'a>
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let iter = vectors.into_iter();
-        let (lower, upper) = iter.size_hint();
-        let capacity = upper.unwrap_or(lower);
-        let mut to_insert: Vec<(usize, &'a [f32])> = Vec::with_capacity(capacity);
+        let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
 
-        for (id, vector) in iter {
-            // Inline validation for hot path
+        // Validate ALL dimensions upfront before any destructive upsert_mapping
+        // calls. A panic after partial upsert_mapping would leave orphaned mappings.
+        for (_, vector) in &items {
             assert_eq!(
                 vector.len(),
                 self.dimension,
@@ -36,12 +47,21 @@ impl HnswIndex {
                 self.dimension,
                 vector.len()
             );
-            if let Some(idx) = self.mappings.register(id) {
-                to_insert.push((idx, vector));
-            }
         }
 
-        to_insert
+        let mut to_insert = Vec::with_capacity(items.len());
+        let mut rollback_info = Vec::with_capacity(items.len());
+
+        for (id, vector) in items {
+            let result = self.upsert_mapping(id);
+            to_insert.push((result.idx, vector));
+            rollback_info.push((id, result));
+        }
+
+        PreparedBatch {
+            to_insert,
+            rollback_info,
+        }
     }
 
     /// Inserts multiple vectors in parallel using rayon.
@@ -55,7 +75,7 @@ impl HnswIndex {
     ///
     /// # Returns
     ///
-    /// Number of vectors successfully inserted (duplicates are skipped).
+    /// Number of vectors successfully inserted or updated (upsert semantics).
     ///
     /// # Panics
     ///
@@ -85,33 +105,32 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let to_insert = self.prepare_batch_insert(vectors);
-        let count = to_insert.len();
+        let batch = self.prepare_batch_insert(vectors);
+        let count = batch.to_insert.len();
 
         if count == 0 {
             return 0;
         }
 
-        // Prepare references for HNSW batch insertion
-        let refs_for_hnsw: Vec<(&[f32], usize)> =
-            to_insert.iter().map(|(idx, vec)| (*vec, *idx)).collect();
+        let refs_for_hnsw: Vec<(&[f32], usize)> = batch
+            .to_insert
+            .iter()
+            .map(|(idx, vec)| (*vec, *idx))
+            .collect();
 
-        // RF-1: Insert into HNSW graph BEFORE storing vectors.
-        // If parallel_insert fails, we avoid orphaned vectors in sidecar storage.
+        // Insert into HNSW graph before storing vectors to avoid orphaned sidecar data.
         if let Err(e) = self.inner.read().parallel_insert(&refs_for_hnsw) {
             tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
-            // Roll back all registered mappings to avoid phantom entries
-            for (idx, _) in &to_insert {
-                if let Some(id) = self.mappings.get_id(*idx) {
-                    self.mappings.remove(id);
-                }
+            // Reverse order: undo last upsert first so duplicate-ID chains
+            // restore correctly (each rollback depends on the previous state).
+            for (id, result) in batch.rollback_info.iter().rev() {
+                self.rollback_upsert(*id, result);
             }
             return 0;
         }
 
-        // Perf: Store vectors after successful HNSW insertion (parallel-friendly)
         if self.enable_vector_storage {
-            to_insert.par_iter().for_each(|(idx, vec)| {
+            batch.to_insert.par_iter().for_each(|(idx, vec)| {
                 self.vectors.insert(*idx, vec);
             });
         }
@@ -120,6 +139,14 @@ impl HnswIndex {
     }
 
     /// Sequential batch insertion (deprecated in favor of `insert_batch_parallel`).
+    ///
+    /// Each item is processed individually (upsert_mapping + graph insert +
+    /// rollback), identical to calling `VectorIndex::insert` in a loop.
+    /// This avoids the eager-batch-mapping issues that arise with duplicate IDs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any vector has a dimension different from the index dimension.
     ///
     /// # Performance
     ///
@@ -133,20 +160,26 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let to_insert = self.prepare_batch_insert(vectors);
         let mut inserted = 0;
 
-        for (idx, vec) in &to_insert {
-            if let Err(e) = self.inner.write().insert((*vec, *idx)) {
-                tracing::error!("insert_batch_sequential: insert failed: {e}");
-                // Roll back the mapping registered by prepare_batch_insert
-                if let Some(id) = self.mappings.get_id(*idx) {
-                    self.mappings.remove(id);
-                }
+        for (id, vector) in vectors {
+            assert_eq!(
+                vector.len(),
+                self.dimension,
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            );
+
+            let result = self.upsert_mapping(id);
+
+            if let Err(e) = self.inner.write().insert((vector, result.idx)) {
+                tracing::error!("insert_batch_sequential: insert failed for id={id}: {e}");
+                self.rollback_upsert(id, &result);
                 continue;
             }
             if self.enable_vector_storage {
-                self.vectors.insert(*idx, vec);
+                self.vectors.insert(result.idx, vector);
             }
             inserted += 1;
         }
@@ -247,21 +280,18 @@ impl HnswIndex {
         rerank_k: usize,
         ef_search: usize,
     ) -> Vec<Vec<ScoredResult>> {
-        // Phase 1: HNSW search for all queries with oversampled candidate pool
         let all_candidates: Vec<Vec<ScoredResult>> = queries
             .par_iter()
             .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
             .collect();
 
-        // Phase 2: Rerank in parallel, collecting per-query latencies to avoid
-        // EMA race (concurrent Relaxed store would lose ~N-1 samples).
+        // Rerank in parallel, collecting per-query latencies for aggregated EMA update.
         let timed_results: Vec<(Vec<ScoredResult>, u64)> = queries
             .par_iter()
             .zip(all_candidates.par_iter())
             .map(|(query, candidates)| self.rerank_sort_and_truncate_timed(query, candidates, k))
             .collect();
 
-        // Update EMA once with mean latency from the entire batch
         let n = timed_results.len() as u64;
         if n > 0 {
             let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
@@ -314,9 +344,8 @@ impl HnswIndex {
 
     /// GPU brute-force dispatch accessible from tests.
     ///
-    /// RF-DEDUP: delegates to `search_brute_force_gpu_inner` in `brute_force.rs`
-    /// without the 100K threshold gate, so tests can exercise the GPU path
-    /// with smaller datasets.
+    /// Delegates to `search_brute_force_gpu_inner` without the 100K threshold
+    /// gate, so tests can exercise the GPU path with smaller datasets.
     ///
     /// Returns `None` if GPU is unavailable.
     #[cfg(all(test, feature = "gpu"))]
@@ -334,10 +363,8 @@ impl HnswIndex {
     /// Extracted from `brute_force_search_parallel` so the GPU gate in that
     /// method stays compact.
     fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        // EPIC-A.2: Use collect_for_parallel for rayon par_iter support
         let vectors_snapshot = self.vectors.collect_for_parallel();
 
-        // Compute distances in parallel using rayon
         let mut results: Vec<ScoredResult> = vectors_snapshot
             .par_iter()
             .filter_map(|(idx, vec)| {
@@ -347,7 +374,6 @@ impl HnswIndex {
             })
             .collect();
 
-        // Sort by distance (metric-dependent ordering)
         self.metric.sort_scored_results(&mut results);
 
         results.truncate(k);

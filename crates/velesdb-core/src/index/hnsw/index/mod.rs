@@ -27,19 +27,18 @@ mod search;
 mod trait_impl;
 mod vacuum;
 
-// Re-export VacuumError for public API
-#[allow(unused_imports)]
+#[allow(unused_imports)] // Re-export for downstream consumers; not directly used in this module
 pub use vacuum::VacuumError;
 
 use super::native_inner::NativeHnswInner as HnswInner;
 use super::sharded_mappings::ShardedMappings;
 use super::sharded_vectors::ShardedVectors;
+use super::upsert::{self, UpsertResult};
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::AtomicU64;
 
-// Native persistence - no HnswIo needed (v1.0+)
 type HnswIo = ();
 
 /// HNSW index for efficient approximate nearest neighbor search.
@@ -54,7 +53,6 @@ type HnswIo = ();
 /// index.insert(1, &vec![0.1; 768]);
 /// let results = index.search(&vec![0.1; 768], 10);
 /// ```
-/// HNSW index for efficient approximate nearest neighbor search.
 ///
 /// # Implementation Notes (v1.0+)
 ///
@@ -112,6 +110,31 @@ pub struct HnswIndex {
     /// invariant is already structurally enforced.
     #[allow(dead_code)] // Retained for field-layout invariant; dropped after inner
     pub(crate) io_holder: Option<Box<HnswIo>>,
+}
+
+impl HnswIndex {
+    /// Registers an ID with upsert semantics and cleans up stale vector data.
+    ///
+    /// Returns an [`UpsertResult`] with the new internal index and optional
+    /// old index for rollback. If the ID already existed, the old mapping is
+    /// replaced and the stale sidecar vector is removed.
+    #[must_use]
+    pub(crate) fn upsert_mapping(&self, id: u64) -> UpsertResult {
+        upsert::upsert_mapping(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
+    }
+
+    /// Rolls back a mapping upsert after a failed graph insertion.
+    ///
+    /// Delegates to [`upsert::rollback_upsert`] to restore the previous
+    /// mapping state so the point remains searchable.
+    pub(crate) fn rollback_upsert(&self, id: u64, result: &UpsertResult) {
+        upsert::rollback_upsert(&self.mappings, id, result);
+    }
 }
 
 impl Drop for HnswIndex {

@@ -2,33 +2,18 @@
 
 use super::{HnswIndex, HnswInner};
 use crate::index::hnsw::params::HnswParams;
-use crate::index::hnsw::sharded_mappings::ShardedMappings;
-use crate::index::hnsw::sharded_vectors::ShardedVectors;
 use std::mem::ManuallyDrop;
 
 /// Errors that can occur during vacuum operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VacuumError {
     /// Vector storage is disabled, cannot rebuild index.
+    #[error("Cannot vacuum: vector storage is disabled (use new() instead of new_fast_insert())")]
     VectorStorageDisabled,
     /// Index rebuild failed (allocation or insertion error).
+    #[error("Vacuum rebuild failed: {0}")]
     RebuildFailed(String),
 }
-
-impl std::fmt::Display for VacuumError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::VectorStorageDisabled => {
-                write!(f, "Cannot vacuum: vector storage is disabled (use new() instead of new_fast_insert())")
-            }
-            Self::RebuildFailed(msg) => {
-                write!(f, "Vacuum rebuild failed: {msg}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for VacuumError {}
 
 impl HnswIndex {
     /// Returns the number of tombstones (soft-deleted entries) in the index.
@@ -88,7 +73,9 @@ impl HnswIndex {
     /// # Important
     ///
     /// - This operation is **blocking** and may take significant time for large indices
-    /// - The index remains readable during rebuild (copy-on-write pattern)
+    /// - **Consistency**: between the graph swap and mappings rebuild, concurrent
+    ///   searches may return incomplete results. Callers should avoid concurrent
+    ///   queries during vacuum or accept transient result gaps.
     /// - Requires `enable_vector_storage = true` (vectors must be stored)
     ///
     /// # Returns
@@ -141,33 +128,19 @@ impl HnswIndex {
         )
         .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
-        // 3. Create new mappings and vectors
-        let new_mappings = ShardedMappings::with_capacity(count);
-        let new_vectors = ShardedVectors::new(self.dimension);
-
-        // 4. Bulk insert into new structures
+        // 3. Build HNSW insertion references (idx = sequential, matches graph allocation)
         let refs_for_hnsw: Vec<(&[f32], usize)> = active_vectors
             .iter()
             .enumerate()
-            .map(|(idx, (id, vec))| {
-                // Register in new mappings
-                let mapped = new_mappings.register(*id);
-                debug_assert!(
-                    mapped.is_some(),
-                    "Vacuum invariant violated: active_vectors contains duplicate id {id}"
-                );
-                // Store in new vectors
-                new_vectors.insert(idx, vec);
-                (vec.as_slice(), idx)
-            })
+            .map(|(idx, (_id, vec))| (vec.as_slice(), idx))
             .collect();
 
-        // 5. Parallel insert into new HNSW
+        // 4. Parallel insert into new HNSW
         new_inner
             .parallel_insert(&refs_for_hnsw)
             .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
-        // 6. Atomic swap (replace old with new)
+        // 5. Atomic swap (replace old with new)
         {
             let mut inner_guard = self.inner.write();
             // SAFETY: ManuallyDrop::drop is safe when exclusive ownership is guaranteed.
@@ -182,7 +155,7 @@ impl HnswIndex {
             *inner_guard = ManuallyDrop::new(new_inner);
         }
 
-        // 7. Swap mappings and vectors
+        // 6. Swap mappings and vectors
         // Note: ShardedMappings/ShardedVectors use interior mutability,
         // so we need to clear and repopulate
         self.mappings.clear();

@@ -2,6 +2,7 @@
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
     clippy::redundant_closure_for_method_calls
 )]
 
@@ -386,26 +387,26 @@ fn test_hnsw_search_wrong_dimension_panics() {
 }
 
 #[test]
-fn test_hnsw_duplicate_insert_is_skipped() {
+fn test_hnsw_duplicate_insert_upserts_vector() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
-    // Act - Insert with same ID should be SKIPPED (not updated)
-    // hnsw_rs doesn't support updates; inserting same idx creates ghosts
+    // Act - Insert with same ID performs upsert (replaces the vector)
     index.insert(1, &[0.0, 1.0, 0.0]);
 
     // Assert
     assert_eq!(index.len(), 1); // Still only one entry
 
-    // Verify the ORIGINAL vector is still there (not updated)
-    let results = index.search(&[1.0, 0.0, 0.0], 1);
+    // Verify the UPDATED vector is indexed (not the original)
+    let results = index.search(&[0.0, 1.0, 0.0], 1);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, 1);
-    // Score should be ~1.0 (exact match with original vector)
+    // Score should be ~1.0 (only 1 vector in index, exact match expected)
     assert!(
-        results[0].score > 0.99,
-        "Original vector should still be indexed"
+        results[0].score > 0.9,
+        "Updated vector should be indexed, got score {}",
+        results[0].score,
     );
 }
 
@@ -557,23 +558,23 @@ fn test_hnsw_insert_batch_parallel() {
 }
 
 #[test]
-fn test_hnsw_insert_batch_parallel_skips_duplicates() {
+fn test_hnsw_insert_batch_parallel_upserts_duplicates() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
 
     // Insert one vector first
     index.insert(1, &[1.0, 0.0, 0.0]);
 
-    // Act - Try to insert batch with duplicate ID
+    // Act - Insert batch with existing ID (upsert) + new ID
     let vectors: Vec<(u64, Vec<f32>)> = vec![
-        (1, vec![0.0, 1.0, 0.0]), // Duplicate ID
+        (1, vec![0.0, 1.0, 0.0]), // Upsert: updates existing id=1
         (2, vec![0.0, 0.0, 1.0]), // New
     ];
     let inserted = index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
     index.set_searching_mode();
 
-    // Assert - Only 1 new vector should be inserted
-    assert_eq!(inserted, 1);
+    // Assert - Both vectors processed (1 upserted + 1 new)
+    assert_eq!(inserted, 2);
     assert_eq!(index.len(), 2);
 }
 
@@ -610,20 +611,20 @@ fn test_hnsw_insert_batch_sequential() {
 
 #[test]
 #[allow(deprecated)]
-fn test_hnsw_insert_batch_sequential_skips_duplicates() {
+fn test_hnsw_insert_batch_sequential_upserts_duplicates() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
-    // Act - Try to insert batch with duplicate ID
+    // Act - Insert batch with existing ID (upsert) + new ID
     let vectors: Vec<(u64, Vec<f32>)> = vec![
-        (1, vec![0.0, 1.0, 0.0]), // Duplicate ID
+        (1, vec![0.0, 1.0, 0.0]), // Upsert: updates existing id=1
         (2, vec![0.0, 0.0, 1.0]), // New
     ];
     let inserted = index.insert_batch_sequential(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
 
-    // Assert - Only 1 new vector should be inserted
-    assert_eq!(inserted, 1);
+    // Assert - Both vectors processed (1 upserted + 1 new)
+    assert_eq!(inserted, 2);
     assert_eq!(index.len(), 2);
 }
 
@@ -2224,4 +2225,459 @@ fn test_adaptive_search_spread_works_for_similarity_metrics() {
             pair[1].score,
         );
     }
+}
+
+// -------------------------------------------------------------------------
+// Upsert Semantics Tests (Issue #371)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_insert_same_id_updates_vector() {
+    // Arrange: create index with vector storage enabled (default)
+    let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
+
+    // Insert id=1 with vector A (pointing along x-axis)
+    let vector_a = [1.0, 0.0, 0.0, 0.0];
+    index.insert(1, &vector_a);
+
+    // Act: insert id=1 again with vector B (pointing along y-axis, orthogonal to A)
+    let vector_b = [0.0, 1.0, 0.0, 0.0];
+    index.insert(1, &vector_b);
+
+    // Assert 1: index length must still be 1 (not 2)
+    assert_eq!(index.len(), 1, "Upsert must not create duplicate entries");
+
+    // Assert 2: search with query=B should return id=1 with high similarity
+    let results = index.search(&vector_b, 1);
+    assert_eq!(results.len(), 1, "Should find exactly one result");
+    assert_eq!(results[0].id, 1, "Result must be id=1");
+    assert!(
+        results[0].score > 0.9,
+        "Similarity to updated vector B should be > 0.9, got {}",
+        results[0].score,
+    );
+}
+
+// -------------------------------------------------------------------------
+// Upsert + Tombstone / Vacuum TDD Cycle 3 Tests
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_upsert_tombstone_accumulation() {
+    // Arrange: 10-dim index so each of 10 IDs gets a unique dominant dimension
+    let dim = 10;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Insert 10 vectors (generation 0)
+    for i in 0..10_usize {
+        index.insert(i as u64, &make_dominant_vector(dim, i, 0));
+    }
+
+    // Assert: no tombstones, 10 active entries
+    assert_eq!(
+        index.tombstone_count(),
+        0,
+        "Fresh index should have 0 tombstones"
+    );
+    assert_eq!(index.len(), 10, "Should have 10 active vectors");
+
+    // Act: update all 10 vectors with new values (generation 1)
+    for i in 0..10_usize {
+        index.insert(i as u64, &make_dominant_vector(dim, i, 1));
+    }
+
+    // Assert: 10 tombstones (old slots are dead), still 10 active
+    assert_eq!(
+        index.tombstone_count(),
+        10,
+        "Updating 10 vectors should leave 10 tombstones",
+    );
+    assert_eq!(index.len(), 10, "Active count must remain 10 after upserts");
+
+    // Tombstone ratio = 10 / 20 = 0.50 => needs_vacuum (threshold 0.20)
+    assert!(
+        index.needs_vacuum(),
+        "Tombstone ratio {:.2} should exceed 0.20 threshold",
+        index.tombstone_ratio(),
+    );
+}
+
+#[test]
+fn test_upsert_then_vacuum_cleans() {
+    // Arrange: 10-dim index so each of 10 IDs has a unique dominant dimension
+    let dim = 10;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Insert 10 vectors (generation 0)
+    for i in 0..10_usize {
+        index.insert(i as u64, &make_dominant_vector(dim, i, 0));
+    }
+
+    // Update only the first 5 (id=0..4) with generation 1
+    for i in 0..5_usize {
+        index.insert(i as u64, &make_dominant_vector(dim, i, 1));
+    }
+
+    // Pre-vacuum assertions
+    assert_eq!(
+        index.tombstone_count(),
+        5,
+        "Updating 5 vectors should create 5 tombstones",
+    );
+    assert_eq!(index.len(), 10);
+
+    // Act: vacuum
+    let rebuilt = index.vacuum().expect("vacuum should succeed");
+    assert_eq!(rebuilt, 10, "Vacuum should report 10 active vectors");
+
+    // Post-vacuum: tombstones cleared
+    assert_eq!(
+        index.tombstone_count(),
+        0,
+        "Vacuum must eliminate all tombstones",
+    );
+    assert_eq!(index.len(), 10, "All 10 vectors must survive vacuum");
+
+    // Verify search correctness: each id appears in its own top-1 result
+    // Use the *current* generation vector as query
+    for i in 0..10_usize {
+        let gen = u8::from(i < 5);
+        let query = make_dominant_vector(dim, i, gen);
+        let results = index.search(&query, 1);
+        assert!(
+            !results.is_empty(),
+            "Search for id={i} returned no results after vacuum",
+        );
+        assert_eq!(
+            results[0].id, i as u64,
+            "Top-1 for id={i} should be itself, got id={}",
+            results[0].id,
+        );
+    }
+}
+
+#[test]
+fn test_batch_upsert_updates_existing() {
+    // Arrange: 10-dim index so each of 10 IDs gets a unique dominant dimension
+    let dim = 10;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Insert 10 vectors (generation 0) via batch
+    let original_vectors: Vec<(u64, Vec<f32>)> = (0..10)
+        .map(|id| (id, make_dominant_vector(dim, id as usize, 0)))
+        .collect();
+
+    let refs: Vec<(u64, &[f32])> = original_vectors
+        .iter()
+        .map(|(id, v)| (*id, v.as_slice()))
+        .collect();
+
+    let inserted = index.insert_batch_parallel(refs);
+    assert_eq!(inserted, 10, "Should insert all 10 vectors");
+    assert_eq!(index.len(), 10, "Index should contain 10 entries");
+
+    // Act: update first 5 (id=0..4) with generation 1 via batch
+    let updated_vectors: Vec<(u64, Vec<f32>)> = (0..5)
+        .map(|id| (id, make_dominant_vector(dim, id as usize, 1)))
+        .collect();
+
+    let update_refs: Vec<(u64, &[f32])> = updated_vectors
+        .iter()
+        .map(|(id, v)| (*id, v.as_slice()))
+        .collect();
+
+    let upserted = index.insert_batch_parallel(update_refs);
+    assert_eq!(upserted, 5, "Should upsert all 5 vectors");
+
+    // Assert 1: index length must still be 10 (not 15)
+    assert_eq!(
+        index.len(),
+        10,
+        "Batch upsert must not create duplicate entries: expected 10, got {}",
+        index.len(),
+    );
+
+    // Assert 2: for each updated id (0..4), search with generation 1 vector
+    for id in 0..5_u64 {
+        let query = make_dominant_vector(dim, id as usize, 1);
+        let results = index.search(&query, 1);
+        assert_eq!(
+            results.len(),
+            1,
+            "Updated id={id}: should find exactly one result"
+        );
+        assert_eq!(
+            results[0].id, id,
+            "Updated id={id}: top-1 result should be the updated vector"
+        );
+        assert!(
+            results[0].score > 0.9,
+            "Updated id={id}: similarity to updated vector should be > 0.9, got {}",
+            results[0].score,
+        );
+    }
+
+    // Assert 3: for each non-updated id (5..9), search with generation 0 vector
+    for id in 5..10_u64 {
+        let query = make_dominant_vector(dim, id as usize, 0);
+        let results = index.search(&query, 1);
+        assert!(
+            !results.is_empty(),
+            "Non-updated id={id}: should find results"
+        );
+        assert_eq!(
+            results[0].id, id,
+            "Non-updated id={id}: top-1 result should be the original vector"
+        );
+    }
+}
+
+// -------------------------------------------------------------------------
+// Upsert TDD Cycle 5: Recall Verification + Edge Cases
+// -------------------------------------------------------------------------
+
+/// Verifies that after updating a vector to a different cluster, search
+/// finds it in the NEW location and no longer returns it from the OLD cluster.
+#[allow(clippy::similar_names)] // origin/target are semantically distinct cluster labels
+#[test]
+fn test_upsert_search_recall() {
+    let index = HnswIndex::new(8, DistanceMetric::Cosine).unwrap();
+
+    // Origin cluster center: dominant component at dim 0
+    let origin_center: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    // Target cluster center: dominant component at dim 4
+    let target_center: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+
+    // Build deterministic vectors with small perturbation per id.
+    // Origin cluster: ids 0..49, base near origin_center
+    let origin_vectors: Vec<(u64, Vec<f32>)> = (0..50)
+        .map(|i| {
+            let mut v = origin_center.clone();
+            for (d, component) in v.iter_mut().enumerate() {
+                *component += 0.01 * (i * 8 + d) as f32;
+            }
+            (i as u64, v)
+        })
+        .collect();
+
+    // Target cluster: ids 50..99, base near target_center
+    let target_vectors: Vec<(u64, Vec<f32>)> = (0..50)
+        .map(|i| {
+            let mut v = target_center.clone();
+            for (d, component) in v.iter_mut().enumerate() {
+                *component += 0.01 * (i * 8 + d) as f32;
+            }
+            (i as u64 + 50, v)
+        })
+        .collect();
+
+    // Insert all 100 vectors via batch
+    let all_vectors: Vec<(u64, Vec<f32>)> = origin_vectors
+        .iter()
+        .chain(target_vectors.iter())
+        .map(|(id, v)| (*id, v.clone()))
+        .collect();
+
+    let refs: Vec<(u64, &[f32])> = all_vectors
+        .iter()
+        .map(|(id, v)| (*id, v.as_slice()))
+        .collect();
+
+    let inserted = index.insert_batch_parallel(refs);
+    assert_eq!(inserted, 100, "Should insert all 100 vectors");
+
+    // Update id=25 (origin cluster) to a target cluster vector
+    let moved_vector: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    index.insert(25, &moved_vector);
+
+    assert_eq!(index.len(), 100, "Length must remain 100 after upsert");
+
+    // Search near target cluster center: id=25 should appear (it moved there)
+    let results_target = index.search(&target_center, 10);
+    let found_in_target = results_target.iter().any(|r| r.id == 25);
+    assert!(
+        found_in_target,
+        "id=25 should appear in target cluster results after upsert, got ids: {:?}",
+        results_target.iter().map(|r| r.id).collect::<Vec<_>>(),
+    );
+
+    // Search near origin cluster center: id=25 should NOT appear (it left)
+    let results_origin = index.search(&origin_center, 10);
+    let found_in_origin = results_origin.iter().any(|r| r.id == 25);
+    assert!(
+        !found_in_origin,
+        "id=25 should NOT appear in origin cluster results after upsert, got ids: {:?}",
+        results_origin.iter().map(|r| r.id).collect::<Vec<_>>(),
+    );
+}
+
+/// Verifies that updating the very first vector (likely the HNSW entry point)
+/// does not break search for any vector in the index.
+#[test]
+fn test_upsert_entry_point_vector() {
+    let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
+
+    // Insert id=0 first — this becomes the HNSW entry point
+    let ep_original = vec![1.0, 0.0, 0.0, 0.0];
+    index.insert(0, &ep_original);
+
+    // Update id=0 to a completely different direction
+    let ep_updated = vec![0.0, 0.0, 0.0, 1.0];
+    index.insert(0, &ep_updated);
+
+    // Insert 20 more vectors with varied, well-separated values.
+    // Each vector has a dominant component determined by (id % 4).
+    let additional_vectors: Vec<(u64, Vec<f32>)> = (1..=20)
+        .map(|i| {
+            let dominant_dim = (i as usize) % 4;
+            let mut v = vec![0.1_f32; 4];
+            v[dominant_dim] += 1.0 + 0.05 * i as f32;
+            (i as u64, v)
+        })
+        .collect();
+
+    let refs: Vec<(u64, &[f32])> = additional_vectors
+        .iter()
+        .map(|(id, v)| (*id, v.as_slice()))
+        .collect();
+
+    let inserted = index.insert_batch_parallel(refs);
+    assert_eq!(inserted, 20, "Should insert all 20 vectors");
+    assert_eq!(index.len(), 21, "Index should contain 21 entries");
+
+    // Verify: searching for the updated id=0 vector returns id=0 as top-1
+    let results_ep = index.search(&ep_updated, 1);
+    assert_eq!(results_ep.len(), 1, "Should find at least 1 result for EP");
+    assert_eq!(
+        results_ep[0].id, 0,
+        "Top-1 for updated entry point should be id=0, got id={}",
+        results_ep[0].id,
+    );
+
+    // Verify: each of the 20 additional vectors is findable as top-1
+    for (id, vec) in &additional_vectors {
+        let results = index.search(vec.as_slice(), 1);
+        assert!(
+            !results.is_empty(),
+            "Search for id={id} should return results",
+        );
+        assert_eq!(
+            results[0].id, *id,
+            "Top-1 for id={id} should be itself, got id={}",
+            results[0].id,
+        );
+    }
+}
+
+// -------------------------------------------------------------------------
+// Upsert Rollback + Edge Case Tests (Issue #371)
+// -------------------------------------------------------------------------
+
+/// Verifies that batch insert with within-batch duplicate IDs correctly
+/// deduplicates: only the last occurrence is reachable, and the count
+/// reflects unique IDs (not raw entries). Within-batch duplicates are an
+/// unusual pattern but must not corrupt mapping state.
+#[test]
+fn test_batch_upsert_within_batch_duplicates() {
+    let dim = 4;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Batch with id=1 appearing twice: first [1,0,0,0], then [0,1,0,0]
+    let vec_a = vec![1.0_f32, 0.0, 0.0, 0.0];
+    let vec_b = vec![0.0_f32, 1.0, 0.0, 0.0];
+    let batch: Vec<(u64, &[f32])> = vec![(1, &vec_a), (1, &vec_b), (2, &vec_a)];
+
+    let inserted = index.insert_batch_parallel(batch);
+    // Count may include both entries for id=1, but len() must reflect unique IDs
+    assert!(inserted >= 2, "At least 2 entries processed, got {inserted}");
+    assert_eq!(index.len(), 2, "Only 2 unique IDs should be mapped");
+
+    // id=1 must be searchable and point to vec_b (last wins)
+    let results = index.search(&vec_b, 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 1, "id=1 must be findable after within-batch upsert");
+    assert!(
+        results[0].score > 0.9,
+        "id=1 should match vec_b, got score {}",
+        results[0].score,
+    );
+
+    // id=2 must also be searchable
+    let results2 = index.search(&vec_a, 1);
+    assert_eq!(results2[0].id, 2, "id=2 must be findable");
+}
+
+/// Creates a deterministic vector where dimension `dominant_dim` has a
+/// large component, making it easily distinguishable in cosine search.
+///
+/// Shared helper to avoid duplicating the same closure across tests.
+fn make_dominant_vector(dim: usize, dominant_dim: usize, gen: u8) -> Vec<f32> {
+    let mut v = vec![0.1_f32; dim];
+    v[dominant_dim % dim] += 1.0 + f32::from(gen) * 0.5;
+    v
+}
+
+/// Verifies that insert(id) after remove(id) correctly re-inserts
+/// the vector and returns it in search results.
+#[test]
+fn test_upsert_after_delete() {
+    let dim = 8;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Insert id=1 with dominant dim 0
+    let vec_a = make_dominant_vector(dim, 0, 0);
+    index.insert(1, &vec_a);
+    assert_eq!(index.len(), 1);
+
+    // Remove id=1
+    assert!(index.remove(1));
+    assert_eq!(index.len(), 0);
+
+    // Re-insert id=1 with dominant dim 4
+    let vec_b = make_dominant_vector(dim, 4, 1);
+    index.insert(1, &vec_b);
+    assert_eq!(index.len(), 1, "Re-inserted id should count as 1 vector");
+
+    // Search should find id=1 near vec_b
+    let results = index.search(&vec_b, 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].id, 1,
+        "After delete + re-insert, search must find re-inserted id=1"
+    );
+}
+
+/// Verifies that upserting the same id N times leaves exactly N-1
+/// tombstones and the index still contains exactly 1 live vector
+/// that matches the latest version.
+#[test]
+fn test_repeated_upsert_accumulates_tombstones() {
+    let dim = 8;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+    let num_upserts: usize = 20;
+
+    for gen in 0..num_upserts {
+        let v = make_dominant_vector(dim, gen % dim, gen as u8);
+        index.insert(1, &v);
+    }
+
+    assert_eq!(
+        index.len(),
+        1,
+        "Repeated upserts must not duplicate entries"
+    );
+    assert_eq!(
+        index.tombstone_count(),
+        num_upserts - 1,
+        "Each upsert after the first should leave one tombstone"
+    );
+
+    // Search must return the latest vector (dominant dim = (num_upserts-1) % dim)
+    let latest = make_dominant_vector(dim, (num_upserts - 1) % dim, (num_upserts - 1) as u8);
+    let results = index.search(&latest, 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].id, 1,
+        "Search must return the latest upserted vector"
+    );
 }

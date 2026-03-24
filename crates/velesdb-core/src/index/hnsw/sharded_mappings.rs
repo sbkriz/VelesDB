@@ -59,7 +59,6 @@ impl ShardedMappings {
     ///
     /// Use this when the expected number of vectors is known upfront.
     #[must_use]
-    #[allow(dead_code)] // API completeness - useful for batch operations
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             id_to_idx: DashMap::with_capacity(capacity),
@@ -77,19 +76,55 @@ impl ShardedMappings {
     /// This operation is atomic - concurrent calls with the same ID will
     /// return `Some` for exactly one caller and `None` for others.
     pub fn register(&self, id: u64) -> Option<usize> {
-        // Use entry API for atomic check-and-insert
         use dashmap::mapref::entry::Entry;
 
         match self.id_to_idx.entry(id) {
-            Entry::Occupied(_) => None, // ID already exists
-            Entry::Vacant(entry) => {
-                // Atomically get next index
-                let idx = self.next_idx.fetch_add(1, Ordering::SeqCst);
-                entry.insert(idx);
-                self.idx_to_id.insert(idx, id);
-                Some(idx)
-            }
+            Entry::Occupied(_) => None,
+            Entry::Vacant(entry) => Some(self.allocate_and_map(entry, id)),
         }
+    }
+
+    /// Registers an ID, replacing the existing mapping if present.
+    ///
+    /// Returns `(new_internal_idx, Option<old_internal_idx>)`:
+    /// - If the ID is new: `(idx, None)`
+    /// - If the ID existed: `(new_idx, Some(old_idx))`
+    ///
+    /// The old internal index is removed from the reverse mapping so that
+    /// stale HNSW graph nodes are filtered out during search.
+    ///
+    /// # Thread Safety
+    ///
+    /// Uses `DashMap::entry()` for atomic check-and-replace. Concurrent
+    /// calls with the same ID are serialised by the entry lock.
+    pub fn register_or_replace(&self, id: u64) -> (usize, Option<usize>) {
+        use dashmap::mapref::entry::Entry;
+
+        match self.id_to_idx.entry(id) {
+            Entry::Occupied(mut entry) => {
+                let old_idx = *entry.get();
+                let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+                entry.insert(new_idx);
+                self.idx_to_id.remove(&old_idx);
+                self.idx_to_id.insert(new_idx, id);
+                (new_idx, Some(old_idx))
+            }
+            Entry::Vacant(entry) => (self.allocate_and_map(entry, id), None),
+        }
+    }
+
+    /// Allocates a new internal index and inserts bidirectional mappings.
+    ///
+    /// Shared by `register` and `register_or_replace` for the new-ID path.
+    fn allocate_and_map(
+        &self,
+        entry: dashmap::mapref::entry::VacantEntry<'_, u64, usize>,
+        id: u64,
+    ) -> usize {
+        let idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+        entry.insert(idx);
+        self.idx_to_id.insert(idx, id);
+        idx
     }
 
     /// Registers multiple IDs in a batch, returning their indices.
@@ -109,6 +144,22 @@ impl ShardedMappings {
         }
 
         results
+    }
+
+    /// Restores a specific mapping (`id` -> `idx`) without allocating a new index.
+    ///
+    /// Used for rollback after a failed graph insertion: re-links the external
+    /// ID to a previously-allocated internal index that was removed by
+    /// `register_or_replace` or `remove`.
+    ///
+    /// # Correctness
+    ///
+    /// The caller must ensure `idx` was previously returned by `register` or
+    /// `register_or_replace` for this `id`. Passing an arbitrary `idx` will
+    /// corrupt the bidirectional mapping.
+    pub fn restore(&self, id: u64, idx: usize) {
+        self.id_to_idx.insert(id, idx);
+        self.idx_to_id.insert(idx, id);
     }
 
     /// Removes an ID and returns its internal index if it existed.
@@ -139,14 +190,12 @@ impl ShardedMappings {
 
     /// Returns the number of registered IDs.
     #[must_use]
-    #[allow(dead_code)] // Used by NativeHnswIndex
     pub fn len(&self) -> usize {
         self.id_to_idx.len()
     }
 
     /// Returns true if no IDs are registered.
     #[must_use]
-    #[allow(dead_code)] // API completeness
     pub fn is_empty(&self) -> bool {
         self.id_to_idx.is_empty()
     }
@@ -161,7 +210,6 @@ impl ShardedMappings {
     /// Returns an iterator over all (id, idx) pairs.
     ///
     /// Note: This acquires read locks on shards during iteration.
-    #[allow(dead_code)] // API completeness - useful for debugging
     pub fn iter(&self) -> impl Iterator<Item = (u64, usize)> + '_ {
         self.id_to_idx.iter().map(|r| (*r.key(), *r.value()))
     }
@@ -171,13 +219,11 @@ impl ShardedMappings {
     /// This is a monotonic counter that never decreases, even after removals.
     /// Useful for calculating tombstone count.
     #[must_use]
-    #[allow(dead_code)] // API completeness
     pub fn next_idx(&self) -> usize {
         self.next_idx.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Clears all mappings and resets the index counter.
-    #[allow(dead_code)] // API completeness
     pub fn clear(&self) {
         self.id_to_idx.clear();
         self.idx_to_id.clear();
