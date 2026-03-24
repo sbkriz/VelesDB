@@ -140,6 +140,14 @@ impl HnswIndex {
 
     /// Sequential batch insertion (deprecated in favor of `insert_batch_parallel`).
     ///
+    /// Each item is processed individually (upsert_mapping + graph insert +
+    /// rollback), identical to calling `VectorIndex::insert` in a loop.
+    /// This avoids the eager-batch-mapping issues that arise with duplicate IDs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any vector has a dimension different from the index dimension.
+    ///
     /// # Performance
     ///
     /// Significantly slower than `insert_batch_parallel`. Use only if you need
@@ -152,18 +160,26 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let batch = self.prepare_batch_insert(vectors);
         let mut inserted = 0;
 
-        for (i, (idx, vec)) in batch.to_insert.iter().enumerate() {
-            if let Err(e) = self.inner.write().insert((*vec, *idx)) {
-                tracing::error!("insert_batch_sequential: insert failed: {e}");
-                let (id, result) = &batch.rollback_info[i];
-                self.rollback_upsert(*id, result);
+        for (id, vector) in vectors {
+            assert_eq!(
+                vector.len(),
+                self.dimension,
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            );
+
+            let result = self.upsert_mapping(id);
+
+            if let Err(e) = self.inner.write().insert((vector, result.idx)) {
+                tracing::error!("insert_batch_sequential: insert failed for id={id}: {e}");
+                self.rollback_upsert(id, &result);
                 continue;
             }
             if self.enable_vector_storage {
-                self.vectors.insert(*idx, vec);
+                self.vectors.insert(result.idx, vector);
             }
             inserted += 1;
         }
