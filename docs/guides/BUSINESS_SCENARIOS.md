@@ -22,6 +22,9 @@ LIMIT 12
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Query latency | 350ms (3 DBs) | **2ms** |
@@ -46,6 +49,9 @@ RETURN tx.id, account.id, similarity() as fraud_score
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Detection time | 2-5 seconds | **< 10ms** |
@@ -70,6 +76,9 @@ RETURN treatment.name, AVG(success_rate) as effectiveness
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Data location | Cloud (HIPAA risk) | **100% on-premise** |
@@ -96,6 +105,9 @@ LIMIT 10
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Context retrieval | 100-200ms | **< 1ms** |

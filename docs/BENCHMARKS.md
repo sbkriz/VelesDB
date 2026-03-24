@@ -234,17 +234,14 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive**
 | NumPy | ~200-400 ns | BLAS backend |
 | SciPy | ~300-500 ns | No SIMD optimization |
 
-### Vector Database Search Latency
+### Industry Context
 
-| Database | Search Latency | Scale | Notes |
-|----------|---------------|-------|-------|
-| **VelesDB** | **< 1 ms** | 10K | Local, in-memory HNSW |
-| Milvus | < 10 ms p50 | 1M+ | Distributed |
-| Qdrant | 20-50 ms | 1M+ | Cloud/distributed |
-| pgvector | 45-100 ms | 100K+ | PostgreSQL extension |
-| Redis | ~5 ms | 1M+ | In-memory |
+VelesDB is optimized for **local-first / in-process** deployment with sub-millisecond latencies at 10K-100K scale. Cloud and distributed vector databases (Qdrant, Milvus, Weaviate, Pinecone) target different deployment models and scale profiles (1M+ vectors, multi-node clusters). Direct latency comparisons are not meaningful across these different architectures.
 
-*Competitor latencies are approximate industry estimates for comparable-scale workloads. VelesDB is local-first/in-process; distributed databases serve different use cases at larger scale.*
+For reproducible VelesDB benchmarks, run:
+```bash
+cargo bench -p velesdb-core --bench hnsw_benchmark --features internal-bench -- --noplot
+```
 
 ---
 

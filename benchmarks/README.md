@@ -26,6 +26,8 @@ Benchmark suite comparing VelesDB against pgvector (HNSW).
 
 ### Insert Performance (100K vectors, 768D — Legacy v0.7.3)
 
+*Legacy comparison from v0.7.3 Docker benchmarks (2025). Hardware and methodology differ from current benchmarks. See [DOCKER_BENCHMARK_RESULTS.md](DOCKER_BENCHMARK_RESULTS.md) for details.*
+
 | Dataset | VelesDB | pgvector | Speedup |
 |---------|---------|----------|--------|
 | 10K | ~5s | ~19s | **3.8x** |

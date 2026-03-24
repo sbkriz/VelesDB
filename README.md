@@ -51,7 +51,7 @@
 |------------|-----------------|------------------|
 | **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **54.6µs local** (k=10, 10K vectors) — network-free retrieval |
 | **Vectors alone aren't enough** | Semantic similarity misses relationships | **Vector + Graph unified** in one query |
-| **Privacy & deployment friction** | Cloud dependencies, GDPR concerns | **6 MB self-contained binary** — works offline, air-gapped |
+| **Privacy & deployment friction** | Cloud dependencies, GDPR concerns | **6 MB self-contained binary** (release build, default features) — works offline, air-gapped |
 
 ---
 
@@ -68,7 +68,7 @@
 <p>Native HNSW + AVX-512/AVX2/NEON SIMD.<br/><strong>43.6 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>6 MB Self-Contained</h3>
+<h3>6 MB Self-Contained (release build, default features)</h3>
 <p>No external services required.<br/><strong>Works offline, air-gapped.</strong></p>
 </td>
 <td align="center" width="25%">
@@ -419,12 +419,12 @@ INSERT                      INDEX                       SEARCH
 |---------|----------------------|-------------------|
 | **Vector + Graph Fusion** | Unified query language for semantic + relationship queries | **Build smarter AI agents** with contextual understanding |
 | **54.6µs Search** | Native HNSW + AVX-512/AVX2/NEON SIMD | **Create real-time experiences** previously impossible |
-| **6 MB Self-Contained** | No external services, single executable | **Deploy anywhere** — from servers to edge devices |
+| **6 MB Self-Contained** (release build, default features) | No external services, single executable | **Deploy anywhere** — from servers to edge devices |
 | **Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |
 | **PQ + SQ8 Quantization** | 4-32x memory reduction (PQ, SQ8, Binary, RaBitQ) | **Run complex AI** on resource-constrained devices |
 | **Hybrid Dense+Sparse** | SPLADE/BM42 sparse index + RRF/RSF fusion | **Best lexical + semantic** retrieval in one query |
-| **Adaptive Search** | Two-phase ef_search that starts low and escalates only for hard queries | **2-4x faster median latency** without sacrificing recall |
+| **Adaptive Search** | Two-phase ef_search that starts low and escalates only for hard queries | **2-4x faster median latency** compared to VelesDB's Balanced mode on easy queries |
 | **VelesQL** | SQL-like unified query language with SPARSE_NEAR, TRAIN QUANTIZER | **Simplify complex queries** — no DSL learning curve |
 
 ---
