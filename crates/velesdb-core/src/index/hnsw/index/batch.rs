@@ -35,13 +35,11 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let iter = vectors.into_iter();
-        let (lower, upper) = iter.size_hint();
-        let capacity = upper.unwrap_or(lower);
-        let mut to_insert = Vec::with_capacity(capacity);
-        let mut rollback_info = Vec::with_capacity(capacity);
+        let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
 
-        for (id, vector) in iter {
+        // Validate ALL dimensions upfront before any destructive upsert_mapping
+        // calls. A panic after partial upsert_mapping would leave orphaned mappings.
+        for (_, vector) in &items {
             assert_eq!(
                 vector.len(),
                 self.dimension,
@@ -49,7 +47,12 @@ impl HnswIndex {
                 self.dimension,
                 vector.len()
             );
+        }
 
+        let mut to_insert = Vec::with_capacity(items.len());
+        let mut rollback_info = Vec::with_capacity(items.len());
+
+        for (id, vector) in items {
             let result = self.upsert_mapping(id);
             to_insert.push((result.idx, vector));
             rollback_info.push((id, result));

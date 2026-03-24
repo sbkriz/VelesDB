@@ -61,8 +61,14 @@ pub(crate) fn upsert_mapping(
 /// precision is lost for the affected point until the next successful
 /// upsert.
 pub(crate) fn rollback_upsert(mappings: &ShardedMappings, id: u64, result: &UpsertResult) {
-    mappings.remove(id);
-    if let Some(old_idx) = result.old_idx {
-        mappings.restore(id, old_idx);
+    // Only remove if the current mapping still points to our index.
+    // A within-batch duplicate may have already overwritten the mapping
+    // with a newer index — removing it would corrupt that later entry.
+    let current_idx = mappings.get_idx(id);
+    if current_idx == Some(result.idx) {
+        mappings.remove(id);
+        if let Some(old_idx) = result.old_idx {
+            mappings.restore(id, old_idx);
+        }
     }
 }
