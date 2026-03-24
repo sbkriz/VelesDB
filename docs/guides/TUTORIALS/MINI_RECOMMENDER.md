@@ -1,21 +1,21 @@
 # Build a Mini Recommender with VelesDB
 
-> **Time**: ~45 minutes | **Level**: Beginner to Intermediate
+> **Time**: ~15 minutes | **Level**: Beginner to Intermediate
 
-This hands-on tutorial walks you through building a product recommendation engine using VelesDB's hybrid vector + graph capabilities.
+This hands-on tutorial walks you through building a product recommendation engine using VelesDB's vector similarity search and metadata filtering.
 
 ## What You'll Learn
 
 - Store product embeddings for semantic similarity
-- Create user-product relationships (LIKED, VIEWED)
-- Query hybrid recommendations combining graph traversal and vector similarity
+- Search for similar products with vector kNN
+- Filter recommendations by category and price
+- Parse VelesQL queries (SQL-like syntax with vector extensions)
 - Aggregate analytics on your data
 
 ## Prerequisites
 
-- VelesDB installed (`cargo install velesdb-cli` or from source)
+- Rust 1.83+ with Cargo
 - Basic Rust knowledge (or follow along with the provided code)
-- ~10 minutes to complete
 
 ---
 
@@ -37,31 +37,25 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-velesdb-core = "1.5"
+velesdb-core = "1.7"
 serde_json = "1.0"
+tempfile = "3.10"
 ```
 
 ---
 
 ## Step 2: Data Model
 
-Our recommender has three entity types:
+Our recommender uses product embeddings for similarity search:
 
 | Entity | Fields | Embedding |
 |--------|--------|-----------|
-| **User** | id, name, preferences | 128-dim preference vector |
 | **Product** | id, title, category, price | 128-dim description embedding |
-| **Relation** | LIKED, VIEWED, PURCHASED | - |
 
 ### Sample Data
 
 ```json
 {
-  "users": [
-    {"id": 1, "name": "Alice", "preferences": "tech gadgets, wireless audio"},
-    {"id": 2, "name": "Bob", "preferences": "fitness, outdoor sports"},
-    {"id": 3, "name": "Carol", "preferences": "home decor, kitchen"}
-  ],
   "products": [
     {"id": 101, "title": "Wireless Headphones Pro", "category": "electronics", "price": 79.99},
     {"id": 102, "title": "Bluetooth Speaker", "category": "electronics", "price": 49.99},
@@ -71,16 +65,6 @@ Our recommender has three entity types:
     {"id": 106, "title": "Coffee Maker Deluxe", "category": "home", "price": 89.99},
     {"id": 107, "title": "Fitness Tracker", "category": "electronics", "price": 59.99},
     {"id": 108, "title": "Camping Tent 4P", "category": "sports", "price": 249.99}
-  ],
-  "interactions": [
-    {"user_id": 1, "product_id": 101, "type": "LIKED"},
-    {"user_id": 1, "product_id": 102, "type": "VIEWED"},
-    {"user_id": 1, "product_id": 105, "type": "LIKED"},
-    {"user_id": 2, "product_id": 103, "type": "LIKED"},
-    {"user_id": 2, "product_id": 104, "type": "PURCHASED"},
-    {"user_id": 2, "product_id": 107, "type": "LIKED"},
-    {"user_id": 3, "product_id": 106, "type": "LIKED"},
-    {"user_id": 3, "product_id": 101, "type": "VIEWED"}
   ]
 }
 ```
@@ -92,18 +76,20 @@ Our recommender has three entity types:
 ```rust
 use velesdb_core::{Database, DistanceMetric, Point};
 use serde_json::json;
+use tempfile::TempDir;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Open database
-    let db = Database::open("./recommender_data")?;
-    
+    // Use temp directory for demo (use persistent path in production)
+    let temp_dir = TempDir::new()?;
+    let db = Database::open(temp_dir.path())?;
+
     // Create products collection with 128-dim embeddings
     db.create_collection("products", 128, DistanceMetric::Cosine)?;
-    let products = db.get_collection("products")?;
-    
+    let products = db.get_vector_collection("products").ok_or("Collection not found")?;
+
     // Sample products with mock embeddings
-    let product_data = vec![
-        (101u64, "Wireless Headphones Pro", "electronics", 79.99f32),
+    let product_data = [
+        (101u64, "Wireless Headphones Pro", "electronics", 79.99f64),
         (102, "Bluetooth Speaker", "electronics", 49.99),
         (103, "Running Shoes X1", "sports", 129.99),
         (104, "Yoga Mat Premium", "sports", 39.99),
@@ -112,11 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (107, "Fitness Tracker", "electronics", 59.99),
         (108, "Camping Tent 4P", "sports", 249.99),
     ];
-    
+
     let points: Vec<Point> = product_data
         .iter()
         .map(|(id, title, category, price)| {
-            // Generate mock embedding based on product ID
             let embedding = generate_embedding(*id);
             Point::new(
                 *id,
@@ -129,10 +114,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         })
         .collect();
-    
+
     products.upsert(points)?;
-    println!("✅ Ingested {} products", products.len());
-    
+    println!("Ingested {} products", products.len());
+
     Ok(())
 }
 
@@ -143,8 +128,10 @@ fn generate_embedding(seed: u64) -> Vec<f32> {
         .collect();
     // Normalize
     let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-    for x in &mut embedding {
-        *x /= norm;
+    if norm > 0.0 {
+        for x in &mut embedding {
+            *x /= norm;
+        }
     }
     embedding
 }
@@ -154,7 +141,7 @@ fn generate_embedding(seed: u64) -> Vec<f32> {
 
 ```bash
 cargo run
-# Output: ✅ Ingested 8 products
+# Output: Ingested 8 products
 ```
 
 ---
@@ -165,28 +152,33 @@ Find products similar to one a user liked:
 
 ```rust
 fn find_similar_products(
-    products: &velesdb_core::Collection,
+    products: &velesdb_core::VectorCollection,
     liked_product_id: u64,
     top_k: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get the liked product's embedding
-    let liked = products.get_by_id(liked_product_id)?
+    let liked = products
+        .get(&[liked_product_id])
+        .into_iter()
+        .next()
+        .flatten()
         .ok_or("Product not found")?;
-    
+
     // Search for similar products
     let results = products.search(&liked.vector, top_k + 1)?;
-    
-    println!("\n🔍 Products similar to ID {}:", liked_product_id);
+
+    println!("Products similar to ID {liked_product_id}:");
     for result in results.iter().skip(1) { // Skip self-match
-        let payload = result.point.payload.as_ref().unwrap();
-        println!(
-            "  - {} (score: {:.3}) - ${}",
-            payload["title"].as_str().unwrap_or("?"),
-            result.score,
-            payload["price"]
-        );
+        if let Some(payload) = &result.point.payload {
+            println!(
+                "  - {} (score: {:.3}) - ${:.2}",
+                payload["title"].as_str().unwrap_or("?"),
+                result.score,
+                payload["price"].as_f64().unwrap_or(0.0)
+            );
+        }
     }
-    
+
     Ok(())
 }
 ```
@@ -201,11 +193,13 @@ find_similar_products(&products, 101, 3)?;
 **Output:**
 
 ```
-🔍 Products similar to ID 101:
-  - Bluetooth Speaker (score: 0.987) - $49.99
-  - Smart Watch (score: 0.954) - $199.99
-  - Fitness Tracker (score: 0.923) - $59.99
+Products similar to ID 101:
+  - Fitness Tracker (score: 0.998) - $59.99
+  - Smart Watch (score: 0.995) - $199.99
+  - Bluetooth Speaker (score: 0.993) - $49.99
 ```
+
+Scores may differ slightly depending on your platform.
 
 ---
 
@@ -215,22 +209,22 @@ Add metadata filters to narrow results:
 
 ```rust
 fn recommend_in_category(
-    products: &velesdb_core::Collection,
+    products: &velesdb_core::VectorCollection,
     user_preferences: &[f32],
     category: &str,
-    max_price: f32,
+    max_price: f64,
     top_k: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Search with similarity
     let results = products.search(user_preferences, 20)?;
-    
+
     // Filter by category and price (post-filter for demo)
     let filtered: Vec<_> = results
         .iter()
         .filter(|r| {
             if let Some(payload) = &r.point.payload {
                 let cat = payload["category"].as_str().unwrap_or("");
-                let price = payload["price"].as_f64().unwrap_or(f64::MAX) as f32;
+                let price = payload["price"].as_f64().unwrap_or(f64::MAX);
                 cat == category && price <= max_price
             } else {
                 false
@@ -238,18 +232,19 @@ fn recommend_in_category(
         })
         .take(top_k)
         .collect();
-    
-    println!("\n🎯 Recommendations in '{}' under ${:.2}:", category, max_price);
+
+    println!("\nRecommendations in '{category}' under ${max_price:.2}:");
     for result in filtered {
-        let payload = result.point.payload.as_ref().unwrap();
-        println!(
-            "  - {} (score: {:.3}) - ${}",
-            payload["title"].as_str().unwrap_or("?"),
-            result.score,
-            payload["price"]
-        );
+        if let Some(payload) = &result.point.payload {
+            println!(
+                "  - {} (score: {:.3}) - ${:.2}",
+                payload["title"].as_str().unwrap_or("?"),
+                result.score,
+                payload["price"].as_f64().unwrap_or(0.0)
+            );
+        }
     }
-    
+
     Ok(())
 }
 ```
@@ -265,11 +260,13 @@ recommend_in_category(&products, &alice_prefs, "electronics", 100.0, 3)?;
 **Output:**
 
 ```
-🎯 Recommendations in 'electronics' under $100.00:
-  - Wireless Headphones Pro (score: 0.892) - $79.99
-  - Bluetooth Speaker (score: 0.878) - $49.99
-  - Fitness Tracker (score: 0.845) - $59.99
+Recommendations in 'electronics' under $100.00:
+  - Wireless Headphones Pro (score: 0.969) - $79.99
+  - Fitness Tracker (score: 0.967) - $59.99
+  - Bluetooth Speaker (score: 0.962) - $49.99
 ```
+
+Scores may differ slightly depending on your platform.
 
 ---
 
@@ -281,38 +278,31 @@ Use `VelesQL` for declarative queries:
 use velesdb_core::velesql::Parser;
 
 fn demo_velesql_queries() {
-    // Basic similarity search
-    let query1 = r#"
-        SELECT id, title, price 
-        FROM products 
-        WHERE similarity(embedding, $user_pref) > 0.7 
-        LIMIT 5
-    "#;
-    
-    // Filtered search
-    let query2 = r#"
-        SELECT * FROM products 
-        WHERE similarity(embedding, $query) > 0.6 
-          AND category = 'electronics' 
-          AND price < 100 
-        ORDER BY similarity(embedding, $query) DESC 
-        LIMIT 10
-    "#;
-    
-    // Aggregation: count by category
-    let query3 = r#"
-        SELECT category, COUNT(*) 
-        FROM products 
-        WHERE similarity(embedding, $query) > 0.5 
-        GROUP BY category 
-        ORDER BY COUNT(*) DESC
-    "#;
-    
-    // Verify all queries parse correctly
-    for (i, query) in [query1, query2, query3].iter().enumerate() {
+    println!("\nVelesQL Query Parsing:");
+
+    let queries = [
+        (
+            "Similarity search",
+            "SELECT id, title FROM products WHERE similarity(embedding, $pref) > 0.7 LIMIT 5",
+        ),
+        (
+            "Filtered search",
+            "SELECT * FROM products WHERE similarity(embedding, $q) > 0.6 \
+             AND category = 'electronics' AND price < 100 \
+             ORDER BY similarity(embedding, $q) DESC LIMIT 10",
+        ),
+        (
+            "Aggregation",
+            "SELECT category, COUNT(*) FROM products \
+             WHERE similarity(embedding, $q) > 0.5 \
+             GROUP BY category ORDER BY COUNT(*) DESC",
+        ),
+    ];
+
+    for (name, query) in queries {
         match Parser::parse(query) {
-            Ok(_) => println!("✅ Query {} parses correctly", i + 1),
-            Err(e) => println!("❌ Query {} failed: {:?}", i + 1, e),
+            Ok(_) => println!("  {name}: parses correctly"),
+            Err(e) => println!("  {name}: {e:?}"),
         }
     }
 }
@@ -325,33 +315,39 @@ fn demo_velesql_queries() {
 Analyze your recommendation data:
 
 ```rust
-fn analyze_catalog(products: &velesdb_core::Collection) {
-    println!("\n📊 Catalog Analytics:");
-    
-    // Manual aggregation (VelesQL execution planned)
-    let mut category_counts: std::collections::HashMap<String, usize> = 
-        std::collections::HashMap::new();
-    let mut category_totals: std::collections::HashMap<String, f64> = 
-        std::collections::HashMap::new();
-    
-    // Iterate all products
+use std::collections::HashMap;
+
+fn analyze_catalog(products: &velesdb_core::VectorCollection) {
+    println!("\nCatalog Analytics:");
+
+    let mut category_counts: HashMap<String, usize> = HashMap::new();
+    let mut category_totals: HashMap<String, f64> = HashMap::new();
+
     for id in 101u64..=108 {
-        if let Ok(Some(point)) = products.get_by_id(id) {
+        if let Some(point) = products.get(&[id]).into_iter().next().flatten() {
             if let Some(payload) = &point.payload {
-                let cat = payload["category"].as_str().unwrap_or("unknown").to_string();
+                let cat = payload["category"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
                 let price = payload["price"].as_f64().unwrap_or(0.0);
-                
+
                 *category_counts.entry(cat.clone()).or_default() += 1;
                 *category_totals.entry(cat).or_default() += price;
             }
         }
     }
-    
-    println!("\n  Category | Count | Avg Price");
-    println!("  ---------|-------|----------");
-    for (cat, count) in &category_counts {
+
+    println!("\n  Category    | Count | Avg Price");
+    println!("  ------------|-------|----------");
+
+    let mut cats: Vec<_> = category_counts.keys().collect();
+    cats.sort();
+
+    for cat in cats {
+        let count = category_counts.get(cat).unwrap_or(&0);
         let avg = category_totals.get(cat).unwrap_or(&0.0) / *count as f64;
-        println!("  {:9} | {:5} | ${:.2}", cat, count, avg);
+        println!("  {cat:11} | {count:5} | ${avg:.2}");
     }
 }
 ```
@@ -359,13 +355,13 @@ fn analyze_catalog(products: &velesdb_core::Collection) {
 **Output:**
 
 ```
-📊 Catalog Analytics:
+Catalog Analytics:
 
-  Category | Count | Avg Price
-  ---------|-------|----------
-  electronics |     4 | $97.24
-  sports      |     3 | $139.66
+  Category    | Count | Avg Price
+  ------------|-------|----------
+  electronics |     4 | $97.49
   home        |     1 | $89.99
+  sports      |     3 | $139.99
 ```
 
 ---

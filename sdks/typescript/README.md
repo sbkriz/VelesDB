@@ -672,6 +672,10 @@ import {
   // Query builder
   VelesQLBuilder,
   velesql,
+  type RelDirection,
+  type RelOptions,
+  type NearVectorOptions,
+  type FusionOptions,
 
   // Error classes
   VelesDBError,
@@ -714,4 +718,4 @@ import {
 
 MIT License -- See [LICENSE](./LICENSE) for details.
 
-VelesDB Core and Server are licensed under VelesDB Core License 1.0 (source-available).
+VelesDB Core and Server are licensed under the Elastic License 2.0 (ELv2).

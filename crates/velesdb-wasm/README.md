@@ -108,10 +108,19 @@ class VectorStore {
   multi_query_search(vectors: Float32Array, num_vectors: number, k: number, strategy?: string, rrf_k?: number): Array<[bigint, number]>;
   hybrid_search(vector: Float32Array, text_query: string, k: number, vector_weight?: number): Array<{id, score, payload}>;
   batch_search(vectors: Float32Array, num_vectors: number, k: number): Array<Array<[bigint, number]>>;
-  
-  // Sparse search (inverted index)
+  similarity_search(query: Float32Array, threshold: number, operator: string, k: number): Array<[bigint, number]>;
+  query(query_vector: Float32Array, k: number): Array<{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}>;
+
+  // Sparse search (inverted index, on VectorStore)
   sparse_insert(doc_id: bigint, indices: Uint32Array, values: Float32Array): void;
   sparse_search(indices: Uint32Array, values: Float32Array, k: number): Array<{doc_id, score}>;
+
+  // Persistence
+  save(db_name: string): Promise<void>;
+  static load(db_name: string): Promise<VectorStore>;
+  static delete_database(db_name: string): Promise<void>;
+  export_to_bytes(): Uint8Array;
+  static import_from_bytes(bytes: Uint8Array): VectorStore;
 
   // Metadata-only store
   static new_metadata_only(): VectorStore;
@@ -264,14 +273,14 @@ The WASM build is optimized for client-side use cases but has some limitations c
 |---------|------|-------------|
 | Vector search (NEAR) | ✅ | ✅ |
 | Metadata filtering | ✅ | ✅ |
-| Hybrid search (vector + BM25) | ✅ | ✅ |
-| Full-text search (BM25) | ✅ | ✅ |
+| Hybrid search (vector + text) | ✅ | ✅ |
+| Full-text search | ✅ | ✅ |
 | Multi-query fusion (MQG) | ✅ | ✅ |
 | Batch search | ✅ | ✅ |
 | Sparse search | ✅ | ✅ |
 | Knowledge Graph (nodes, edges, traversal) | ✅ | ✅ |
 | Agent Memory (SemanticMemory) | ✅ | ✅ |
-| VelesQL parsing & validation | ✅ | ✅ |
+| VelesQL parsing and validation | ✅ | ✅ |
 | VelesQL query execution | ❌ | ✅ |
 | JOIN operations | ❌ | ✅ |
 | Aggregations (GROUP BY) | ❌ | ✅ |
@@ -347,8 +356,8 @@ memory.store(2n, "Berlin is the capital of Germany", embedding2);
 const results = memory.query(queryEmbedding, 5);
 // [{id, score, content}, ...]
 
-console.log(memory.len);       // 2
-console.log(memory.dimension); // 384
+console.log(memory.len());       // 2
+console.log(memory.dimension()); // 384
 ```
 
 ### Sparse Search (SparseIndex)

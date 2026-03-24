@@ -92,7 +92,7 @@ Typical results on modern hardware:
 
   // Recommended for bulk loading — pre-allocates capacity:
   // const store = VectorStore.with_capacity(768, 'cosine', 10000);
-  // store.insert_batch(batch);  // batch: Array of {id: BigInt, vector: Float32Array}
+  // store.insert_batch(batch);  // batch: Array of [BigInt, number[]]
 
   const results = store.search(query, 10);
   // results: Array of [id: BigInt, score: number]

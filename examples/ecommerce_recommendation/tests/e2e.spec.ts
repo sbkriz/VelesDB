@@ -25,13 +25,13 @@ interface ExampleOutput {
     vectorSimilarity: boolean;
     vectorFilter: boolean;
     graphLookup: boolean;
-    combined: boolean;
+    hybrid: boolean;
   };
   performance: {
     vectorSearchUs: number | null;
     filteredSearchUs: number | null;
     graphLookupUs: number | null;
-    combinedUs: number | null;
+    hybridUs: number | null;
   };
 }
 
@@ -44,13 +44,13 @@ function parseOutput(output: string): ExampleOutput {
       vectorSimilarity: false,
       vectorFilter: false,
       graphLookup: false,
-      combined: false,
+      hybrid: false,
     },
     performance: {
       vectorSearchUs: null,
       filteredSearchUs: null,
       graphLookupUs: null,
-      combinedUs: null,
+      hybridUs: null,
     },
   };
 
@@ -70,27 +70,41 @@ function parseOutput(output: string): ExampleOutput {
   result.queryResults.vectorSimilarity = output.includes('QUERY 1: Vector Similarity');
   result.queryResults.vectorFilter = output.includes('QUERY 2: Vector + Filter');
   result.queryResults.graphLookup = output.includes('QUERY 3: Graph Lookup');
-  result.queryResults.combined = output.includes('QUERY 4: COMBINED');
+  result.queryResults.hybrid = output.includes('QUERY 4: HYBRID');
 
-  // Parse performance metrics (µs values)
-  const vectorSearchMatch = output.match(/Found \d+ similar products in ([\d.]+)µs/);
+  // Parse performance metrics from Rust's Debug Duration format.
+  // Rust prints durations as e.g. "187.123µs", "1.234ms", "2.5s", or "500ns".
+  // We normalize everything to microseconds.
+  function parseDurationToUs(durationStr: string): number | null {
+    const nsMatch = durationStr.match(/([\d.]+)ns/);
+    if (nsMatch) return Number.parseFloat(nsMatch[1]) / 1000;
+    const usMatch = durationStr.match(/([\d.]+)µs/);
+    if (usMatch) return Number.parseFloat(usMatch[1]);
+    const msMatch = durationStr.match(/([\d.]+)ms/);
+    if (msMatch) return Number.parseFloat(msMatch[1]) * 1000;
+    const sMatch = durationStr.match(/([\d.]+)s$/);
+    if (sMatch) return Number.parseFloat(sMatch[1]) * 1_000_000;
+    return null;
+  }
+
+  const vectorSearchMatch = output.match(/Found \d+ similar products in ([\d.]+(?:ns|µs|ms|s))/);
   if (vectorSearchMatch) {
-    result.performance.vectorSearchUs = Number.parseFloat(vectorSearchMatch[1]);
+    result.performance.vectorSearchUs = parseDurationToUs(vectorSearchMatch[1]);
   }
 
-  const filteredMatch = output.match(/Found \d+ filtered results in ([\d.]+)µs/);
+  const filteredMatch = output.match(/Found \d+ filtered results in ([\d.]+(?:ns|µs|ms|s))/);
   if (filteredMatch) {
-    result.performance.filteredSearchUs = Number.parseFloat(filteredMatch[1]);
+    result.performance.filteredSearchUs = parseDurationToUs(filteredMatch[1]);
   }
 
-  const graphMatch = output.match(/Found \d+ co-purchased products in ([\d.]+)µs/);
+  const graphMatch = output.match(/Found \d+ co-purchased products in ([\d.]+(?:ns|µs|ms|s))/);
   if (graphMatch) {
-    result.performance.graphLookupUs = Number.parseFloat(graphMatch[1]);
+    result.performance.graphLookupUs = parseDurationToUs(graphMatch[1]);
   }
 
-  const combinedMatch = output.match(/Found \d+ recommendations in ([\d.]+)µs/);
-  if (combinedMatch) {
-    result.performance.combinedUs = Number.parseFloat(combinedMatch[1]);
+  const hybridMatch = output.match(/Found \d+ recommendations in ([\d.]+(?:ns|µs|ms|s))/);
+  if (hybridMatch) {
+    result.performance.hybridUs = parseDurationToUs(hybridMatch[1]);
   }
 
   return result;
@@ -136,8 +150,8 @@ test.describe('E-commerce Recommendation Example E2E', () => {
     expect(output.queryResults.graphLookup).toBe(true);
   });
 
-  test('should execute Combined query (Query 4)', () => {
-    expect(output.queryResults.combined).toBe(true);
+  test('should execute Hybrid query (Query 4)', () => {
+    expect(output.queryResults.hybrid).toBe(true);
   });
 
   test('should complete demo successfully', () => {
@@ -161,9 +175,9 @@ test.describe('E-commerce Recommendation Example E2E', () => {
       expect(output.performance.graphLookupUs!).toBeLessThan(1000); // 1ms = 1000µs
     });
 
-    test('combined query should be under 10ms', () => {
-      expect(output.performance.combinedUs).not.toBeNull();
-      expect(output.performance.combinedUs!).toBeLessThan(10000);
+    test('hybrid query should be under 10ms', () => {
+      expect(output.performance.hybridUs).not.toBeNull();
+      expect(output.performance.hybridUs!).toBeLessThan(10000);
     });
   });
 
@@ -174,10 +188,10 @@ test.describe('E-commerce Recommendation Example E2E', () => {
       expect(output.raw).toMatch(/[\d.]+\/5 ⭐/); // Rating format
     });
 
-    test('should show VelesQL query example', () => {
-      expect(output.raw).toContain('SELECT * FROM products');
-      expect(output.raw).toContain('similarity(embedding, ?)');
-      expect(output.raw).toContain('in_stock = true');
+    test('should show hybrid search details', () => {
+      expect(output.raw).toContain('Vector similarity (60% weight)');
+      expect(output.raw).toContain('BM25 tag matching (40% weight)');
+      expect(output.raw).toContain('in_stock=true');
     });
 
     test('should show graph query syntax', () => {

@@ -91,10 +91,11 @@ VelesDBVectorStore(
 - `similarity_search_with_filter(query, k=4, filter=None)` - Search with metadata filtering
 - `batch_search(queries, k=4)` - Batch search multiple queries in parallel
 - `batch_search_with_score(queries, k=4)` - Batch search with scores
-- `multi_query_search(queries, k=4, fusion="rrf", ...)` - **Multi-query fusion search**- `multi_query_search_with_score(queries, k=4, ...)` - Multi-query search with fused scores
+- `multi_query_search(queries, k=4, fusion="rrf", ...)` - **Multi-query fusion search**
+- `multi_query_search_with_score(queries, k=4, ...)` - Multi-query search with fused scores
 - `hybrid_search(query, k=4, vector_weight=0.5, filter=None)` - Hybrid vector+BM25 search
 - `text_search(query, k=4, filter=None)` - Full-text BM25 search
-- `query(velesql_str, params=None)` - Execute VelesQL query
+- `query(query_str, params=None)` - Execute VelesQL query
 
 **Utilities:**
 - `as_retriever(**kwargs)` - Convert to LangChain retriever
@@ -179,9 +180,10 @@ results = vectorstore.similarity_search_with_filter(
 
 ## Features
 
-- **High Performance**: VelesDB's Rust backend delivers microsecond latencies
+- **High Performance**: VelesDB's Rust backend delivers sub-millisecond latencies
 - **SIMD Optimized**: Hardware-accelerated vector operations  
-- **Multi-Query Fusion**: Native support for MQG pipelines with RRF/Weighted fusion- **Hybrid Search**: Combine vector similarity with BM25 text matching
+- **Multi-Query Fusion**: Native support for MQG pipelines with RRF/Weighted fusion
+- **Hybrid Search**: Combine vector similarity with BM25 text matching
 - **Full-Text Search**: BM25 ranking for keyword queries
 - **Metadata Filtering**: Filter results by document attributes
 - **Simple Setup**: Self-contained single binary, no external services required
@@ -189,6 +191,6 @@ results = vectorstore.similarity_search_with_filter(
 
 ## License
 
-MIT License (this integration)
+MIT License (this integration). See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/integrations/langchain/LICENSE) for details.
 
-See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.
+VelesDB Core itself is licensed under the [VelesDB Core License 1.0](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) (based on ELv2).

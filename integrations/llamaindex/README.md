@@ -7,11 +7,12 @@ VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 
 ## Features
 
-- 🚀 **Microsecond latency** — SIMD-optimized vector search
+- 🚀 **Sub-millisecond search** — SIMD-optimized vector retrieval
 - 📦 **Self-contained** — Single VelesDB binary, no external services required
 - 🔒 **Local-first** — All data stays on your machine
 - 🧠 **RAG-ready** — Built for Retrieval-Augmented Generation
 - 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies
+
 ## Installation
 
 ```bash
@@ -94,7 +95,7 @@ VelesDBVectorStore(
 | **Search** | |
 | `query(query)` | Query with vector |
 | `batch_query(queries)` | Batch query multiple vectors in parallel |
-| `multi_query_search(embeddings, ...)` | **Multi-query fusion search** ⭐ NEW |
+| `multi_query_search(query_embeddings, ...)` | **Multi-query fusion search** ⭐ NEW |
 | `hybrid_query(query_str, query_embedding, ...)` | Hybrid vector+BM25 search |
 | `text_query(query_str, ...)` | Full-text BM25 search |
 | `velesql(query_str, params)` | Execute VelesQL query |
@@ -173,17 +174,19 @@ results = vector_store.text_query(
 
 ## Performance
 
-| Operation | Latency | Throughput |
-|-----------|---------|------------|
-| Insert (768D) | ~1 µs | 1M/s |
-| Search (10K vectors) | ~2.5 ms | 400 QPS |
-| Hybrid (BM25 + Vector) | ~5 ms | 200 QPS |
+Measured on CI runners (ubuntu-latest, 2-core). Local hardware will be faster.
+Source: `benchmarks/baseline.json` (v1.7.0).
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Search (10K / 128D, k=10) | ~0.34 ms | HNSW + SIMD cosine |
+| Hybrid (vector + filter) | ~0.27 ms | Filtered vector search |
+| Batch insert (10K / 128D) | ~9 s total | Sequential HNSW build |
 
 ## Comparison with Other Stores
 
 | Feature | VelesDB | Chroma | Pinecone |
 |---------|---------|--------|----------|
-| **Latency** | ~2.5 ms | ~10 ms | ~50 ms |
 | **Deployment** | Local binary | Docker | Cloud |
 | **Cost** | Free | Free | $$$  |
 | **Offline** | ✅ | ✅ | ❌ |

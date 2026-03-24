@@ -1,65 +1,50 @@
-# 🛒 E-commerce Recommendation Engine with VelesDB
+# E-commerce Recommendation Engine with VelesDB
 
-> **Difficulty: Advanced** | Showcases: Vector search (HNSW), knowledge graph traversal, multi-column filtering, combined queries, VelesQL
+> **Difficulty: Advanced** | Showcases: Vector search (HNSW), hybrid search (Vector + BM25), metadata filtering, co-purchase relationships
 
-A comprehensive example demonstrating VelesDB's **Vector + Graph + MultiColumn** combined capabilities for building a production-grade recommendation system.
+A comprehensive example demonstrating VelesDB's **Vector + Hybrid + Metadata filtering** capabilities for building a product recommendation system.
 
-## 🎯 What This Example Demonstrates
+## What This Example Demonstrates
 
 | Capability | Usage | Benefit |
 |------------|-------|---------|
 | **Vector Search** | Product embeddings for semantic similarity | "Find products similar to what I'm viewing" |
-| **Knowledge Graph** | User behavior relationships (bought_together, viewed_also) | "People who bought this also bought..." |
-| **Multi-Column Filter** | Price, category, brand, stock, ratings | "Only show in-stock items under $500 with 4+ stars" |
-| **Combined Queries** | All three unified in microseconds | Production-ready recommendations |
+| **Hybrid Search** | Vector + BM25 tag matching via RRF fusion | Combines semantic and keyword relevance |
+| **Metadata Filter** | Price, category, brand, stock, ratings (post-filter) | "Only show in-stock items under $500 with 4+ stars" |
+| **Co-purchase Lookup** | `related_products` stored per product | "People who bought this also bought..." |
 
-## 📊 Data Model
+## Data Model
 
 ### Products (5,000 items)
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Product                                                      │
-├─────────────────────────────────────────────────────────────┤
-│ id: u64                 (unique identifier)                  │
-│ name: String            ("TechPro Premium Smartphones 42")   │
-│ category: String        ("Electronics")                      │
-│ subcategory: String     ("Smartphones")                      │
-│ brand: String           ("TechPro")                          │
-│ price: f64              (599.99)                             │
-│ rating: f32             (4.5)                                │
-│ review_count: u32       (1234)                               │
-│ in_stock: bool          (true)                               │
-│ stock_quantity: u32     (50)                                 │
-│ embedding: [f32; 128]   (semantic vector)                    │
-└─────────────────────────────────────────────────────────────┘
+Product struct fields (src/main.rs):
+
+  id: u64                 (unique identifier)
+  name: String            ("TechPro Premium Smartphones 42")
+  category: String        ("Electronics")
+  subcategory: String     ("Smartphones")
+  brand: String           ("TechPro")
+  price: f64              (599.99)
+  rating: f32             (4.5)
+  review_count: u32       (1234)
+  in_stock: bool          (true)
+  stock_quantity: u32     (50)
+  tags: Vec<String>       (["electronics", "smartphones", "premium", "top-rated"])
+  related_products: Vec<u64>  (co-purchase IDs, 2-5 per product)
 ```
 
-### Knowledge Graph (Relationships)
-```
-    ┌──────────┐                         ┌──────────┐
-    │ Product  │───BOUGHT_TOGETHER──────▶│ Product  │
-    │   (A)    │◀──────────────────────  │   (B)    │
-    └──────────┘                         └──────────┘
-         │                                    │
-         │ VIEWED_ALSO                        │
-         ▼                                    ▼
-    ┌──────────┐                         ┌──────────┐
-    │ Product  │                         │ Product  │
-    │   (C)    │                         │   (D)    │
-    └──────────┘                         └──────────┘
-```
+Embeddings are generated externally via `generate_product_embedding()` (128 dimensions) and stored as the `Point` vector. The `Product` struct itself does not hold the embedding.
 
-### User Behaviors (10,000+ events)
-- **Viewed**: User viewed a product page
-- **AddedToCart**: User added to shopping cart
-- **Purchased**: User completed purchase
+### Co-purchase Relationships
+
+Each product has a `related_products` field containing 2-5 random product IDs, simulating co-purchase patterns. These are stored as metadata in the VelesDB payload and looked up directly -- no separate graph collection is used.
 
 ## Prerequisites
 
 - **Rust 1.83+** with Cargo
 - **Node.js 18+** and npm (required only for E2E tests)
 
-## 🚀 Running the Example
+## Running the Example
 
 ```bash
 cd examples/ecommerce_recommendation
@@ -69,130 +54,170 @@ cargo run --release
 ### Expected Output
 
 ```
-╔══════════════════════════════════════════════════════════════════╗
-║     VelesDB E-commerce Recommendation Engine Demo                ║
-║     Vector + Graph + MultiColumn Combined Power                  ║
-╚══════════════════════════════════════════════════════════════════╝
+==================================================================
+     VelesDB E-commerce Recommendation Engine Demo
+     Vector + Graph-like + MultiColumn Combined Power
+==================================================================
 
-━━━ Step 1: Generating E-commerce Data ━━━
-✓ Generated 5000 products
-✓ Generated 15000+ user behaviors from 1000 users
+--- Step 1: Generating E-commerce Data ---
 
-━━━ Step 2: Building Vector Index (Product Embeddings) ━━━
-✓ Indexed 5000 product vectors (128 dimensions)
+  Generated 5000 products
+  Generated NNNNN co-purchase relationships
+  Time: ...
 
-━━━ Step 3: Building Knowledge Graph (User Behavior) ━━━
-✓ Created 5000 product nodes
-✓ Created 50000+ relationship edges
+--- Step 2: Building Vector Index (Product Embeddings) ---
 
-━━━ Step 4: Recommendation Queries ━━━
-[... detailed query results ...]
+  Indexed 5000 product vectors (128 dimensions)
+  Stored 11 metadata fields per product
+  Time: ...
+
+--- Step 3: Recommendation Queries ---
+
+  User is viewing: <product name> (ID: 42)
+  [... detailed query results for 4 query types ...]
+
+--- Performance Summary ---
+
+  Products indexed:          5000
+  Co-purchase relations:    NNNNN
+  Vector dimensions:          128
+  Metadata fields/product:     11
+
+  Demo completed! VelesDB powers your recommendations.
 ```
 
-## 🔍 Query Examples
+Note: The exact banner uses Unicode box-drawing characters. Step counts, relation totals, and timings vary per run.
+
+## Query Examples
 
 ### Query 1: Pure Vector Similarity
 Find products semantically similar to the current product.
 
 ```rust
+// Generate embedding for the sample product
+let query_embedding = generate_product_embedding(sample_product, 128);
+
+// Search the VelesDB collection
 let results = collection.search(&query_embedding, 10)?;
 ```
 
-### Query 2: Vector + Filter (VelesQL)
-Find similar products that are in-stock and under $500.
+`collection.search()` takes a `&[f32]` query vector and a `k` count, returning `Vec<SearchResult>` where each result has a `.point` (with `.payload`) and a `.score`.
 
-```sql
-SELECT * FROM products 
-WHERE similarity(embedding, ?) > 0.7
-  AND in_stock = true 
-  AND price < 500
-ORDER BY similarity DESC
-LIMIT 10
-```
-
-### Query 3: Graph Traversal
-Find products frequently bought together.
-
-```cypher
-MATCH (p:Product)-[:BOUGHT_TOGETHER]-(other:Product)
-WHERE p.id = 42
-RETURN other
-LIMIT 10
-```
-
-### Query 4: Combined (Full Power)
-Union of vector similarity + graph neighbors, filtered by business rules.
+### Query 2: Vector + Post-Filter
+Find similar products that are in-stock and under $500. The code first runs a vector search, then filters results in Rust:
 
 ```rust
-// Combine vector scores (60%) + graph proximity (40%)
-for result in vector_results {
-    combined_scores[result.id] += result.score * 0.6;
-}
-for neighbor in graph_neighbors {
-    combined_scores[neighbor] += 0.4;
-}
-
-// Apply business rules filter
-let recommendations = combined_scores
-    .filter(|p| p.in_stock && p.rating >= 4.0 && p.price < threshold)
-    .sort_by_score()
-    .take(10);
+let filtered_results: Vec<_> = results
+    .iter()
+    .filter(|r| {
+        if let Some(p) = &r.point.payload {
+            let in_stock = p.get("in_stock").and_then(|v| v.as_bool()).unwrap_or(false);
+            let price = p.get("price").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+            in_stock && price < 500.0
+        } else {
+            false
+        }
+    })
+    .take(5)
+    .collect();
 ```
 
-## 📈 Performance Characteristics (Actual Results)
+Note: This example applies filters as a post-processing step on vector search results, not via VelesQL execution.
+
+### Query 3: Co-purchase Lookup
+Find products frequently bought together, using the `related_products` metadata:
+
+```rust
+let related_ids: &Vec<u64> = &sample_product.related_products;
+// Look up each related product from the in-memory product list
+for &related_id in related_ids.iter().take(5) {
+    if let Some(product) = products.iter().find(|p| p.id == related_id) {
+        // display product
+    }
+}
+```
+
+This is a direct metadata lookup, not a VelesDB graph traversal.
+
+### Query 4: Hybrid Search (Vector + BM25)
+Engine-level hybrid search combining vector similarity (60%) and BM25 tag matching (40%) via RRF fusion, then post-filtered by business rules.
+
+```rust
+// Build a text query from product tags for BM25 signal
+let tag_query = sample_product.tags.join(" ");
+
+// Hybrid search: engine-level RRF fusion of vector + BM25
+// alpha=0.6 means 60% vector signal, 40% BM25 signal
+let hybrid_candidates = collection
+    .hybrid_search(&query_embedding, &tag_query, 20, Some(0.6))?;
+
+// Post-filter by business rules
+let final_recommendations: Vec<_> = hybrid_candidates
+    .into_iter()
+    .filter_map(|result| {
+        products.iter().find(|p| p.id == result.point.id).and_then(|p| {
+            if p.in_stock && p.rating >= 4.0 && p.price < price_threshold {
+                Some((p, result.score))
+            } else {
+                None
+            }
+        })
+    })
+    .collect();
+```
+
+`collection.hybrid_search()` signature: `(&[f32], &str, usize, Option<f32>) -> Result<Vec<SearchResult>>`.
+
+## Performance Characteristics
 
 | Metric | Value |
 |--------|-------|
 | Products indexed | 5,000 |
 | Vector dimensions | 128 |
-| Co-purchase relations | ~20,000 |
+| Co-purchase relations | ~17,000-20,000 (seeded RNG) |
 | Metadata fields/product | 11 |
-| **Vector search latency** | **187µs** |
-| **Filtered search latency** | **55µs** |
-| **Graph lookup latency** | **88µs** |
-| **Combined query latency** | **202µs** |
 
-*Performance numbers measured on i9-14900KF. Results may vary based on hardware.*
+Latency numbers depend on hardware and are printed at runtime via `Instant::elapsed()`. They are not deterministic. On an i9-14900KF, typical values observed during development:
 
-### Performance Analysis
+| Query | Typical Latency | Notes |
+|-------|----------------|-------|
+| Vector search | ~100-300us | HNSW search + payload retrieval |
+| Post-filter | ~1-10us | In-memory filter on vector results |
+| Co-purchase lookup | ~1-10us | Direct metadata access |
+| Hybrid search | ~200-500us | Vector + BM25 + RRF fusion + post-filter |
 
-These results are **production-ready** and compare favorably to VelesDB's benchmarks:
+### Performance Context
 
-| Comparison | Benchmark | E-commerce Demo | Analysis |
-|------------|-----------|-----------------|----------|
-| HNSW Search (10K, 768D) | 40.6µs | 187µs (5K, 128D) | ✅ Includes I/O + payload retrieval |
-| Filter overhead | — | +55µs | ✅ Minimal (metadata in memory) |
-| Graph lookup | — | 88µs | ✅ O(1) relationship access |
+VelesDB's raw HNSW benchmark is **40.6us** for 10K/768D vectors (k=10). The demo latencies are higher because:
 
-**Why slightly higher than raw benchmark?**
-- Benchmark measures pure HNSW distance computation
-- Demo includes: payload deserialization, result construction, I/O
-- Real-world overhead is expected and acceptable
+- The demo includes payload deserialization and result construction
+- Hybrid search adds BM25 indexing overhead and RRF fusion
+- Timings include all post-processing, not just the HNSW kernel
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    E-commerce Application                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │   Vector     │  │  Knowledge   │  │  Multi-Col   │          │
-│  │   Index      │  │    Graph     │  │   Filters    │          │
-│  │  (HNSW)      │  │  (Adjacency) │  │  (B-Tree)    │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-│         │                 │                 │                   │
-│         └────────────┬────┴────────────────┘                   │
-│                      │                                          │
-│              ┌───────▼───────┐                                  │
-│              │   VelesDB     │                                  │
-│              │  Query Engine │                                  │
-│              └───────────────┘                                  │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
++----------------------------------------------------------+
+|                 E-commerce Application                    |
+|----------------------------------------------------------|
+|                                                          |
+|  +--------------+  +--------------+  +--------------+    |
+|  |   Vector     |  |   Hybrid     |  |  Metadata    |    |
+|  |   Index      |  |   Search     |  |  Post-filter |    |
+|  |  (HNSW)      |  | (Vec + BM25) |  |  (in-memory) |    |
+|  +------+-------+  +------+-------+  +------+-------+    |
+|         |                 |                 |             |
+|         +--------+--------+-----------------+             |
+|                  |                                        |
+|          +-------v-------+                                |
+|          |   VelesDB     |                                |
+|          |  Query Engine |                                |
+|          +---------------+                                |
+|                                                          |
++----------------------------------------------------------+
 ```
 
-## 💡 Real-World Applications
+## Real-World Applications
 
 This pattern is ideal for:
 
@@ -202,42 +227,35 @@ This pattern is ideal for:
 - **Job Portals**: Job matching using skills embeddings + company network
 - **Real Estate**: Property recommendations by features + location proximity
 
-## 🔧 Customization
+## Customization
 
 ### Change Vector Dimensions
 ```rust
-let config = CollectionConfig {
-    dimension: 384,  // Use larger embeddings for better accuracy
-    ..Default::default()
-};
+// Use the Database API to create a collection with different dimensions
+db.create_collection("products", 384, DistanceMetric::Cosine)?;
 ```
 
-### Add More Relationship Types
+### Add Graph Relationships via VelesDB Graph Collections
+For true graph traversal (not just metadata co-purchase lists), use VelesDB's `GraphCollection`:
 ```rust
-let edge = Edge::new(
-    id,
-    source_id,
-    target_id,
-    RelationshipType::Custom("SIMILAR_CATEGORY".to_string()),
-);
+let edge = GraphEdge::new(id, source_id, target_id, "SIMILAR_CATEGORY")?;
 ```
 
 ### Custom Scoring Weights
 ```rust
-// Adjust weights based on your use case
-const VECTOR_WEIGHT: f32 = 0.5;
-const GRAPH_WEIGHT: f32 = 0.3;
-const POPULARITY_WEIGHT: f32 = 0.2;
+// In hybrid_search, alpha controls vector vs BM25 weight
+// alpha=0.6 means 60% vector, 40% BM25
+let results = collection.hybrid_search(&embedding, &text, 20, Some(0.6))?;
 ```
 
-## 🧪 E2E Tests (Playwright)
+## E2E Tests (Playwright)
 
-The example includes comprehensive Playwright E2E tests validating:
+The example includes Playwright E2E tests validating:
 
-- **Data generation**: 5000 products, ~20000 relationships
-- **Query execution**: All 4 query types complete successfully  
+- **Data generation**: 5000 products, co-purchase relationships
+- **Query execution**: All 4 query types complete successfully
 - **Performance**: All queries under 10ms threshold
-- **Output format**: VelesQL syntax, graph queries, metrics
+- **Output format**: Graph query syntax, performance summary metrics
 
 ```bash
 # Install dependencies
@@ -250,32 +268,13 @@ npm test
 npm run test:report
 ```
 
-### Test Results
-
-```
-Running 15 tests using 1 worker
-  ✓  should generate 5000 products
-  ✓  should generate co-purchase relationships
-  ✓  should execute Vector Similarity query (Query 1)
-  ✓  should execute Vector + Filter query (Query 2)
-  ✓  should execute Graph Lookup query (Query 3)
-  ✓  should execute Combined query (Query 4)
-  ✓  should complete demo successfully
-  ✓  vector search should be under 10ms
-  ✓  filtered search should be under 10ms
-  ✓  graph lookup should be under 1ms
-  ✓  combined query should be under 10ms
-  ...
-  15 passed (2.9s)
-```
-
-## 📚 Related Documentation
+## Related Documentation
 
 - [VelesDB README](../../README.md) - Main documentation
 - [VelesQL Specification](../../docs/VELESQL_SPEC.md) - SQL query syntax
 - [Concurrency Model](../../docs/CONCURRENCY_MODEL.md) - Concurrency and locking model
 - [Examples Overview](../README.md) - All available examples
 
-## 📄 License
+## License
 
 MIT License
