@@ -407,7 +407,7 @@ INSERT                      INDEX                       SEARCH
 
 **Optimizations:** AVX-512/AVX2/NEON auto-detection, 4-accumulator ILP, zero-dispatch DistanceEngine, batch prefetch L1/L2, 64-byte aligned memory, batch WAL, memory-mapped files.
 
-> **Full benchmarks & methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
+> **Full benchmarks & methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md) | **All documentation:** [docs/README.md](docs/README.md)
 
 *Measured March 24, 2026 on i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0. Criterion.rs, sequential runs on idle machine. Results depend on CPU, SIMD support, and dataset.*
 

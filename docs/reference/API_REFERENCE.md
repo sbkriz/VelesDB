@@ -260,3 +260,5 @@ curl -X POST http://localhost:8080/query \
   "rows_returned": 1
 }
 ```
+
+> **Error codes reference:** [ERROR_CODES.md](ERROR_CODES.md)

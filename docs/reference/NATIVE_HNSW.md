@@ -186,3 +186,5 @@ The Native HNSW implementation is now **production-ready** and can fully replace
 - **int8 graph traversal**: Use quantized vectors for graph exploration
 - **PCA dimension reduction**: Reduce dimensions during traversal
 - **GPU acceleration**: CUDA/Vulkan compute shaders for batch operations
+
+> **ANN State of the Art:** [ANN_SOTA_AUDIT.md](../ANN_SOTA_AUDIT.md)
