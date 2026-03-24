@@ -98,10 +98,10 @@
     {
       "id": "readme_recall_balanced_mode",
       "file": "README.md",
-      "must_contain": "| Balanced (default) | 128 | 98.8% | ~102µs |",
+      "must_contain": "| Balanced (default) | 128 | 98.8% | 57µs |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_recall_accurate_mode",

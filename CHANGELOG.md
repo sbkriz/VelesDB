@@ -58,6 +58,7 @@ Minor release delivering **HNSW upsert semantics** (in-place vector update/repla
 
 - **Internal Documentation Cleanup** (#340) — Removed internal-only documentation from public repository.
 - **Install Script Alignment** (#339) — Aligned install scripts with actual GitHub Release asset names.
+- **VelesQL Contract Version** — Documentation updated from v2.1.0/v2.2.0 to v3.0.0 to match the runtime contract constant (`VELESQL_CONTRACT_VERSION`). The v3.0.0 contract was already shipped in code since v1.6.0 but documentation was lagging. No wire-protocol breaking changes — the version bump reflects accumulated parser features (SPARSE_NEAR, TRAIN QUANTIZER, enhanced JOIN/UNION support) that were already available.
 
 ## [1.6.0] - 2026-03-20
 
