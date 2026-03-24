@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-03-24
+
+### Highlights
+
+Minor release delivering **HNSW upsert semantics** (in-place vector update/replace), **complete GPU acceleration** (multi-metric wgpu pipelines with adaptive thresholds), **major batch insert optimizations** (chunked phase B, alloc/connect separation, ~2x throughput), and **search_layer batch SIMD** with deferred indexing. Includes critical fixes for batch rollback ordering, dimension validation, and Python binding re-entrancy.
+
+### Features
+
+- **HNSW Upsert Semantics** (#371) — Support vector update/replace with upsert semantics. Inserting a vector with an existing ID now replaces it in-place (HNSW graph reconnection + storage update) instead of requiring delete + reinsert. Applies to both single insert and batch operations.
+- **Chunked Batch Insertion** (#364) — Implement chunked Phase B with inter-chunk entry point update. Large batches are split into optimal chunks (based on `compute_chunk_size()`), each chunk updates the global entry point for better graph connectivity. Extracted `bootstrap_entry_point()` and `finalize_batch()` as clean orchestration steps.
+- **GPU Acceleration — Complete Multi-Metric Pipelines** (#358) — Full GPU acceleration across all distance metrics (cosine, euclidean, dot, hamming, jaccard) via wgpu compute shaders. Adaptive batch thresholds auto-tune GPU vs CPU dispatch. Multi-pipeline architecture with per-metric shader specialization.
+- **Cyclomatic Complexity Tooling** (#354) — Added flake8 + cargo-complexity tooling for automated complexity monitoring.
+
+### Performance
+
+- **search_layer Batch SIMD + Deferred Indexing** (#366, #369) — Batch SIMD distance computation in HNSW search_layer replaces per-candidate evaluation. Deferred indexing postpones neighbor list updates during search for reduced lock contention. Combined improvement: ~15-20% search throughput gain.
+- **Batch Insert Alloc/Connect Separation** (#362) — Separate allocation phase from connection phase in parallel batch insert. Pre-allocate all node slots, then connect in parallel without lock contention on the allocator. ~2x throughput improvement for large batches.
+
+### Fixed
+
+- **HNSW Batch Rollback Order** — Reverse batch rollback order for duplicate-ID correctness. Previously, forward-order rollback could leave orphaned graph edges when a batch contained duplicate IDs.
+- **HNSW Dimension Validation** — Upfront dimension validation with index-aware rollback. Validates vector dimensions before upsert_mapping to prevent partial state on dimension mismatch.
+- **HNSW insert_batch_sequential Rewrite** — Rewritten to per-item upsert semantics for consistency with single-insert behavior.
+- **Python Import Mismatch & Re-entrant DB Lock** (#357, #356) — Resolved import path mismatch and re-entrant lock deadlock in Python bindings.
+- **GPU Read Lock Starvation** — Release read lock before GPU dispatch to prevent write-starvation under concurrent load.
+- **GPU alloc_zeroed UB** — Use `alloc_zeroed` instead of uninitialized allocation to prevent undefined behavior in GPU buffer setup.
+- **Clippy Pedantic Warnings** (#368) — Resolved all remaining clippy pedantic warnings blocking CI.
+- **Bench Recall Delta Display** (#364) — Multiply recall delta by 100 for correct percentage display in benchmark reports.
+
+### Refactored
+
+- **Code Duplication Elimination** (#345) — Systematic deduplication across codebase using Martin Fowler refactoring patterns. Extracted shared helpers, consolidated test setup, unified error handling.
+- **HNSW Batch Orchestration** (#364) — Extracted `finalize_batch()`, `bootstrap_entry_point()`, and `compute_chunk_size()` from monolithic `parallel_insert`. Clean separation of concerns.
+- **Post-Refactor Regression Fixes** (#345, #346) — Addressed regressions found by code review after the deduplication refactor.
+
+### Documentation
+
+- **README Revamp** (#352) — Complete README rewrite for developer conversion: problem statement, comparison table, quick start, VelesQL examples, architecture diagram, performance benchmarks.
+- **Benchmark Performance Comparison** — Added PR #363+#365 performance comparison report with detailed analysis.
+- **HNSW Invariant Comments** (#364) — Added invariant comments from code review for batch insertion code paths.
+
+### Security
+
+- **SAFETY Comments** (#353) — Added missing `// SAFETY:` comments for all `clippy::undocumented_unsafe_blocks` findings.
+- **Codacy Cloud Resolution** (#342) — Resolved Codacy Cloud findings via targeted exclusions and Python security fixes.
+- **LlamaIndex Edge ID Fix** (#344) — Renamed `add_edge` ID parameter and bumped security dependencies.
+
+### Chore
+
+- **Internal Documentation Cleanup** (#340) — Removed internal-only documentation from public repository.
+- **Install Script Alignment** (#339) — Aligned install scripts with actual GitHub Release asset names.
+- **VelesQL Contract Version** — Documentation updated from v2.1.0/v2.2.0 to v3.0.0 to match the runtime contract constant (`VELESQL_CONTRACT_VERSION`). The v3.0.0 contract was already shipped in code since v1.6.0 but documentation was lagging. No wire-protocol breaking changes — the version bump reflects accumulated parser features (SPARSE_NEAR, TRAIN QUANTIZER, enhanced JOIN/UNION support) that were already available.
+
 ## [1.6.0] - 2026-03-20
 
 ### Highlights

@@ -2589,13 +2589,19 @@ fn test_batch_upsert_within_batch_duplicates() {
 
     let inserted = index.insert_batch_parallel(batch);
     // Count may include both entries for id=1, but len() must reflect unique IDs
-    assert!(inserted >= 2, "At least 2 entries processed, got {inserted}");
+    assert!(
+        inserted >= 2,
+        "At least 2 entries processed, got {inserted}"
+    );
     assert_eq!(index.len(), 2, "Only 2 unique IDs should be mapped");
 
     // id=1 must be searchable and point to vec_b (last wins)
     let results = index.search(&vec_b, 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, 1, "id=1 must be findable after within-batch upsert");
+    assert_eq!(
+        results[0].id, 1,
+        "id=1 must be findable after within-batch upsert"
+    );
     assert!(
         results[0].score > 0.9,
         "id=1 should match vec_b, got score {}",

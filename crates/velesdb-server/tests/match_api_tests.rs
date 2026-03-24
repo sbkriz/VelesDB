@@ -37,7 +37,7 @@ fn test_match_response_json_format() {
         ],
         "took_ms": 15,
         "count": 1,
-        "meta": {"velesql_contract_version": "2.1.0"}
+        "meta": {"velesql_contract_version": "3.0.0"}
     });
 
     let results = response["results"].as_array().unwrap();
@@ -103,7 +103,7 @@ fn test_match_response_multiple_results() {
         ],
         "took_ms": 25,
         "count": 3,
-        "meta": {"velesql_contract_version": "2.1.0"}
+        "meta": {"velesql_contract_version": "3.0.0"}
     });
 
     assert_eq!(response["count"].as_u64().unwrap(), 3);
@@ -124,7 +124,7 @@ fn test_match_response_empty_results() {
         "results": [],
         "took_ms": 5,
         "count": 0,
-        "meta": {"velesql_contract_version": "2.1.0"}
+        "meta": {"velesql_contract_version": "3.0.0"}
     });
 
     assert_eq!(response["results"].as_array().unwrap().len(), 0);

@@ -27,7 +27,8 @@ mod search;
 mod trait_impl;
 mod vacuum;
 
-#[allow(unused_imports)] // Re-export for downstream consumers; not directly used in this module
+#[allow(unused_imports)]
+// Re-export for downstream consumers; not directly used in this module
 pub use vacuum::VacuumError;
 
 use super::native_inner::NativeHnswInner as HnswInner;

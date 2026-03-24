@@ -9,7 +9,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (42.8µs search at 768D, 23.6ns dot product 768D)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (40.6µs search at 768D, 19.8ns dot product 768D)
 - **Adaptive Search**: Two-phase ef_search that auto-escalates only for hard queries (2-4x faster median)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion
@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.create_collection("documents", 384, DistanceMetric::Cosine)?;
 
     // Get the collection handle
-    let collection = db.get_collection("documents")
+    let collection = db.get_vector_collection("documents")
         .ok_or("Collection not found")?;
 
     // Insert vectors with metadata (upsert takes ownership)
@@ -135,7 +135,7 @@ use velesdb_core::{Database, DistanceMetric, Point};
 
 let db = Database::open("./data")?;
 db.create_collection("bulk_test", 768, DistanceMetric::Cosine)?;
-let collection = db.get_collection("bulk_test")
+let collection = db.get_vector_collection("bulk_test")
     .ok_or("Collection not found")?;
 
 // Generate 10,000 vectors
@@ -203,11 +203,11 @@ db.create_collection_with_options(
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| Dot Product | **23.6 ns** | 32.5 Gelem/s |
-| Euclidean Distance | **22.7 ns** | 33.8 Gelem/s |
-| Cosine Similarity | **33.6 ns** | 22.9 Gelem/s |
-| Hamming Distance | **34.3 ns** | — |
-| Jaccard Similarity | **29.3 ns** | — |
+| Dot Product | **19.8 ns** | 38.8 Gelem/s |
+| Euclidean Distance | **20.7 ns** | 37.1 Gelem/s |
+| Cosine Similarity | **32.7 ns** | 23.5 Gelem/s |
+| Hamming Distance | **34.4 ns** | — |
+| Jaccard Similarity | **28.8 ns** | — |
 
 *Measured March 2026 on Intel Core i9-14900KF, 64GB DDR5, Rust 1.92.0, `--release`, sequential on idle machine.*
 
@@ -215,14 +215,14 @@ db.create_collection_with_options(
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search** | **42.8 µs** (k=10, Balanced mode) |
+| **HNSW Search** | **40.6 µs** (k=10, Balanced mode) |
 | **VelesQL Cache Hit** | **1.06 µs** (~943K QPS) |
-| **Sparse Search** | **958 µs** (MaxScore DAAT) |
+| **Sparse Search** | **825 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
 
 ### Key Performance Features
 
-- Search latency: **42.8µs** for 10K/768D vectors (k=10)
+- Search latency: **40.6µs** for 10K/768D vectors (k=10)
 - Insert throughput: **3.8-7x faster** than pgvector (10K-100K vectors, [benchmark](../../benchmarks/README.md))
 - ColumnStore filtering: faster than JSON scanning at scale
 
@@ -230,12 +230,12 @@ db.create_collection_with_options(
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **98.8%** | 85µs | ✅ |
-| **10K/128D** | Accurate | 512 | **100%** | 112µs | ✅ |
-| **10K/128D** | Perfect | 4096 | **100%** | 163µs | ✅ |
+| **10K/128D** | Balanced | 128 | **98.8%** | 57µs | ✅ |
+| **10K/128D** | Accurate | 512 | **100%** | 130µs | ✅ |
+| **10K/128D** | Perfect | 4096 | **100%** | 200µs | ✅ |
 | **10K/128D** | Adaptive | 32-512 | **95%+** | ~40µs (easy) | ✅ |
 
-> *Latency P50 = median over 100 queries. The headline "42.8µs" is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
+> *Latency P50 = median over 100 queries. The headline "40.6µs" is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
 
 > 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 
@@ -400,7 +400,7 @@ use velesdb_core::sparse_index::SparseVector;
 
 let db = Database::open("./data")?;
 db.create_collection("docs", 768, DistanceMetric::Cosine)?;
-let collection = db.get_collection("docs")
+let collection = db.get_vector_collection("docs")
     .ok_or("Collection not found")?;
 
 // Build a sparse vector from (term_index, weight) pairs
@@ -436,7 +436,7 @@ high-coverage queries.
 let query = SparseVector::new(vec![(42, 1.0), (187, 0.5)]);
 
 // Search the default sparse index for top-5 results
-let results = collection.sparse_search_default(&query, 5)?;
+let results = collection.sparse_search(&query, 5, "")?;
 for result in &results {
     println!("ID: {}, Score: {:.4}", result.point.id, result.score);
 }
@@ -461,6 +461,7 @@ let results = collection.hybrid_sparse_search(
     &dense_query,
     &sparse_query,
     10,         // top-k
+    "",         // default sparse index
     &strategy,
 )?;
 
@@ -488,10 +489,8 @@ let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
 
 | Method | On | Description |
 |--------|-----|-------------|
-| `sparse_search_default(query, k)` | `Collection` | Sparse search on the default (`""`) index |
-| `sparse_search_named(query, k, name)` | `Collection` | Sparse search on a named index |
-| `hybrid_sparse_search(dense, sparse, k, strategy)` | `Collection` | Dense + sparse with fusion |
-| `hybrid_sparse_search_with_filter(dense, sparse, k, strategy, filter)` | `Collection` | Same with metadata filter |
+| `sparse_search(query, k, index_name)` | `VectorCollection` | Sparse search on the given index (`""` for default) |
+| `hybrid_sparse_search(dense, sparse, k, index_name, strategy)` | `VectorCollection` | Dense + sparse with fusion |
 
 ## Streaming Inserts
 
@@ -512,7 +511,7 @@ let config = StreamingConfig {
     flush_interval_ms: 50,   // or every 50ms, whichever comes first
 };
 
-// `collection` is a Collection obtained from db.get_collection(...)
+// `collection` is a Collection obtained from db.get_vector_collection(...)
 let ingester = StreamIngester::new(collection, config);
 
 // Send points — returns immediately

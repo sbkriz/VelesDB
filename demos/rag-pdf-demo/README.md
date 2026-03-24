@@ -174,7 +174,7 @@ CHUNK_OVERLAP=50
 
 ## 📊 Performance Benchmarks
 
-Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.6.0 (500 iterations):
+Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.7.0 (500 iterations):
 
 ### Layer-by-Layer Latency
 
@@ -302,9 +302,7 @@ Remove-Item .\rag-data -Recurse -Force
 ```bash
 # Via web interface: Click trash icon next to document
 # Or via API:
-curl -X POST "http://127.0.0.1:8000/documents/delete" \
-  -H "Content-Type: application/json" \
-  -d '{"document_name": "your-document.pdf"}'
+curl -X DELETE "http://127.0.0.1:8000/documents/your-document.pdf"
 ```
 
 ### 📊 Storage Usage

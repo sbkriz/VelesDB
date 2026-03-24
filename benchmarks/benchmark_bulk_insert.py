@@ -246,7 +246,7 @@ def run_benchmark():
     # Save results
     output = {
         "engine": "VelesDB",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "cpu": cpu,
         "ram_gb": ram_gb,
         "os": f"{platform.system()} {platform.version()}",

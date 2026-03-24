@@ -9,7 +9,7 @@ Benchmark suite comparing VelesDB against pgvector (HNSW).
 - Do not claim superiority over FAISS, Qdrant, SimSIMD, or other systems unless the dataset, recall target, hardware, and methodology are matched.
 - For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
 
-## v1.6.0 Results: VelesDB Recall ≥95% Guaranteed
+## v1.7.0 Results: VelesDB Recall ≥95% Guaranteed
 
 > Legacy note: The table below was originally captured under v0.7.3 Docker benchmarks.
 > For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
@@ -31,7 +31,7 @@ Benchmark suite comparing VelesDB against pgvector (HNSW).
 | 10K | ~5s | ~19s | **3.8x** |
 | 100K | ~52s | ~365s | **7x** |
 
-### Key Optimizations (v1.6.0)
+### Key Optimizations (v1.7.0)
 
 - **SIMD AVX-512/AVX2** - 32-wide processing with FMA
 - **Adaptive HNSW params** - `HnswParams::for_dataset_size()` for optimal recall

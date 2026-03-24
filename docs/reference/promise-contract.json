@@ -34,31 +34,31 @@
     {
       "id": "readme_simd_dot_product_latency",
       "file": "README.md",
-      "must_contain": "**23.6 ns**",
+      "must_contain": "**19.8 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_simd_euclidean_latency",
       "file": "README.md",
-      "must_contain": "**22.7 ns**",
+      "must_contain": "**20.7 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_simd_cosine_latency",
       "file": "README.md",
-      "must_contain": "**33.6 ns**",
+      "must_contain": "**32.7 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_hnsw_search_latency",
       "file": "README.md",
-      "must_contain": "**42.8 µs** (k=10)",
+      "must_contain": "**40.6 µs** (k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
       "note": "Re-run benchmark and update if value changes",
       "last_updated": "2026-03-18"
@@ -74,10 +74,10 @@
     {
       "id": "readme_sparse_search_latency",
       "file": "README.md",
-      "must_contain": "**958 µs** (MaxScore DAAT)",
+      "must_contain": "**825 µs** (MaxScore DAAT)",
       "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_recall_at_10_accurate",
@@ -98,10 +98,10 @@
     {
       "id": "readme_recall_balanced_mode",
       "file": "README.md",
-      "must_contain": "| Balanced (default) | 128 | 98.8% | ~102µs |",
+      "must_contain": "| Balanced (default) | 128 | 98.8% | 57µs |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_recall_accurate_mode",

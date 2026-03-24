@@ -1,4 +1,4 @@
-# VelesQL Conformance Cases (Contract v2.1.0)
+# VelesQL Conformance Cases (Contract v3.0.0)
 
 Last updated: 2026-03-04
 

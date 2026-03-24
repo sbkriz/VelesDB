@@ -8,7 +8,7 @@ This matrix tracks runtime contract and feature parity across the VelesDB ecosys
 
 - Canonical REST contract: `docs/reference/VELESQL_CONTRACT.md`
 - Canonical conformance fixture: `conformance/velesql_contract_cases.json`
-- Contract version: `2.1.0`
+- Contract version: `3.0.0`
 
 ## Endpoint and Payload Parity
 

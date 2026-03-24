@@ -1,6 +1,6 @@
 {
   "engine": "VelesDB",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "cpu": "Intel(R) Core(TM) i9-14900KF",
   "ram_gb": 64,
   "os": "Windows 10.0.26200",
