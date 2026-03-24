@@ -290,6 +290,15 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if allocation or graph insertion fails.
     pub fn insert(&self, id: u64, vector: &[f32]) -> crate::error::Result<()> {
+        // Validate dimension BEFORE upsert_mapping to avoid destroying the old
+        // mapping for an invalid vector (Devin review finding).
+        if vector.len() != self.dimension {
+            return Err(crate::error::Error::DimensionMismatch {
+                expected: self.dimension,
+                actual: vector.len(),
+            });
+        }
+
         let result = self.upsert_mapping(id);
 
         if let Err(e) = self.inner.read().insert((vector, result.idx)) {
@@ -316,6 +325,16 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if any insertion fails.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
+        // Validate all dimensions upfront before any upsert_mapping side effects.
+        for (_id, vec) in items {
+            if vec.len() != self.dimension {
+                return Err(crate::error::Error::DimensionMismatch {
+                    expected: self.dimension,
+                    actual: vec.len(),
+                });
+            }
+        }
+
         let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
 
         let data: Vec<(&[f32], usize)> = items
