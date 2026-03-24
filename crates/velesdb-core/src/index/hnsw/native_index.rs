@@ -12,13 +12,11 @@
 //! velesdb-core = { version = "0.8", features = ["native-hnsw"] }
 //! ```
 
-#![allow(dead_code)] // Will be used when feature flag is enabled
-#![allow(clippy::cast_precision_loss)] // Test code uses simple casts
-
 use super::native_inner::NativeHnswInner;
 use super::params::{HnswParams, SearchQuality};
 use super::sharded_mappings::ShardedMappings;
 use super::sharded_vectors::ShardedVectors;
+use super::upsert::{self, UpsertResult};
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 use crate::scored_result::ScoredResult;
@@ -43,6 +41,7 @@ pub struct NativeHnswIndex {
     mappings: ShardedMappings,
     vectors: ShardedVectors,
     enable_vector_storage: bool,
+    #[allow(dead_code)] // Retained for future vacuum/rebuild operations
     params: HnswParams,
 }
 
@@ -208,18 +207,21 @@ impl NativeHnswIndex {
         self.metric
     }
 
-    /// Returns the number of vectors in the index.
+    /// Returns the number of live vectors in the index.
+    ///
+    /// This reflects the mapping count (excluding tombstones), consistent
+    /// with `HnswIndex::len()`.
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.read().len()
+        self.mappings.len()
     }
 
-    /// Returns true if the index is empty.
+    /// Returns true if the index contains no live vectors.
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.read().is_empty()
+        self.mappings.is_empty()
     }
 
     /// Returns whether vector storage is enabled.
@@ -230,11 +232,13 @@ impl NativeHnswIndex {
     }
 
     /// Searches for the k nearest neighbors.
+    #[must_use]
     pub fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.search_with_quality(query, k, SearchQuality::Balanced)
     }
 
     /// Searches with a specific quality profile.
+    #[must_use]
     pub fn search_with_quality(
         &self,
         query: &[f32],
@@ -256,76 +260,77 @@ impl NativeHnswIndex {
             .collect()
     }
 
-    /// Inserts a single vector.
+    /// Registers an ID with upsert semantics and cleans up stale vector data.
     ///
-    /// Internal mapping races are handled defensively: if a concurrent
-    /// registration race violates the mapping invariant, insertion is skipped.
+    /// Returns an [`UpsertResult`] with the new internal index and optional
+    /// old index for rollback. If the ID already existed, the old mapping is
+    /// replaced and the stale sidecar vector is removed.
+    #[must_use]
+    fn upsert_mapping(&self, id: u64) -> UpsertResult {
+        upsert::upsert_mapping(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            id,
+        )
+    }
+
+    /// Rolls back a mapping upsert after a failed graph insertion.
+    fn rollback_upsert(&self, id: u64, result: &UpsertResult) {
+        upsert::rollback_upsert(&self.mappings, id, result);
+    }
+
+    /// Inserts or updates a single vector (upsert semantics).
+    ///
+    /// If `id` already exists, the old mapping is atomically replaced and
+    /// stale vector data is cleaned up. The old HNSW graph node becomes a
+    /// tombstone, filtered out during search via the reverse mapping.
     ///
     /// # Errors
     ///
-    /// Returns an error if allocation or insertion fails.
+    /// Returns an error if allocation or graph insertion fails.
     pub fn insert(&self, id: u64, vector: &[f32]) -> crate::error::Result<()> {
-        // Register ID and get internal index (or get existing)
-        // Track whether we newly registered this ID (vs. re-inserting an existing one)
-        let newly_registered = self.mappings.register(id);
-        let internal_idx = newly_registered.or_else(|| self.mappings.get_idx(id));
-        let Some(internal_idx) = internal_idx else {
-            debug_assert!(
-                false,
-                "Invariant violated: register returned None but ID missing from mappings"
-            );
-            return Ok(());
-        };
+        let result = self.upsert_mapping(id);
 
-        // If graph insertion fails, roll back the mapping to avoid orphaned entries
-        if let Err(e) = self.inner.read().insert((vector, internal_idx)) {
-            if newly_registered.is_some() {
-                self.mappings.remove(id);
-            }
+        if let Err(e) = self.inner.read().insert((vector, result.idx)) {
+            self.rollback_upsert(id, &result);
             return Err(e);
         }
 
         if self.enable_vector_storage {
-            self.vectors.insert(internal_idx, vector);
+            self.vectors.insert(result.idx, vector);
         }
         Ok(())
     }
 
-    /// Batch insert multiple vectors.
+    /// Batch insert or update multiple vectors (upsert semantics).
     ///
-    /// Internal mapping races are handled defensively: if a concurrent
-    /// registration race violates the mapping invariant, insertion is skipped.
+    /// For each item, the mapping is atomically replaced if the ID already
+    /// exists. Stale vector data is cleaned up before the graph insertion.
+    ///
+    /// On graph insertion failure, all IDs in this batch are removed from
+    /// mappings. For replaced IDs, the old mapping is already gone — the
+    /// caller should retry the full batch.
     ///
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
-        // Track newly registered IDs so we can roll back on failure
-        let mut newly_registered_ids: Vec<u64> = Vec::new();
+        let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
 
         let data: Vec<(&[f32], usize)> = items
             .iter()
-            .filter_map(|(id, vec)| {
-                let is_new = self.mappings.register(*id);
-                if is_new.is_some() {
-                    newly_registered_ids.push(*id);
-                }
-                let idx = is_new.or_else(|| self.mappings.get_idx(*id));
-                let Some(idx) = idx else {
-                    debug_assert!(
-                        false,
-                        "Invariant violated: register returned None but ID missing from mappings"
-                    );
-                    return None;
-                };
-                Some((vec.as_slice(), idx))
+            .map(|(id, vec)| {
+                let result = self.upsert_mapping(*id);
+                let idx = result.idx;
+                rollback_info.push((*id, result));
+                (vec.as_slice(), idx)
             })
             .collect();
 
-        // If parallel_insert fails, roll back all newly registered mappings
         if let Err(e) = self.inner.read().parallel_insert(&data) {
-            for id in &newly_registered_ids {
-                self.mappings.remove(*id);
+            for (id, result) in &rollback_info {
+                self.rollback_upsert(*id, result);
             }
             return Err(e);
         }
@@ -338,9 +343,19 @@ impl NativeHnswIndex {
         Ok(())
     }
 
-    /// Removes a vector by ID (marks as deleted in mappings).
+    /// Removes a vector by ID (soft delete).
+    ///
+    /// Removes the ID from mappings and cleans up stored vector data.
+    /// The HNSW graph node becomes a tombstone, filtered out during search.
     pub fn remove(&self, id: u64) -> bool {
-        self.mappings.remove(id).is_some()
+        if let Some(old_idx) = self.mappings.remove(id) {
+            if self.enable_vector_storage {
+                self.vectors.remove(old_idx);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Sets searching mode (no-op for native implementation).
@@ -348,9 +363,7 @@ impl NativeHnswIndex {
     /// This method exists for API compatibility with `HnswIndex`.
     /// The native implementation doesn't require mode switching.
     #[allow(clippy::unused_self)]
-    pub fn set_searching_mode(&self) {
-        // No-op - native implementation doesn't need this
-    }
+    pub fn set_searching_mode(&self) {}
 
     /// Parallel batch insert - API compatible with `HnswIndex`.
     ///
@@ -382,6 +395,7 @@ impl NativeHnswIndex {
     /// # Returns
     ///
     /// Vector of results for each query.
+    #[must_use]
     pub fn search_batch_parallel(
         &self,
         queries: &[&[f32]],
@@ -419,17 +433,14 @@ impl NativeHnswIndex {
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         use rayon::prelude::*;
 
-        // Collect all vectors for parallel iteration
         let vectors_snapshot = self.vectors.collect_for_parallel();
 
         if vectors_snapshot.is_empty() {
             return Vec::new();
         }
 
-        // Get distance calculator from inner
         let inner = self.inner.read();
 
-        // Compute distances in parallel
         let mut results: Vec<ScoredResult> = vectors_snapshot
             .par_iter()
             .filter_map(|(idx, vec)| {
@@ -439,7 +450,6 @@ impl NativeHnswIndex {
             })
             .collect();
 
-        // Sort by distance (ascending for most metrics)
         self.metric.sort_scored_results(&mut results);
 
         results.truncate(k);

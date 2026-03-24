@@ -254,6 +254,74 @@ fn test_sharded_mappings_no_data_race() {
 }
 
 // -------------------------------------------------------------------------
+// register_or_replace tests
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_register_or_replace_new_id() {
+    let mappings = ShardedMappings::new();
+    let (idx, old) = mappings.register_or_replace(42);
+    assert_eq!(idx, 0);
+    assert_eq!(old, None);
+    assert_eq!(mappings.get_idx(42), Some(0));
+    assert_eq!(mappings.get_id(0), Some(42));
+    assert_eq!(mappings.len(), 1);
+}
+
+#[test]
+fn test_register_or_replace_existing_id() {
+    let mappings = ShardedMappings::new();
+    let first_idx = mappings.register(42).expect("first register");
+    let (new_idx, old_idx) = mappings.register_or_replace(42);
+
+    assert_eq!(old_idx, Some(first_idx));
+    assert_ne!(new_idx, first_idx);
+    // Old reverse mapping removed
+    assert_eq!(mappings.get_id(first_idx), None);
+    // New mapping present
+    assert_eq!(mappings.get_idx(42), Some(new_idx));
+    assert_eq!(mappings.get_id(new_idx), Some(42));
+    // Length is still 1 (replaced, not duplicated)
+    assert_eq!(mappings.len(), 1);
+}
+
+// -------------------------------------------------------------------------
+// restore tests (rollback support)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_restore_after_remove() {
+    let mappings = ShardedMappings::new();
+    let old_idx = mappings.register(42).expect("register");
+    mappings.remove(42);
+    assert_eq!(mappings.get_idx(42), None);
+
+    mappings.restore(42, old_idx);
+    assert_eq!(mappings.get_idx(42), Some(old_idx));
+    assert_eq!(mappings.get_id(old_idx), Some(42));
+    assert_eq!(mappings.len(), 1);
+}
+
+#[test]
+fn test_restore_after_register_or_replace_rollback() {
+    let mappings = ShardedMappings::new();
+    let first_idx = mappings.register(42).expect("register");
+
+    // Simulate upsert: register_or_replace allocates a new idx
+    let (new_idx, old_idx) = mappings.register_or_replace(42);
+    assert_eq!(old_idx, Some(first_idx));
+
+    // Simulate failure: remove new mapping, restore old one
+    mappings.remove(42);
+    assert_eq!(mappings.get_id(new_idx), None);
+
+    mappings.restore(42, first_idx);
+    assert_eq!(mappings.get_idx(42), Some(first_idx));
+    assert_eq!(mappings.get_id(first_idx), Some(42));
+    assert_eq!(mappings.len(), 1);
+}
+
+// -------------------------------------------------------------------------
 // Serialization tests (TDD for HnswIndex migration)
 // -------------------------------------------------------------------------
 

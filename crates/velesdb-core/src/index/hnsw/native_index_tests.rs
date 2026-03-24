@@ -172,3 +172,93 @@ fn test_native_index_brute_force_k_larger_than_size() {
     let results = index.brute_force_search_parallel(&vec![0.0; 32], 10);
     assert_eq!(results.len(), 2);
 }
+
+// -------------------------------------------------------------------------
+// Upsert Semantics Tests (Issue #371 — TDD Cycle 4)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_native_insert_same_id_updates_vector() {
+    // Arrange: create index with vector storage enabled (default)
+    let index = NativeHnswIndex::new(4, DistanceMetric::Cosine).expect("test");
+
+    // Insert id=1 with vector A (pointing along x-axis)
+    let vector_a = [1.0, 0.0, 0.0, 0.0];
+    index.insert(1, &vector_a).expect("test");
+
+    // Act: insert id=1 again with vector B (pointing along y-axis, orthogonal to A)
+    let vector_b = [0.0, 1.0, 0.0, 0.0];
+    index.insert(1, &vector_b).expect("test");
+
+    // Assert 1: index length must still be 1 (not 2)
+    assert_eq!(index.len(), 1, "Upsert must not create duplicate entries");
+
+    // Assert 2: search with query=B should return id=1 with high similarity
+    let results = index.search(&vector_b, 1);
+    assert_eq!(results.len(), 1, "Should find exactly one result");
+    assert_eq!(results[0].id, 1, "Result must be id=1");
+    assert!(
+        results[0].score > 0.9,
+        "Similarity to updated vector B should be > 0.9, got {}",
+        results[0].score,
+    );
+}
+
+#[test]
+fn test_native_batch_upsert_updates_existing() {
+    // Arrange: create index and insert 10 vectors via batch
+    let index = NativeHnswIndex::new(4, DistanceMetric::Cosine).expect("test");
+
+    let initial: Vec<(u64, Vec<f32>)> = (0..10).map(|i| (i, vec![1.0, 0.0, 0.0, 0.0])).collect();
+    index.insert_batch(&initial).expect("test");
+    assert_eq!(
+        index.len(),
+        10,
+        "Should have 10 vectors after initial batch"
+    );
+
+    // Act: update 5 vectors (ids 0..5) with a different direction
+    let updates: Vec<(u64, Vec<f32>)> = (0..5).map(|i| (i, vec![0.0, 1.0, 0.0, 0.0])).collect();
+    index.insert_batch(&updates).expect("test");
+
+    // Assert 1: total count must still be 10 (not 15)
+    assert_eq!(index.len(), 10, "Upsert batch must not inflate count");
+
+    // Assert 2: searching with the updated direction should find updated vectors
+    let query = [0.0, 1.0, 0.0, 0.0];
+    let results = index.search(&query, 5);
+    assert!(!results.is_empty(), "Search must return results");
+    // The top result should be one of the updated ids (0..5) with high similarity
+    assert!(
+        results[0].id < 5,
+        "Top result should be an updated vector (id < 5), got id={}",
+        results[0].id,
+    );
+    assert!(
+        results[0].score > 0.9,
+        "Updated vector similarity should be > 0.9, got {}",
+        results[0].score,
+    );
+}
+
+#[test]
+fn test_native_remove_cleans_up_vector_storage() {
+    // Arrange: insert a vector with storage enabled
+    let index = NativeHnswIndex::new(4, DistanceMetric::Cosine).expect("test");
+    index.insert(1, &[1.0, 0.0, 0.0, 0.0]).expect("test");
+
+    // Verify vector exists in brute-force (uses ShardedVectors)
+    let before = index.brute_force_search_parallel(&[1.0, 0.0, 0.0, 0.0], 1);
+    assert_eq!(before.len(), 1, "Should find vector before removal");
+
+    // Act: remove the vector
+    assert!(index.remove(1), "Remove should return true for existing ID");
+
+    // Assert: brute-force search should find nothing (vector storage cleaned up)
+    let after = index.brute_force_search_parallel(&[1.0, 0.0, 0.0, 0.0], 1);
+    assert!(
+        after.is_empty(),
+        "Brute-force should find nothing after removal, got {} results",
+        after.len(),
+    );
+}

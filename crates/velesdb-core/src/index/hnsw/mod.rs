@@ -31,6 +31,7 @@ mod params;
 pub(crate) mod persistence;
 mod sharded_mappings;
 mod sharded_vectors;
+pub(crate) mod upsert;
 mod vector_store;
 
 // ============================================================================

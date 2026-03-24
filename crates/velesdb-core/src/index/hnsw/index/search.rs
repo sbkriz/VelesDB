@@ -32,8 +32,6 @@ impl HnswIndex {
 
     /// Validates that the query/vector dimension matches the index dimension.
     ///
-    /// RF-2.7: Helper to eliminate 7x duplicated validation pattern.
-    ///
     /// # Panics
     ///
     /// Panics if the dimension doesn't match.
@@ -292,8 +290,6 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
-
-        // 1. Get candidates from HNSW (fast approximate search)
         let candidates = self.search_hnsw_only(query, rerank_k, ef_search);
 
         self.rerank_sort_and_truncate(query, &candidates, k)
@@ -314,7 +310,6 @@ impl HnswIndex {
     ) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
-        // 1. Get candidates from HNSW with specified quality
         // Avoid recursion if initial_quality is Perfect
         let actual_quality = if matches!(initial_quality, SearchQuality::Perfect) {
             SearchQuality::Accurate
@@ -328,9 +323,8 @@ impl HnswIndex {
 
     /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
     ///
-    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`,
-    /// `search_with_rerank_quality`. The batch path in `batch.rs` uses
-    /// `rerank_sort_and_truncate_timed` directly for aggregated EMA updates.
+    /// The batch path in `batch.rs` uses `rerank_sort_and_truncate_timed`
+    /// directly for aggregated EMA updates.
     pub(super) fn rerank_sort_and_truncate(
         &self,
         query: &[f32],
@@ -481,10 +475,8 @@ impl HnswIndex {
 
     /// Re-ranks candidates using SIMD-optimized exact distance computation.
     ///
-    /// F-05: Zero-copy reranking -- reads vector slices directly from
-    /// `ContiguousVectors` (64-byte aligned, cache-friendly) instead of
-    /// cloning via `ShardedVectors::get()`. Eliminates ~600KB of allocations
-    /// per search for k=100 x dim=1536.
+    /// Reads vector slices directly from `ContiguousVectors` (64-byte aligned,
+    /// cache-friendly) instead of cloning via `ShardedVectors::get()`.
     pub(crate) fn rerank_candidates_simd(
         &self,
         query: &[f32],
@@ -521,7 +513,6 @@ impl HnswIndex {
     /// correct search results. Call this after finishing all insertions
     /// and before performing searches.
     pub fn set_searching_mode(&self) {
-        // RF-1: Using HnswInner method
         let mut inner = self.inner.write();
         inner.set_searching_mode(true);
     }

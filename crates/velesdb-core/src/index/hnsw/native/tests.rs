@@ -775,12 +775,12 @@ fn test_concurrent_insert_delete_search_at_index_level() {
     }
 
     // Post-conditions:
-    // NativeHnswIndex::len() returns graph size (soft-deletes don't shrink it).
-    // Graph size = 100 initial + 100 new inserts = 200
-    let graph_len = index.len();
+    // NativeHnswIndex::len() returns live mapping count (excluding soft-deletes).
+    // Live count = 100 initial + 100 new inserts - 50 deleted = 150
+    let live_len = index.len();
     assert_eq!(
-        graph_len, 200,
-        "Graph size must reflect all inserts: got {graph_len}"
+        live_len, 150,
+        "Live count must reflect inserts minus deletes: got {live_len}"
     );
 
     // Verify deleted IDs (0..49) are excluded from search results.
@@ -863,9 +863,10 @@ fn test_delete_exclusion_under_concurrent_search() {
         "No non-finite distances should appear during concurrent delete+search"
     );
 
-    // After all deletes complete, graph size remains 200 (soft-delete keeps nodes).
-    let graph_len = index.len();
-    assert_eq!(graph_len, 200, "Graph size unchanged by soft-deletes");
+    // After all deletes complete, live count reflects removed mappings.
+    // 200 initial - 100 even IDs deleted = 100 remaining.
+    let live_len = index.len();
+    assert_eq!(live_len, 100, "Live count must exclude soft-deleted IDs");
 
     // All even IDs must be gone from search results (soft-delete exclusion).
     let query: Vec<f32> = (0..16).map(|j| (j as f32 * 0.01).sin()).collect();
