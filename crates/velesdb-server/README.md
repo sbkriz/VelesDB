@@ -210,7 +210,7 @@ Response:
   "timing_ms": 0.42,
   "took_ms": 1,
   "rows_returned": 2,
-  "meta": {"velesql_contract_version": "1.0", "count": 2}
+  "meta": {"velesql_contract_version": "3.0.0", "count": 2}
 }
 ```
 
@@ -493,7 +493,7 @@ readinessProbe:
 
 ## Performance
 
-- **Cosine similarity**: ~34 ns per operation (768d)
+- **Cosine similarity**: ~32.7 ns per operation (768d)
 - **Dot product**: ~19.8 ns per operation (768d)
 - **Search latency**: 40.6 µs for 10K vectors (768D, Balanced mode)
 - **Throughput**: 38.8 Gelem/s (dot product, 768D)

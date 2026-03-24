@@ -306,8 +306,8 @@ LIMIT 20
 | **Cosine** | 32.7 ns | 31M ops/sec | AVX2/AVX-512 |
 | **Euclidean** | 20.7 ns | 48M ops/sec | AVX-512 |
 | **DotProduct** | 19.8 ns | 51M ops/sec | AVX-512 |
-| **Hamming** | **52.4 ns** | **15M ops/sec** | POPCNT |
-| **Jaccard** | 30.1 ns | 25M ops/sec | AVX2 |
+| **Hamming** | **34.4 ns** | **29M ops/sec** | POPCNT |
+| **Jaccard** | 28.8 ns | 27M ops/sec | AVX2 |
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
 
