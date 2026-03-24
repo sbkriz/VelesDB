@@ -219,7 +219,7 @@
 
             const elapsed = performance.now() - startTime;
 
-            const vectorCount = store.len();
+            const vectorCount = store.len;
             document.getElementById('statVectors').textContent = vectorCount.toLocaleString();
             document.getElementById('statDimensions').textContent = dims;
             document.getElementById('statInsertTime').textContent = elapsed.toFixed(2) + 'ms';
@@ -245,8 +245,7 @@
         };
 
         window.searchVectors = async function() {
-            const vectorCount = typeof store.len === 'function' ? store.len() : store.len;
-            if (!store || vectorCount === 0) {
+            if (!store || store.len === 0) {
                 alert('Please insert vectors first');
                 return;
             }

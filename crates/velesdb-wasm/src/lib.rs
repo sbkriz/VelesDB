@@ -35,11 +35,11 @@
 //! await init();
 //!
 //! const store = new VectorStore(768, "cosine");
-//! store.insert(1, new Float32Array([0.1, 0.2, ...]));
+//! store.insert(1n, new Float32Array([0.1, 0.2, ...]));
 //!
-//! // search() returns Array<{id: number, score: number}>
+//! // search() returns Array<[bigint, number]>
 //! const results = store.search(new Float32Array([0.1, ...]), 10);
-//! // results = [{id: 1, score: 0.95}, {id: 42, score: 0.87}, ...]
+//! // results = [[1n, 0.95], [42n, 0.87], ...]
 //! ```
 
 use serde::{Deserialize, Serialize};

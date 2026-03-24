@@ -136,6 +136,16 @@ curl -X POST "http://127.0.0.1:8000/search" \
 curl "http://127.0.0.1:8000/documents"
 ```
 
+### Delete Document
+```bash
+curl -X DELETE "http://127.0.0.1:8000/documents/your-document.pdf"
+```
+
+### Load Demo Data
+```bash
+curl -X POST "http://127.0.0.1:8000/demo/load"
+```
+
 ### Health Check
 ```bash
 curl "http://127.0.0.1:8000/health"
@@ -257,10 +267,11 @@ rag-pdf-demo/
 │   ├── test_velesdb_client.py
 │   └── test_rag_engine.py
 ├── static/
-│   └── index.html        # UI with real-time metrics
+│   ├── index.html        # UI with real-time metrics
+│   ├── demo_data.json    # Pre-loaded demo documents
+│   └── velesdb-icon.png  # VelesDB logo
 ├── benchmark_latency.py  # Performance benchmarks
 ├── pyproject.toml
-├── .env.example
 └── README.md
 ```
 

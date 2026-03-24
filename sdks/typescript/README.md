@@ -672,6 +672,10 @@ import {
   // Query builder
   VelesQLBuilder,
   velesql,
+  type RelDirection,
+  type RelOptions,
+  type NearVectorOptions,
+  type FusionOptions,
 
   // Error classes
   VelesDBError,

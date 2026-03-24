@@ -5,7 +5,7 @@
 //! - `VelesQL` queries with filters
 //! - Hybrid search (vector + text)
 //!
-//! Run with: `cargo run --example multimodel_search`
+//! Run with: `cargo run --bin multimodel_search`
 
 #![allow(clippy::too_many_lines)] // main() is intentionally a self-contained demo
 #![allow(clippy::cast_precision_loss)] // demo: small usize indices cast to f32 for sin wave

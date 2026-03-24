@@ -20,8 +20,8 @@ VelesDB Mobile brings microsecond vector search to edge devices - perfect for on
 ```swift
 import VelesDB
 
-// Open database
-let db = try VelesDatabase.open(path: documentsPath + "/velesdb")
+// Open database (UniFFI constructor)
+let db = try VelesDatabase(path: documentsPath + "/velesdb")
 
 // Create collection (768D for MiniLM, 384D for all-MiniLM-L6-v2)
 try db.createCollection(name: "documents", dimension: 384, metric: .cosine)
@@ -51,14 +51,14 @@ for result in results {
 ```kotlin
 import com.velesdb.mobile.*
 
-// Open database
-val db = VelesDatabase.open("${context.filesDir}/velesdb")
+// Open database (UniFFI constructor)
+val db = VelesDatabase("${context.filesDir}/velesdb")
 
 // Create collection
 db.createCollection("documents", 384u, DistanceMetric.COSINE)
 
 // Get collection
-val collection = db.getCollection("documents") 
+val collection = db.getCollection("documents")
     ?: throw Exception("Collection not found")
 
 // Insert vectors
@@ -145,12 +145,14 @@ cargo run --bin uniffi-bindgen generate \
 
 | Method | Description |
 |--------|-------------|
-| `open(path)` | Opens or creates a database at the specified path |
+| `VelesDatabase(path)` | Opens or creates a database at the specified path (constructor) |
 | `createCollection(name, dimension, metric)` | Creates a new vector collection |
-| `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates collection with IoT storage optimization |
+| `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates collection with quantized storage |
+| `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
 | `getCollection(name)` | Gets a collection by name (returns nil/null if not found) |
 | `listCollections()` | Lists all collection names |
 | `deleteCollection(name)` | Deletes a collection |
+| `trainPq(collectionName, config)` | Trains Product Quantization on a collection |
 
 ### VelesCollection
 
@@ -159,17 +161,81 @@ cargo run --bin uniffi-bindgen generate \
 | `search(vector, limit)` | Finds k nearest neighbors |
 | `searchWithFilter(vector, limit, filterJson)` | Search with metadata filter |
 | `multiQuerySearch(vectors, limit, strategy)` | Multi-query fusion (MQG) |
+| `multiQuerySearchWithFilter(vectors, limit, strategy, filterJson)` | Multi-query fusion with metadata filter |
 | `textSearch(query, limit)` | BM25 full-text search |
 | `textSearchWithFilter(query, limit, filterJson)` | Text search with filter |
-| `hybridSearch(vector, query, limit, vectorWeight)` | Combined vector + text search |
-| `hybridSearchWithFilter(...)` | Hybrid search with metadata filter |
+| `hybridSearch(vector, textQuery, limit, vectorWeight)` | Combined vector + text search |
+| `hybridSearchWithFilter(vector, textQuery, limit, vectorWeight, filterJson)` | Hybrid search with metadata filter |
 | `batchSearch(searches)` | Batch search with individual filters per query |
+| `sparseSearch(sparseVector, limit, indexName)` | Sparse-only search using inverted index |
+| `hybridSparseSearch(vector, sparseVector, limit, indexName)` | Hybrid dense + sparse search with RRF fusion |
 | `query(queryStr, paramsJson)` | Execute VelesQL query |
 | `upsert(point)` | Inserts or updates a single point |
 | `upsertBatch(points)` | Batch insert/update (faster for bulk operations) |
+| `upsertWithSparse(point, sparseVector)` | Inserts a point with an associated sparse vector |
 | `delete(id)` | Deletes a point by ID |
+| `get(ids)` | Gets points by their IDs (missing IDs silently skipped) |
+| `getById(id)` | Gets a single point by ID (returns nil/null if not found) |
 | `count()` | Returns the number of points |
 | `dimension()` | Returns the vector dimension |
+| `isMetadataOnly()` | Checks if this is a metadata-only collection |
+| `allIds()` | Returns all point IDs in the collection |
+| `flush()` | Flushes data to durable storage |
+| `createIndex(fieldName)` | Creates a secondary metadata index |
+| `hasSecondaryIndex(fieldName)` | Checks if a secondary index exists |
+| `createPropertyIndex(label, property)` | Creates a graph/property index |
+| `createRangeIndex(label, property)` | Creates a graph/range index |
+| `hasPropertyIndex(label, property)` | Checks if a property index exists |
+| `hasRangeIndex(label, property)` | Checks if a range index exists |
+| `listIndexes()` | Lists all index definitions |
+| `dropIndex(label, property)` | Drops an index |
+| `indexesMemoryUsage()` | Returns memory used by indexes (bytes) |
+| `analyze()` | Runs ANALYZE and returns fresh statistics |
+| `getStats()` | Returns the latest statistics snapshot |
+
+### VelesSemanticMemory
+
+Agent memory for on-device AI. Stores knowledge facts as vectors with similarity search.
+
+| Method | Description |
+|--------|-------------|
+| `VelesSemanticMemory(db, dimension)` | Creates semantic memory with the given embedding dimension (constructor) |
+| `store(id, content, embedding)` | Stores a knowledge fact with its embedding |
+| `query(embedding, topK)` | Queries by similarity, returns `SemanticResult` list |
+| `remove(id)` | Removes a knowledge fact by ID |
+| `clear()` | Clears all knowledge facts |
+| `len()` | Returns the number of stored facts |
+| `isEmpty()` | Returns true if no facts are stored |
+| `dimension()` | Returns the embedding dimension |
+
+### MobileGraphStore
+
+In-memory graph store for mobile knowledge graphs.
+
+| Method | Description |
+|--------|-------------|
+| `MobileGraphStore()` | Creates a new empty graph store (constructor) |
+| `addNode(node)` | Adds a node to the graph |
+| `addEdge(edge)` | Adds an edge (returns error if duplicate ID) |
+| `getNode(id)` | Gets a node by ID |
+| `getEdge(id)` | Gets an edge by ID |
+| `hasNode(id)` | Checks if a node exists |
+| `hasEdge(id)` | Checks if an edge exists |
+| `nodeCount()` | Returns the number of nodes |
+| `edgeCount()` | Returns the number of edges |
+| `getOutgoing(nodeId)` | Gets outgoing edges from a node |
+| `getIncoming(nodeId)` | Gets incoming edges to a node |
+| `getOutgoingByLabel(nodeId, label)` | Gets outgoing edges filtered by label |
+| `getNeighbors(nodeId)` | Gets neighbor node IDs (1-hop) |
+| `getNodesByLabel(label)` | Gets all nodes with a specific label |
+| `getEdgesByLabel(label)` | Gets all edges with a specific label |
+| `outDegree(nodeId)` | Returns the out-degree of a node |
+| `inDegree(nodeId)` | Returns the in-degree of a node |
+| `bfsTraverse(sourceId, maxDepth, limit)` | Breadth-first traversal |
+| `dfsTraverse(sourceId, maxDepth, limit)` | Depth-first traversal |
+| `removeNode(nodeId)` | Removes a node and all connected edges |
+| `removeEdge(edgeId)` | Removes an edge by ID |
+| `clear()` | Clears all nodes and edges |
 
 ### Distance Metrics
 
@@ -205,6 +271,33 @@ db.createCollectionWithStorage(
     "embeddings", 384u, DistanceMetric.COSINE, StorageMode.BINARY
 )
 ```
+
+### Fusion Strategies
+
+Used with `multiQuerySearch()` for combining results from multiple query vectors.
+
+| Strategy | Description |
+|----------|-------------|
+| `Average` | Average scores across all queries |
+| `Maximum` | Take the maximum score per document |
+| `Rrf(k)` | Reciprocal Rank Fusion (default k=60) |
+| `Weighted(avgWeight, maxWeight, hitWeight)` | Weighted combination of avg, max, and hit ratio |
+
+### Data Types
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `VelesPoint` | `id: UInt64`, `vector: [Float]`, `payload: String?` | A point to insert |
+| `SearchResult` | `id: UInt64`, `score: Float` | A search result |
+| `SemanticResult` | `id: UInt64`, `score: Float`, `content: String` | Semantic memory result |
+| `VelesSparseVector` | `indices: [UInt32]`, `values: [Float]` | Sparse vector (parallel arrays) |
+| `IndividualSearchRequest` | `vector: [Float]`, `topK: UInt32`, `filter: String?` | Batch search request |
+| `PqTrainConfig` | `m: UInt32`, `k: UInt32`, `opq: Bool` | PQ training configuration |
+| `MobileGraphNode` | `id: UInt64`, `label: String`, `propertiesJson: String?`, `vector: [Float]?` | Graph node |
+| `MobileGraphEdge` | `id: UInt64`, `source: UInt64`, `target: UInt64`, `label: String`, `propertiesJson: String?` | Graph edge |
+| `TraversalResult` | `nodeId: UInt64`, `depth: UInt32` | BFS/DFS traversal result |
+| `MobileCollectionStats` | `totalPoints`, `payloadSizeBytes`, `rowCount`, ... | Collection statistics |
+| `MobileIndexInfo` | `label`, `property`, `indexType`, `cardinality`, `memoryBytes` | Index metadata |
 
 ## Performance Tips
 

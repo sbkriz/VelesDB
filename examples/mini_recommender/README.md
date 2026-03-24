@@ -27,26 +27,26 @@ cargo run
 ## Expected Output
 
 ```
-VelesDB Mini Recommender Example
+🚀 VelesDB Mini Recommender Example
 
-Ingested 8 products
+✅ Ingested 8 products
 
-Products similar to ID 101:
+🔍 Products similar to ID 101:
   - Fitness Tracker (score: 0.998) - $59.99
   - Smart Watch (score: 0.995) - $199.99
   - Bluetooth Speaker (score: 0.993) - $49.99
 
-Recommendations in 'electronics' under $100.00:
+🎯 Recommendations in 'electronics' under $100.00:
   - Wireless Headphones Pro (score: 0.969) - $79.99
   - Fitness Tracker (score: 0.967) - $59.99
   - Bluetooth Speaker (score: 0.962) - $49.99
 
-VelesQL Query Parsing:
-  Similarity search: parses correctly
-  Filtered search: parses correctly
-  Aggregation: parses correctly
+📝 VelesQL Query Parsing:
+  ✅ Similarity search: parses correctly
+  ✅ Filtered search: parses correctly
+  ✅ Aggregation: parses correctly
 
-Catalog Analytics:
+📊 Catalog Analytics:
 
   Category    | Count | Avg Price
   ------------|-------|----------
@@ -54,7 +54,7 @@ Catalog Analytics:
   home        |     1 | $89.99
   sports      |     3 | $139.99
 
-Tutorial complete! See docs/guides/TUTORIALS/MINI_RECOMMENDER.md
+✨ Tutorial complete! See docs/guides/TUTORIALS/MINI_RECOMMENDER.md
 ```
 
 Scores may differ slightly depending on your platform.

@@ -6,6 +6,8 @@ VelesDB is a local-first vector database that combines Vector, Graph, and Column
 
 ## Positioning
 
+*Feature comparison as of March 2026. Competitor capabilities evolve; verify with official documentation.*
+
 | Capability | VelesDB | Qdrant | Pinecone | ChromaDB | Weaviate |
 |---|---|---|---|---|---|
 | **Deployment** | Embedded / local-first | Client-server | Managed cloud only | Embedded / client-server | Client-server |
@@ -19,6 +21,8 @@ VelesDB is a local-first vector database that combines Vector, Graph, and Column
 | **Mobile Support** | iOS / Android (UniFFI) | No | No | No | No |
 | **Latency** | Sub-millisecond (in-process) | ~1-5 ms (network) | ~10-50 ms (cloud) | ~1-5 ms (in-process) | ~5-20 ms (network) |
 | **License** | Source-available | Apache-2.0 | Proprietary | Apache-2.0 | BSD-3 |
+
+**Sources:** [Qdrant docs](https://qdrant.tech/documentation/), [Pinecone docs](https://docs.pinecone.io/), [ChromaDB docs](https://docs.trychroma.com/), [Weaviate docs](https://weaviate.io/developers/weaviate).
 
 ---
 
@@ -78,7 +82,7 @@ The integrated architecture directly supports AI agent memory requirements:
 
 VelesDB achieves sub-millisecond latency through:
 
-- **Native HNSW implementation** that is 1.2x faster than the widely-used `hnsw_rs` crate (26.9ms vs ~32ms on 100 queries, 5K/128D vectors)
+- **Native HNSW implementation** — in our internal benchmarks (5K vectors, 128D, 100 queries), our implementation measured 26.9ms vs ~32ms for `hnsw_rs`, approximately 1.2x faster. Results may vary by dataset and parameters
 - **Explicit SIMD kernels** (AVX-512, AVX2, NEON) with runtime feature detection
 - **Memory-mapped storage** for zero-copy vector access
 - **Lock-free read paths** using `parking_lot::RwLock` with 256-shard concurrent edge stores

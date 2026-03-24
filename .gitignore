@@ -142,4 +142,4 @@ todo_analysis_report_updated.md
 .windsurfrules
 
 .claude/
-.codacy/
+.codacy/flamegraph.svg

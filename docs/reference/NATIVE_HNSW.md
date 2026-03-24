@@ -1,6 +1,6 @@
 # Native HNSW Implementation
 
-`VelesDB` includes a **custom native HNSW implementation** — the only HNSW backend since v1.0.
+`VelesDB` includes a **custom native HNSW implementation** — VelesDB's single native HNSW implementation (no pluggable backends) since v1.0.
 
 > **🎉 v1.0**: `hnsw_rs` dependency **completely removed**. Native HNSW is now the only implementation.
 

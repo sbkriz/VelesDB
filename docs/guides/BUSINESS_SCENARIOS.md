@@ -22,6 +22,9 @@ LIMIT 12
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Query latency | 350ms (3 DBs) | **2ms** |
@@ -46,6 +49,9 @@ RETURN tx.id, account.id, similarity() as fraud_score
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Detection time | 2-5 seconds | **< 10ms** |
@@ -70,6 +76,9 @@ RETURN treatment.name, AVG(success_rate) as effectiveness
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Data location | Cloud (HIPAA risk) | **100% on-premise** |
@@ -96,6 +105,9 @@ LIMIT 10
 ```
 
 **Business Impact:**
+
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Context retrieval | 100-200ms | **< 1ms** |
@@ -303,11 +315,11 @@ LIMIT 20
 
 | Metric | Latency | Throughput | SIMD Optimized |
 |--------|---------|------------|----------------|
-| **Cosine** | 32.7 ns | 31M ops/sec | AVX2/AVX-512 |
-| **Euclidean** | 20.7 ns | 48M ops/sec | AVX-512 |
-| **DotProduct** | 19.8 ns | 51M ops/sec | AVX-512 |
-| **Hamming** | **34.4 ns** | **29M ops/sec** | POPCNT |
-| **Jaccard** | 28.8 ns | 27M ops/sec | AVX2 |
+| **Cosine** | 33.1 ns | 30M ops/sec | AVX2/AVX-512 |
+| **Euclidean** | 22.5 ns | 44M ops/sec | AVX-512 |
+| **DotProduct** | 17.6 ns | 57M ops/sec | AVX-512 |
+| **Hamming** | **35.8 ns** | **28M ops/sec** | POPCNT |
+| **Jaccard** | 35.1 ns | 28M ops/sec | AVX2 |
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
 
