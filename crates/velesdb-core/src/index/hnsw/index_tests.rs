@@ -2573,6 +2573,40 @@ fn test_upsert_entry_point_vector() {
 // Upsert Rollback + Edge Case Tests (Issue #371)
 // -------------------------------------------------------------------------
 
+/// Verifies that batch insert with within-batch duplicate IDs correctly
+/// deduplicates: only the last occurrence is reachable, and the count
+/// reflects unique IDs (not raw entries). Within-batch duplicates are an
+/// unusual pattern but must not corrupt mapping state.
+#[test]
+fn test_batch_upsert_within_batch_duplicates() {
+    let dim = 4;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // Batch with id=1 appearing twice: first [1,0,0,0], then [0,1,0,0]
+    let vec_a = vec![1.0_f32, 0.0, 0.0, 0.0];
+    let vec_b = vec![0.0_f32, 1.0, 0.0, 0.0];
+    let batch: Vec<(u64, &[f32])> = vec![(1, &vec_a), (1, &vec_b), (2, &vec_a)];
+
+    let inserted = index.insert_batch_parallel(batch);
+    // Count may include both entries for id=1, but len() must reflect unique IDs
+    assert!(inserted >= 2, "At least 2 entries processed, got {inserted}");
+    assert_eq!(index.len(), 2, "Only 2 unique IDs should be mapped");
+
+    // id=1 must be searchable and point to vec_b (last wins)
+    let results = index.search(&vec_b, 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 1, "id=1 must be findable after within-batch upsert");
+    assert!(
+        results[0].score > 0.9,
+        "id=1 should match vec_b, got score {}",
+        results[0].score,
+    );
+
+    // id=2 must also be searchable
+    let results2 = index.search(&vec_a, 1);
+    assert_eq!(results2[0].id, 2, "id=2 must be findable");
+}
+
 /// Creates a deterministic vector where dimension `dominant_dim` has a
 /// large component, making it easily distinguishable in cosine search.
 ///

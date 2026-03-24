@@ -118,7 +118,9 @@ impl HnswIndex {
         // Insert into HNSW graph before storing vectors to avoid orphaned sidecar data.
         if let Err(e) = self.inner.read().parallel_insert(&refs_for_hnsw) {
             tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
-            for (id, result) in &batch.rollback_info {
+            // Reverse order: undo last upsert first so duplicate-ID chains
+            // restore correctly (each rollback depends on the previous state).
+            for (id, result) in batch.rollback_info.iter().rev() {
                 self.rollback_upsert(*id, result);
             }
             return 0;

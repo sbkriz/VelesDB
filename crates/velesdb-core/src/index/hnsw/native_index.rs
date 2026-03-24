@@ -329,7 +329,9 @@ impl NativeHnswIndex {
             .collect();
 
         if let Err(e) = self.inner.read().parallel_insert(&data) {
-            for (id, result) in &rollback_info {
+            // Reverse order: undo last upsert first so duplicate-ID chains
+            // restore correctly (each rollback depends on the previous state).
+            for (id, result) in rollback_info.iter().rev() {
                 self.rollback_upsert(*id, result);
             }
             return Err(e);
