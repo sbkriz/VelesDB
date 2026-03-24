@@ -16,6 +16,9 @@ on:
       - 'crates/velesdb-core/src/simd/**'
       - 'crates/velesdb-core/src/index/**'
       - 'crates/velesdb-core/benches/simd_benchmark.rs'
+    paths-ignore:
+      - '**/*_tests.rs'
+      - '**/*.md'
 
 concurrency:
   group: bench-${{ github.ref }}
