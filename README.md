@@ -8,7 +8,7 @@
 
 <h3 align="center">
   The Local Knowledge Engine for AI Agents<br/>
-  <em>Vector + Graph + ColumnStore Fusion &bull; 40.6&micro;s HNSW Search &bull; 19.8ns SIMD &bull; 4,500+ Tests &bull; 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion &bull; 54.6&micro;s HNSW Search &bull; 17.6ns SIMD &bull; 4,500+ Tests &bull; 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -49,7 +49,7 @@
 
 | Pain Point | Business Impact | VelesDB Solution |
 |------------|-----------------|------------------|
-| **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **40.6µs local** (k=10, 10K vectors) — network-free retrieval |
+| **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **54.6µs local** (k=10, 10K vectors) — network-free retrieval |
 | **Vectors alone aren't enough** | Semantic similarity misses relationships | **Vector + Graph unified** in one query |
 | **Privacy & deployment friction** | Cloud dependencies, GDPR concerns | **6 MB self-contained binary** — works offline, air-gapped |
 
@@ -64,8 +64,8 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>19.8ns SIMD</h3>
-<p>Native HNSW + AVX-512/AVX2/NEON SIMD.<br/><strong>38.8 Gelem/s throughput.</strong></p>
+<h3>17.6ns SIMD</h3>
+<p>Native HNSW + AVX-512/AVX2/NEON SIMD.<br/><strong>43.6 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>6 MB Self-Contained</h3>
@@ -87,7 +87,7 @@
 | **Architecture** | Unified vector + graph + columnar | Vector only | Vector + payload | Vector extension for PostgreSQL |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
-| **Search latency** | 40.6µs (embedded) | ~1-5ms | ~1-5ms | ~5-20ms |
+| **Search latency** | 54.6µs (embedded) | ~1-5ms | ~1-5ms | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM)** | Yes | No | No | No |
@@ -171,7 +171,7 @@ curl -X POST http://localhost:8080/collections/docs/points \
   }'
 ```
 
-### Search (40.6µs latency)
+### Search (54.6µs latency)
 
 ```bash
 curl -X POST http://localhost:8080/collections/docs/search \
@@ -380,19 +380,19 @@ INSERT                      INDEX                       SEARCH
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **SIMD Dot Product (768D)** | **19.8 ns** | **38.8 Gelem/s** |
-| **Euclidean** | **20.7 ns** | **37.1 Gelem/s** |
-| **Cosine** | **32.7 ns** | **23.5 Gelem/s** |
-| **Hamming** | **34.4 ns** | — |
-| **Jaccard** | **28.8 ns** | — |
+| **SIMD Dot Product (768D)** | **17.6 ns** | **43.6 Gelem/s** |
+| **Euclidean** | **22.5 ns** | **34.1 Gelem/s** |
+| **Cosine** | **33.1 ns** | **23.2 Gelem/s** |
+| **Hamming** | **35.8 ns** | — |
+| **Jaccard** | **35.1 ns** | — |
 
 ### System Benchmarks (10K Vectors, 768D)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search (10K vectors)** | **40.6 µs** (k=10) |
-| **VelesQL Cache Hit** | **1.06 µs** (~943K QPS) |
-| **Sparse Search** | **825 µs** (MaxScore DAAT) |
+| **HNSW Search (10K vectors)** | **54.6 µs** (k=10) |
+| **VelesQL Cache Hit** | **1.08 µs** (~926K QPS) |
+| **Sparse Search** | **813 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
 
 ### Search Quality (Recall)
@@ -418,7 +418,7 @@ INSERT                      INDEX                       SEARCH
 | Feature | Technical Capability | Real-World Impact |
 |---------|----------------------|-------------------|
 | **Vector + Graph Fusion** | Unified query language for semantic + relationship queries | **Build smarter AI agents** with contextual understanding |
-| **40.6µs Search** | Native HNSW + AVX-512/AVX2/NEON SIMD | **Create real-time experiences** previously impossible |
+| **54.6µs Search** | Native HNSW + AVX-512/AVX2/NEON SIMD | **Create real-time experiences** previously impossible |
 | **6 MB Self-Contained** | No external services, single executable | **Deploy anywhere** — from servers to edge devices |
 | **Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |

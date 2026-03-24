@@ -188,7 +188,7 @@ Latency numbers depend on hardware and are printed at runtime via `Instant::elap
 
 ### Performance Context
 
-VelesDB's raw HNSW benchmark is **40.6us** for 10K/768D vectors (k=10). The demo latencies are higher because:
+VelesDB's raw HNSW benchmark is **54.6us** for 10K/768D vectors (k=10). The demo latencies are higher because:
 
 - The demo includes payload deserialization and result construction
 - Hybrid search adds BM25 indexing overhead and RRF fusion

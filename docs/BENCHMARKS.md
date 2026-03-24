@@ -27,11 +27,11 @@ SIMD kernels use AVX2/AVX-512 multi-accumulator pipelines with runtime feature d
 
 | Operation | 128D | 384D | 768D | 1536D | 3072D |
 |-----------|------|------|------|-------|-------|
-| **Dot Product** | 5.4 ns | 12.0 ns | 19.8 ns | 43.8 ns | 91.2 ns |
-| **Euclidean** | 5.2 ns | 11.5 ns | 20.7 ns | 46.1 ns | 99.3 ns |
-| **Cosine** | 7.7 ns | 18.6 ns | 32.7 ns | 61.4 ns | 118.9 ns |
-| **Hamming** | 7.3 ns | 17.8 ns | 34.4 ns | 69.2 ns | 132.2 ns |
-| **Jaccard** | 6.4 ns | 16.4 ns | 28.8 ns | 50.9 ns | 100.6 ns |
+| **Dot Product** | 5.4 ns | 12.0 ns | 17.6 ns | 43.8 ns | 91.2 ns |
+| **Euclidean** | 5.2 ns | 11.5 ns | 22.5 ns | 46.1 ns | 99.3 ns |
+| **Cosine** | 7.7 ns | 18.6 ns | 33.1 ns | 61.4 ns | 118.9 ns |
+| **Hamming** | 7.3 ns | 17.8 ns | 35.8 ns | 69.2 ns | 132.2 ns |
+| **Jaccard** | 6.4 ns | 16.4 ns | 35.1 ns | 50.9 ns | 100.6 ns |
 
 *Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
 
@@ -49,7 +49,7 @@ Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 19.8 ns | 38.8 Gelem/s |
+| 768D | 17.6 ns | 43.6 Gelem/s |
 | 1536D | 43.8 ns | 35.1 Gelem/s |
 | 3072D | 91.2 ns | 33.7 Gelem/s |
 
@@ -112,7 +112,7 @@ Sparse vector search uses an inverted index with MaxScore optimization for early
 |-----------|--------------------|-------|
 | **Insert 10K sequential** | 93 ms | 9.3 µs/doc |
 | **Insert 10K parallel (4x2500)** | 155 ms | Manual 4-thread partitioning |
-| **Search top-10, 10K corpus** | 825 µs | MaxScore pruning active |
+| **Search top-10, 10K corpus** | 813 µs | MaxScore pruning active |
 | **Search top-100, 10K corpus** | 824 µs | Minimal cost for larger k |
 | **Concurrent 16-thread (8 insert + 8 search)** | 171 ms | Mixed read/write workload |
 
@@ -136,8 +136,8 @@ No dedicated hybrid benchmark suite exists yet. Performance can be estimated fro
 
 | Component | Latency (10K corpus) | Source |
 |-----------|---------------------|--------|
-| Dense HNSW search (k=10, 768D) | ~41 µs | hnsw_benchmark |
-| Sparse search (top-10, 10K) | ~825 µs | sparse_benchmark |
+| Dense HNSW search (k=10, 768D) | ~55 µs | hnsw_benchmark |
+| Sparse search (top-10, 10K) | ~813 µs | sparse_benchmark |
 | RRF fusion overhead | negligible (score merging) | -- |
 | **Estimated hybrid total** | **~0.87 ms** | Dense + Sparse + fusion |
 
@@ -154,7 +154,7 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **Search k=10** (10K/768D) | 40.6 µs | 24.6K QPS |
+| **Search k=10** (10K/768D) | 54.6 µs | 18.3K QPS |
 | **Search k=50** | 63.5 µs | -- |
 | **Search k=100** | 151.5 µs | -- |
 | **Insert 1K x 768D** (sequential) | 263.7 ms | 3.8K vec/s |
@@ -204,7 +204,7 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive**
 | Simple Parse | 1.26 µs | 794K QPS |
 | Vector Query | 1.77 µs | 565K QPS |
 | Complex Query | 7.47 µs | 134K QPS |
-| **Cache Hit** | **1.06 µs** | **943K QPS** |
+| **Cache Hit** | **1.08 µs** | **926K QPS** |
 | EXPLAIN Plan (simple) | 65.4 ns | 15.3M QPS |
 
 *Measured March 19, 2026, sequential run on idle machine.*

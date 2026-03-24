@@ -56,7 +56,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  │                     DISTANCE LAYER (SIMD)                        │   │
 │  ├─────────────────────────────────────────────────────────────────┤   │
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
-│  │  (32.7ns)│   (20.7ns)  │    (19.8ns)   │  (34.4ns) │   (28.8ns) │   │
+│  │  (33.1ns)│   (22.5ns)  │    (17.6ns)   │  (35.8ns) │   (35.1ns) │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ WASM SIMD128 │ ARM64 NEON │ Auto-vectorization │   │
 │  │               │              │ (simd_neon)│     Fallback       │   │
@@ -235,11 +235,11 @@ VelesDB core architecture is explicitly **hybrid by design**:
 
 | Metric | Implementation | Latency (768D) |
 |--------|---------------|----------------|
-| Dot Product | AVX2 FMA | **19.8 ns** |
-| Euclidean | AVX2 FMA | **20.7 ns** |
-| Cosine | AVX2 4-acc, single-sqrt finish | **32.7 ns** |
-| Hamming | AVX2 FP-domain 4-acc | **34.4 ns** |
-| Jaccard | AVX-512 4-acc | **28.8 ns** |
+| Dot Product | AVX2 FMA | **17.6 ns** |
+| Euclidean | AVX2 FMA | **22.5 ns** |
+| Cosine | AVX2 4-acc, single-sqrt finish | **33.1 ns** |
+| Hamming | AVX2 FP-domain 4-acc | **35.8 ns** |
+| Jaccard | AVX-512 4-acc | **35.1 ns** |
 
 **SIMD Strategy**:
 1. **Native (x86_64)**: AVX2/AVX-512 via `core::arch` intrinsics with 4-accumulator ILP
@@ -425,7 +425,7 @@ LIMIT 20
 | Operation | Throughput |
 |-----------|------------|
 | Insert | ~3.8K-6.4K vec/sec (768D) |
-| Search k=10 (10K vectors, 768D) | ~40.6 µs |
+| Search k=10 (10K vectors, 768D) | ~54.6 µs |
 | Search (100K vectors) | < 5 ms |
 | VelesQL Parse | 1.3M queries/sec |
 | Export (WASM) | 4,479 MB/s |

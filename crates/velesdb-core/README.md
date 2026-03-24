@@ -9,7 +9,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (40.6µs search at 768D, 19.8ns dot product 768D)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (54.6µs search at 768D, 17.6ns dot product 768D)
 - **Adaptive Search**: Two-phase ef_search that auto-escalates only for hard queries (2-4x faster median)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion
@@ -203,11 +203,11 @@ db.create_collection_with_options(
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| Dot Product | **19.8 ns** | 38.8 Gelem/s |
-| Euclidean Distance | **20.7 ns** | 37.1 Gelem/s |
-| Cosine Similarity | **32.7 ns** | 23.5 Gelem/s |
-| Hamming Distance | **34.4 ns** | — |
-| Jaccard Similarity | **28.8 ns** | — |
+| Dot Product | **17.6 ns** | 43.6 Gelem/s |
+| Euclidean Distance | **22.5 ns** | 34.1 Gelem/s |
+| Cosine Similarity | **33.1 ns** | 23.2 Gelem/s |
+| Hamming Distance | **35.8 ns** | — |
+| Jaccard Similarity | **35.1 ns** | — |
 
 *Measured March 24, 2026 on Intel Core i9-14900KF, 64GB DDR5, Rust 1.92.0, `--release`, sequential on idle machine.*
 
@@ -215,16 +215,16 @@ db.create_collection_with_options(
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search** | **40.6 µs** (k=10, Balanced mode) |
-| **VelesQL Cache Hit** | **1.06 µs** (~943K QPS) |
-| **Sparse Search** | **825 µs** (MaxScore DAAT) |
+| **HNSW Search** | **54.6 µs** (k=10, Balanced mode) |
+| **VelesQL Cache Hit** | **1.08 µs** (~926K QPS) |
+| **Sparse Search** | **813 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
 
 *Measured March 24, 2026 on Intel Core i9-14900KF, 64GB DDR5, Rust 1.92.0, `--release`, sequential on idle machine.*
 
 ### Key Performance Features
 
-- Search latency: **40.6µs** for 10K/768D vectors (k=10)
+- Search latency: **54.6µs** for 10K/768D vectors (k=10)
 - Insert throughput: **3.8-7x faster** than pgvector (10K-100K vectors, Docker benchmark v0.7.3, [benchmark](../../benchmarks/README.md))
 - ColumnStore filtering: up to 130x faster than JSON scanning at scale (integer equality, 100K rows)
 
@@ -237,7 +237,7 @@ db.create_collection_with_options(
 | **10K/128D** | Perfect | 4096 | **100%** | 200µs | ✅ |
 | **10K/128D** | Adaptive | 32-512 | **95%+** | ~40µs (easy) | ✅ |
 
-> *Latency P50 = median over 100 queries. Measured March 19, 2026. The headline "40.6µs" is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
+> *Latency P50 = median over 100 queries. Measured March 24, 2026. The headline "54.6µs" is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
 
 > 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 

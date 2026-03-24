@@ -303,11 +303,11 @@ LIMIT 20
 
 | Metric | Latency | Throughput | SIMD Optimized |
 |--------|---------|------------|----------------|
-| **Cosine** | 32.7 ns | 31M ops/sec | AVX2/AVX-512 |
-| **Euclidean** | 20.7 ns | 48M ops/sec | AVX-512 |
-| **DotProduct** | 19.8 ns | 51M ops/sec | AVX-512 |
-| **Hamming** | **34.4 ns** | **29M ops/sec** | POPCNT |
-| **Jaccard** | 28.8 ns | 27M ops/sec | AVX2 |
+| **Cosine** | 33.1 ns | 30M ops/sec | AVX2/AVX-512 |
+| **Euclidean** | 22.5 ns | 44M ops/sec | AVX-512 |
+| **DotProduct** | 17.6 ns | 57M ops/sec | AVX-512 |
+| **Hamming** | **35.8 ns** | **28M ops/sec** | POPCNT |
+| **Jaccard** | 35.1 ns | 28M ops/sec | AVX2 |
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
 
