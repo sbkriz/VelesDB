@@ -72,6 +72,9 @@ impl Collection {
     /// This is the single point of truth for the `Self { .. }` struct literal,
     /// eliminating duplication across the five public constructors.
     fn assemble(parts: CollectionParts) -> Self {
+        #[cfg(feature = "persistence")]
+        let deferred_indexer = Self::build_deferred_indexer(&parts.config);
+
         Self {
             path: parts.path,
             config: Arc::new(RwLock::new(parts.config)),
@@ -98,7 +101,28 @@ impl Collection {
             stream_ingester: Arc::new(RwLock::new(None)),
             #[cfg(feature = "persistence")]
             delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
+            #[cfg(feature = "persistence")]
+            deferred_indexer,
         }
+    }
+
+    /// Builds the optional `DeferredIndexer` from config.
+    ///
+    /// Returns `Some(Arc<DeferredIndexer>)` when `deferred_indexing` is
+    /// configured and enabled; `None` otherwise.
+    #[cfg(feature = "persistence")]
+    fn build_deferred_indexer(
+        config: &CollectionConfig,
+    ) -> Option<Arc<crate::collection::streaming::DeferredIndexer>> {
+        config
+            .deferred_indexing
+            .as_ref()
+            .filter(|cfg| cfg.enabled)
+            .map(|cfg| {
+                Arc::new(crate::collection::streaming::DeferredIndexer::new(
+                    cfg.clone(),
+                ))
+            })
     }
 
     /// Initialises persistent storages and indexes for a new collection.
@@ -218,6 +242,8 @@ impl Collection {
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         Self::create_from_config(path, config, None)
     }
@@ -257,6 +283,8 @@ impl Collection {
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
             hnsw_params: Some(hnsw_params),
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         Self::create_from_config(path, config, Some(hnsw_params))
     }
@@ -315,6 +343,8 @@ impl Collection {
             embedding_dimension: None,
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         Self::create_from_config(path, config, None)
     }
@@ -383,6 +413,12 @@ impl Collection {
         let mut config = config;
         config.point_count = actual_count;
 
+        // TODO #370: implement crash recovery gap detection for deferred indexer.
+        // After loading HNSW and vector storage, detect vectors in storage but
+        // not in HNSW (gap vectors from a crash during deferred merge) and
+        // re-index them. This requires comparing storage IDs against HNSW IDs
+        // which may be expensive for large collections.
+
         Ok(Self::assemble(CollectionParts {
             path,
             config,
@@ -422,6 +458,8 @@ impl Collection {
             embedding_dimension: embedding_dim,
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
         };
         // NOTE: create_from_config validates dimension only when > 0,
         // so embedding_dim=None (dimension=0) skips validation correctly.
@@ -594,6 +632,11 @@ impl Collection {
 
     /// Saves the collection configuration and index to disk.
     ///
+    /// If the delta buffer is active (HNSW rebuild in progress), drains
+    /// buffered vectors into the HNSW index before persisting it. This
+    /// ensures graceful shutdown does not lose vectors that were accepted
+    /// during the rebuild window.
+    ///
     /// # Errors
     ///
     /// Returns an error if storage operations fail.
@@ -601,10 +644,102 @@ impl Collection {
         self.save_config()?;
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
+        // Drain delta buffer into HNSW before persisting the index.
+        // Lock order: delta_buffer(10) is acquired after vector_storage(2)
+        // and payload_storage(3) — both already released above.
+        self.drain_delta_into_index();
+        // Drain deferred indexer into HNSW (position 11, after delta at 10).
+        self.drain_deferred_into_index();
         self.index.save(&self.path)?;
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()
     }
+
+    /// Drains the delta buffer into the HNSW index (if active).
+    ///
+    /// No-op when the delta buffer is inactive (no rebuild in progress).
+    /// After draining, the buffer is empty and inactive.
+    ///
+    /// Filters out IDs that have been deleted from vector storage since they
+    /// were buffered, preventing ghost vectors from being re-inserted into
+    /// HNSW after a concurrent delete.
+    ///
+    /// Uses `insert_batch_parallel` for consistent batch insert performance
+    /// (same strategy as `merge_deferred_batch` in crud.rs).
+    ///
+    /// # Lock ordering
+    ///
+    /// Acquires `vector_storage` (position 2) briefly for the validity
+    /// check, releases it, then inserts into the index (no lock).
+    /// `delta_buffer` (position 10) is acquired first via `deactivate_and_drain`.
+    /// The caller must NOT hold any lower-numbered lock when calling this method.
+    #[cfg(feature = "persistence")]
+    fn drain_delta_into_index(&self) {
+        let drained = self.delta_buffer.deactivate_and_drain();
+        if drained.is_empty() {
+            return;
+        }
+        // Filter out vectors deleted from storage during the buffer's
+        // lifetime to prevent ghost re-insertion into HNSW.
+        let storage = self.vector_storage.read();
+        let valid: Vec<(u64, &[f32])> = drained
+            .iter()
+            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+        drop(storage); // Release read lock before batch insert
+        if !valid.is_empty() {
+            self.index.insert_batch_parallel(valid);
+        }
+    }
+
+    /// No-op stub when persistence is disabled.
+    #[cfg(not(feature = "persistence"))]
+    fn drain_delta_into_index(&self) {}
+
+    /// Drains the deferred indexer into the HNSW index (if configured).
+    ///
+    /// No-op when deferred indexing is not configured or disabled.
+    /// After draining, both buffers are empty and inactive.
+    ///
+    /// Filters out IDs that have been deleted from vector storage since they
+    /// were buffered, preventing ghost vectors from being re-inserted into
+    /// HNSW after a concurrent delete.
+    ///
+    /// Uses `insert_batch_parallel` for consistent batch insert performance
+    /// (same strategy as `merge_deferred_batch` in crud.rs).
+    ///
+    /// # Lock ordering
+    ///
+    /// Acquires `vector_storage` (position 2) briefly for the validity
+    /// check, releases it, then inserts into the index (no lock).
+    /// `deferred_indexer` (position 11) is acquired first via `drain_all`.
+    /// The caller must NOT hold any lower-numbered lock.
+    #[cfg(feature = "persistence")]
+    fn drain_deferred_into_index(&self) {
+        if let Some(ref di) = self.deferred_indexer {
+            let drained = di.drain_all();
+            if drained.is_empty() {
+                return;
+            }
+            // Filter out vectors deleted from storage during the buffer's
+            // lifetime to prevent ghost re-insertion into HNSW.
+            let storage = self.vector_storage.read();
+            let valid: Vec<(u64, &[f32])> = drained
+                .iter()
+                .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+                .map(|(id, v)| (*id, v.as_slice()))
+                .collect();
+            drop(storage); // Release read lock before batch insert
+            if !valid.is_empty() {
+                self.index.insert_batch_parallel(valid);
+            }
+        }
+    }
+
+    /// No-op stub when persistence is disabled.
+    #[cfg(not(feature = "persistence"))]
+    fn drain_deferred_into_index(&self) {}
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
     fn flush_secondary_indexes(&self) -> Result<()> {

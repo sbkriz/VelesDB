@@ -39,14 +39,6 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension, or if
     /// attempting to insert vectors into a metadata-only collection.
-    /// Inserts or updates points in the collection.
-    ///
-    /// Accepts any iterator of points (Vec, slice, array, etc.)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension, or if
-    /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
@@ -105,7 +97,7 @@ impl Collection {
                 old_payload.as_ref(),
                 point.payload.as_ref(),
             );
-            self.index.insert(point.id, &point.vector);
+            self.insert_or_defer(point.id, &point.vector);
             Self::update_text_index(&self.text_index, point);
             Self::collect_sparse_vectors(point, &mut sparse_batch);
         }
@@ -117,9 +109,7 @@ impl Collection {
         drop(payload_storage);
 
         self.config.write().point_count = point_count;
-        // NOTE: index.save() removed — atomic_write fsyncs are too slow on CI
-        // runners and production batch workloads. The WAL + payload log ensure
-        // data durability; call collection.flush() to persist the HNSW index.
+        self.maybe_merge_deferred();
 
         Ok(sparse_batch)
     }
@@ -194,6 +184,72 @@ impl Collection {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Inserts into HNSW directly, or buffers in the deferred indexer.
+    ///
+    /// When a deferred indexer is present, the vector is pushed into the
+    /// deferred buffer instead of the HNSW graph. Otherwise falls through
+    /// to `VectorIndex::insert`.
+    ///
+    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
+    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
+    /// redundant `is_enabled()` check is needed here.
+    fn insert_or_defer(&self, id: u64, vector: &[f32]) {
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            di.push(id, vector.to_vec());
+            return;
+        }
+        self.index.insert(id, vector);
+    }
+
+    /// Triggers a deferred merge if the buffer has reached threshold.
+    ///
+    /// Drains buffered vectors and batch-inserts them into HNSW.
+    /// No-op when deferred indexing is not configured.
+    fn maybe_merge_deferred(&self) {
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            if di.should_merge() {
+                self.merge_deferred_batch(di);
+            }
+        }
+    }
+
+    /// Drains the deferred indexer and batch-inserts into HNSW.
+    ///
+    /// Filters out IDs that have been deleted from vector storage since they
+    /// were buffered, preventing ghost vectors from being re-inserted into
+    /// HNSW after a concurrent delete.
+    ///
+    /// Logs a warning if fewer vectors were inserted than expected, which
+    /// indicates a partial failure (e.g., duplicate IDs filtered out,
+    /// ghost-vector filtering, or graph insertion error). The drained
+    /// vectors are not retried.
+    #[cfg(feature = "persistence")]
+    fn merge_deferred_batch(&self, di: &crate::collection::streaming::DeferredIndexer) {
+        let drained = di.swap_and_drain();
+        if drained.is_empty() {
+            return;
+        }
+        // Filter out vectors deleted from storage during the buffer's
+        // lifetime to prevent ghost re-insertion into HNSW.
+        let storage = self.vector_storage.read();
+        let valid: Vec<(u64, &[f32])> = drained
+            .iter()
+            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+        drop(storage); // Release read lock before batch insert
+        let expected = valid.len();
+        if valid.is_empty() {
+            return;
+        }
+        let inserted = self.index.insert_batch_parallel(valid);
+        if inserted < expected {
+            tracing::warn!("merge_deferred_batch: inserted {inserted}/{expected} vectors");
+        }
+    }
+
     /// Inserts or updates metadata-only points (no vectors).
     ///
     /// This method is for metadata-only collections. Points should have
@@ -243,11 +299,6 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
-    /// Bulk insert optimized for high-throughput import.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
@@ -265,15 +316,35 @@ impl Collection {
         self.bulk_store_vectors(&vector_refs)?;
         self.bulk_store_payloads(points)?;
 
-        let inserted = self.index.insert_batch_parallel(vector_refs);
-        self.index.set_searching_mode();
-
+        let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
 
         self.apply_sparse_batch_bulk(&sparse_batch)?;
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
+    }
+
+    /// Batch-inserts into HNSW or defers into the deferred indexer.
+    ///
+    /// Returns the number of vectors processed (whether indexed directly
+    /// or deferred for later merge).
+    ///
+    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
+    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
+    /// redundant `is_enabled()` check is needed here.
+    fn bulk_index_or_defer(&self, vector_refs: Vec<(u64, &[f32])>) -> usize {
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
+            if di.should_merge() {
+                self.merge_deferred_batch(di);
+            }
+            return vector_refs.len();
+        }
+        let inserted = self.index.insert_batch_parallel(vector_refs);
+        self.index.set_searching_mode();
+        inserted
     }
 
     /// Collects sparse vectors grouped by index name for batch insert.
@@ -418,7 +489,7 @@ impl Collection {
         Ok(())
     }
 
-    /// Deletes vector points from all stores (vector, payload, index, caches, sparse).
+    /// Deletes vector points from all stores (vector, payload, index, caches, sparse, delta).
     fn delete_vector_points(&self, ids: &[u64]) -> Result<()> {
         let mut payload_storage = self.payload_storage.write();
         let mut vector_storage = self.vector_storage.write();
@@ -446,7 +517,23 @@ impl Collection {
         drop(pq_cache);
         self.config.write().point_count = point_count;
 
-        self.delete_from_sparse_indexes(ids)
+        self.delete_from_sparse_indexes(ids)?;
+
+        // Lock order: delta_buffer(10) acquired after sparse_indexes(9) released.
+        #[cfg(feature = "persistence")]
+        for &id in ids {
+            self.delta_buffer.remove(id);
+        }
+
+        // Lock order: deferred_indexer(11) acquired after delta_buffer(10).
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            for &id in ids {
+                di.remove(id);
+            }
+        }
+
+        Ok(())
     }
 
     /// Deletes IDs from sparse indexes with WAL-before-apply.
