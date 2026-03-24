@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-1.6.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.6.0 - a high-performance vector database for AI applications.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.7.0 - a high-performance vector database for AI applications.
 
 ## Features
 
@@ -586,7 +586,7 @@ print(graph.edge_count())  # total edges in the graph
 
 ### VelesQL Parser API
 
-VelesDB v1.6.0 exposes the VelesQL parser as a standalone Python API for query
+VelesDB v1.7.0 exposes the VelesQL parser as a standalone Python API for query
 introspection, validation, and tooling integration. Parse any VelesQL statement
 into a `ParsedStatement` object and inspect its structure without executing it.
 
@@ -808,16 +808,16 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 
 | Operation | Time (768d) | Throughput |
 |-----------|-------------|------------|
-| Cosine | ~33.6 ns | 22.9 Gelem/s |
-| Euclidean | ~22.7 ns | 33.8 Gelem/s |
-| Dot Product | ~23.6 ns | 32.5 Gelem/s |
-| Hamming | ~34.3 ns | -- |
+| Cosine | ~32.7 ns | 23.5 Gelem/s |
+| Euclidean | ~20.7 ns | 37.1 Gelem/s |
+| Dot Product | ~19.8 ns | 38.8 Gelem/s |
+| Hamming | ~34.4 ns | -- |
 
 ### System Benchmarks (Native Rust Engine)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search (10K/768D)** | **42.8 µs** (k=10, Balanced mode) |
+| **HNSW Search (10K/768D)** | **40.6 µs** (k=10, Balanced mode) |
 | **Recall@10 (Accurate)** | **100%** |
 | **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors) |
 

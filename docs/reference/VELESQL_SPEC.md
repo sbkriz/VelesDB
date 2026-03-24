@@ -1,6 +1,6 @@
 # VelesQL Language Specification
 
-*Version 2.1.0 — February 2026*
+*Version 3.0.0 — February 2026*
 
 VelesQL is a **SQL-like query language** designed specifically for vector search operations. If you know SQL, you already know VelesQL.
 

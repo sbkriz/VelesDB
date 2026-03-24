@@ -65,7 +65,7 @@ curl -X POST http://localhost:8080/collections \
 
 Response (`201 Created`):
 ```json
-{"name": "documents", "dimension": 768, "metric": "cosine", "point_count": 0}
+{"name": "documents", "dimension": 768, "metric": "cosine", "point_count": 0, "storage_mode": "full"}
 ```
 
 ```bash
@@ -203,13 +203,14 @@ curl -X POST http://localhost:8080/query \
 Response:
 ```json
 {
-  "columns": ["id", "score", "title"],
-  "rows": [
-    [1, 0.95, "Hello"],
-    [3, 0.88, "World"]
+  "results": [
+    {"id": 1, "score": 0.95, "title": "Hello"},
+    {"id": 3, "score": 0.88, "title": "World"}
   ],
-  "count": 2,
-  "timing_ms": 0.42
+  "timing_ms": 0.42,
+  "took_ms": 1,
+  "rows_returned": 2,
+  "meta": {"velesql_contract_version": "1.0", "count": 2}
 }
 ```
 
@@ -242,9 +243,19 @@ curl -X POST http://localhost:8080/query/explain \
 Response:
 ```json
 {
-  "root": {"VectorSearch": {"collection": "documents", "ef_search": 128, "candidates": 5}},
-  "estimated_cost_ms": 0.1,
-  "index_used": "Hnsw",
+  "query": "SELECT * FROM documents WHERE VECTOR NEAR $v LIMIT 5",
+  "query_type": "select",
+  "collection": "documents",
+  "plan": [
+    {"step": 1, "operation": "VectorSearch", "description": "HNSW nearest-neighbor scan, ef_search=128, limit=5"}
+  ],
+  "estimated_cost": {
+    "uses_index": true,
+    "index_name": "hnsw",
+    "selectivity": 0.005,
+    "complexity": "O(log n)"
+  },
+  "features": {},
   "cache_hit": false,
   "plan_reuse_count": 0
 }
@@ -429,7 +440,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.6.0"}
+{"status": "ok", "version": "1.7.0"}
 ```
 
 ### `GET /ready` -- Readiness Probe
@@ -443,13 +454,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.6.0"}
+{"status": "ready", "version": "1.7.0"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.6.0"}
+{"status": "not_ready", "version": "1.7.0"}
 ```
 
 ### Kubernetes Example
@@ -483,9 +494,9 @@ readinessProbe:
 ## Performance
 
 - **Cosine similarity**: ~34 ns per operation (768d)
-- **Dot product**: ~23.6 ns per operation (768d)
-- **Search latency**: 42.8 µs for 10K vectors (768D, Balanced mode)
-- **Throughput**: 32.5 Gelem/s (dot product, 768D)
+- **Dot product**: ~19.8 ns per operation (768d)
+- **Search latency**: 40.6 µs for 10K vectors (768D, Balanced mode)
+- **Throughput**: 38.8 Gelem/s (dot product, 768D)
 
 ## Configuration Reference
 

@@ -876,11 +876,11 @@ class TestV15Features:
         with pytest.raises(SecurityError):
             validate_sparse_vector({True: 1.0})
 
-    def test_version_is_1_5_1(self):
-        """Test that package version is 1.6.0."""
+    def test_version_is_1_7_0(self):
+        """Test that package version is 1.7.0."""
         from langchain_velesdb import __version__
 
-        assert __version__ == "1.6.0"
+        assert __version__ == "1.7.0"
 
 
 if __name__ == "__main__":

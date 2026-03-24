@@ -152,13 +152,15 @@ let recommendations = combined_scores
 | **Graph lookup latency** | **88µs** |
 | **Combined query latency** | **202µs** |
 
+*Performance numbers measured on i9-14900KF. Results may vary based on hardware.*
+
 ### Performance Analysis
 
 These results are **production-ready** and compare favorably to VelesDB's benchmarks:
 
 | Comparison | Benchmark | E-commerce Demo | Analysis |
 |------------|-----------|-----------------|----------|
-| HNSW Search (10K, 768D) | 42.8µs | 187µs (5K, 128D) | ✅ Includes I/O + payload retrieval |
+| HNSW Search (10K, 768D) | 40.6µs | 187µs (5K, 128D) | ✅ Includes I/O + payload retrieval |
 | Filter overhead | — | +55µs | ✅ Minimal (metadata in memory) |
 | Graph lookup | — | 88µs | ✅ O(1) relationship access |
 

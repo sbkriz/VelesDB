@@ -142,6 +142,32 @@ VelesDB offers three index constructors with different speed/recall tradeoffs:
 - **Memory constrained**: Lower M (4-8), combine with `StorageMode::SQ8` or `StorageMode::Binary`
 - **Bulk import**: Use `HnswParams::turbo()` during import, rebuild with production params after
 
+### Upsert Semantics (v1.7+)
+
+Since v1.7, inserting a vector with an existing ID **replaces it in-place**. The HNSW graph is automatically updated: old edges are removed and new edges are created based on the new vector position.
+
+```rust
+// Insert vector with id=1
+collection.insert(1, vec![1.0, 0.0, 0.0, 0.0], None)?;
+
+// Replace vector with id=1 — no delete needed
+collection.insert(1, vec![0.0, 1.0, 0.0, 0.0], None)?;
+```
+
+This applies to both single inserts and batch operations. No configuration change is needed — upsert semantics are always enabled.
+
+**Performance note:** In-place upsert is faster than delete + reinsert because it reuses the node slot in the HNSW graph and avoids a full graph reconnection.
+
+### Batch Insert Optimization (v1.7+)
+
+Large batch inserts are automatically optimized with two techniques:
+
+1. **Chunked Phase B** — Batches are split into optimal chunks (computed by `compute_chunk_size()`). Each chunk updates the global entry point, improving graph connectivity for subsequent chunks. This is particularly effective for batches > 1000 vectors.
+
+2. **Alloc/Connect Separation** — Node allocation is separated from edge connection. All node slots are pre-allocated first, then edges are connected in parallel without lock contention on the allocator. This yields ~2x throughput improvement for large batches.
+
+Both optimizations are automatic and require no configuration. Use `insert_batch_parallel()` for best performance on large datasets.
+
 ---
 
 ## Search Quality Modes

@@ -20,7 +20,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "1.6.0"
+  "version": "1.7.0"
 }
 ```
 
@@ -434,7 +434,7 @@ Execute a VelesQL query.
   "took_ms": 2,
   "rows_returned": 1,
   "meta": {
-    "velesql_contract_version": "2.1.0",
+    "velesql_contract_version": "3.0.0",
     "count": 1
   }
 }
@@ -559,7 +559,7 @@ Execute collection-scoped graph `MATCH` queries.
   ],
   "took_ms": 15,
   "count": 1,
-  "meta": {"velesql_contract_version": "2.1.0"}
+  "meta": {"velesql_contract_version": "3.0.0"}
 }
 ```
 

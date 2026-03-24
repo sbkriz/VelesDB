@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 20, 2026 (v1.6.0+simd-opt — sequential benchmarks on idle machine)*
+*Last updated: March 24, 2026 (v1.7.0 — sequential benchmarks on idle machine)*
 
 ---
 
@@ -21,17 +21,17 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2/AVX-512 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 20, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA, AVX-512 disabled — hybrid P+E topology), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.
+SIMD kernels use AVX2/AVX-512 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 24, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA, AVX-512 disabled — hybrid P+E topology), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.
 
 ### SIMD Kernel Latency
 
 | Operation | 128D | 384D | 768D | 1536D | 3072D |
 |-----------|------|------|------|-------|-------|
-| **Dot Product** | 5.4 ns | 12.0 ns | 23.6 ns | 43.8 ns | 91.2 ns |
-| **Euclidean** | 5.2 ns | 11.5 ns | 22.7 ns | 46.1 ns | 99.3 ns |
-| **Cosine** | 7.7 ns | 18.6 ns | 33.6 ns | 61.4 ns | 118.9 ns |
-| **Hamming** | 7.3 ns | 17.8 ns | 34.3 ns | 69.2 ns | 132.2 ns |
-| **Jaccard** | 6.4 ns | 16.4 ns | 29.3 ns | 50.9 ns | 100.6 ns |
+| **Dot Product** | 5.4 ns | 12.0 ns | 19.8 ns | 43.8 ns | 91.2 ns |
+| **Euclidean** | 5.2 ns | 11.5 ns | 20.7 ns | 46.1 ns | 99.3 ns |
+| **Cosine** | 7.7 ns | 18.6 ns | 32.7 ns | 61.4 ns | 118.9 ns |
+| **Hamming** | 7.3 ns | 17.8 ns | 34.4 ns | 69.2 ns | 132.2 ns |
+| **Jaccard** | 6.4 ns | 16.4 ns | 28.8 ns | 50.9 ns | 100.6 ns |
 
 *Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
 
@@ -49,7 +49,7 @@ Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 23.6 ns | 32.5 Gelem/s |
+| 768D | 19.8 ns | 38.8 Gelem/s |
 | 1536D | 43.8 ns | 35.1 Gelem/s |
 | 3072D | 91.2 ns | 33.7 Gelem/s |
 
@@ -57,8 +57,8 @@ Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 | Benchmark | Latency | Per-Vector |
 |-----------|---------|------------|
-| Native 1000x768D | 40.4 µs | 40.4 ns |
-| Engine 1000x768D | 42.2 µs | 42.2 ns |
+| Native 1000x768D | 43.8 µs | 43.8 ns |
+| Engine 1000x768D | 45.0 µs | 45.0 ns |
 
 ---
 
@@ -112,8 +112,8 @@ Sparse vector search uses an inverted index with MaxScore optimization for early
 |-----------|--------------------|-------|
 | **Insert 10K sequential** | 93 ms | 9.3 µs/doc |
 | **Insert 10K parallel (4x2500)** | 155 ms | Manual 4-thread partitioning |
-| **Search top-10, 10K corpus** | 958 µs | MaxScore pruning active |
-| **Search top-100, 10K corpus** | 818 µs | Minimal cost for larger k |
+| **Search top-10, 10K corpus** | 825 µs | MaxScore pruning active |
+| **Search top-100, 10K corpus** | 824 µs | Minimal cost for larger k |
 | **Concurrent 16-thread (8 insert + 8 search)** | 171 ms | Mixed read/write workload |
 
 Latency percentiles are not separately measured by Criterion (which reports confidence intervals). The estimates above represent the mean of the sampling distribution.
@@ -136,10 +136,10 @@ No dedicated hybrid benchmark suite exists yet. Performance can be estimated fro
 
 | Component | Latency (10K corpus) | Source |
 |-----------|---------------------|--------|
-| Dense HNSW search (k=10, 768D) | ~43 µs | hnsw_benchmark |
-| Sparse search (top-10, 10K) | ~958 µs | sparse_benchmark |
+| Dense HNSW search (k=10, 768D) | ~41 µs | hnsw_benchmark |
+| Sparse search (top-10, 10K) | ~825 µs | sparse_benchmark |
 | RRF fusion overhead | negligible (score merging) | -- |
-| **Estimated hybrid total** | **~1.0 ms** | Dense + Sparse + fusion |
+| **Estimated hybrid total** | **~0.87 ms** | Dense + Sparse + fusion |
 
 The RRF fusion step is a simple score merge with no distance computation, so hybrid latency is dominated by the sparse search branch. For workloads where sparse search is the bottleneck, the MaxScore optimization provides early termination on high-selectivity queries.
 
@@ -154,7 +154,7 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **Search k=10** (10K/768D) | 42.8 µs | 23.4K QPS |
+| **Search k=10** (10K/768D) | 40.6 µs | 24.6K QPS |
 | **Search k=50** | 63.5 µs | -- |
 | **Search k=100** | 151.5 µs | -- |
 | **Insert 1K x 768D** (sequential) | 263.7 ms | 3.8K vec/s |

@@ -8,7 +8,7 @@
 
 <h3 align="center">
   The Local Knowledge Engine for AI Agents<br/>
-  <em>Vector + Graph + ColumnStore Fusion &bull; 42.8&micro;s HNSW Search &bull; 23.6ns SIMD &bull; 4,300+ Tests &bull; 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion &bull; 40.6&micro;s HNSW Search &bull; 19.8ns SIMD &bull; 4,500+ Tests &bull; 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.6.0">Download v1.6.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.0">Download v1.7.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -32,14 +32,14 @@
 
 ---
 
-## What's New in v1.6
+## What's New in v1.7
 
-- **Server Security** — API key authentication + TLS (HTTPS) + graceful shutdown
-- **6 New REST Endpoints** — `/ready`, `/stats`, `/config`, `/guardrails`, `/analyze`, `/search/ids`
-- **SIMD Performance Gains** — 4-accumulator ILP kernels for Hamming & Jaccard, cosine finish optimization
-- **PQ/Sparse/Graph Enhancements** — OPQ rotation fix, batch sparse insert, composite property index
+- **HNSW Upsert Semantics** — Update/replace vectors in-place without delete+reinsert
+- **GPU Acceleration** — Complete multi-metric GPU pipelines with adaptive thresholds (wgpu)
+- **Batch Insert Optimization** — Chunked phase B with inter-chunk EP update, alloc/connect separation
+- **search_layer Batch SIMD** — Batch SIMD distance computation + deferred indexing in search
 
-> Full changelog: [What's New in v1.6](https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.6.0)
+> Full changelog: [What's New in v1.7](https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.0)
 
 ---
 
@@ -49,7 +49,7 @@
 
 | Pain Point | Business Impact | VelesDB Solution |
 |------------|-----------------|------------------|
-| **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **42.8µs local** (k=10, 10K vectors) — network-free retrieval |
+| **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **40.6µs local** (k=10, 10K vectors) — network-free retrieval |
 | **Vectors alone aren't enough** | Semantic similarity misses relationships | **Vector + Graph unified** in one query |
 | **Privacy & deployment friction** | Cloud dependencies, GDPR concerns | **6 MB self-contained binary** — works offline, air-gapped |
 
@@ -64,8 +64,8 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>23.6ns SIMD</h3>
-<p>Native HNSW + AVX-512/AVX2/NEON SIMD.<br/><strong>32.5 Gelem/s throughput.</strong></p>
+<h3>19.8ns SIMD</h3>
+<p>Native HNSW + AVX-512/AVX2/NEON SIMD.<br/><strong>38.8 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>6 MB Self-Contained</h3>
@@ -87,7 +87,7 @@
 | **Architecture** | Unified vector + graph + columnar | Vector only | Vector + payload | Vector extension for PostgreSQL |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
-| **Search latency** | 42.8µs (embedded) | ~1-5ms | ~1-5ms | ~5-20ms |
+| **Search latency** | 40.6µs (embedded) | ~1-5ms | ~1-5ms | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM)** | Yes | No | No | No |
@@ -152,7 +152,7 @@ velesdb-server --data-dir ./my_data
 # Server running at http://localhost:8080
 
 curl http://localhost:8080/health
-# {"status":"ok","version":"1.6.0"}
+# {"status":"ok","version":"1.7.0"}
 ```
 
 ### Store your first vectors
@@ -171,7 +171,7 @@ curl -X POST http://localhost:8080/collections/docs/points \
   }'
 ```
 
-### Search (42µs latency)
+### Search (40.6µs latency)
 
 ```bash
 curl -X POST http://localhost:8080/collections/docs/search \
@@ -380,19 +380,19 @@ INSERT                      INDEX                       SEARCH
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **SIMD Dot Product (768D)** | **23.6 ns** | **32.5 Gelem/s** |
-| **Euclidean** | **22.7 ns** | **33.8 Gelem/s** |
-| **Cosine** | **33.6 ns** | **22.9 Gelem/s** |
-| **Hamming** | **34.3 ns** | — |
-| **Jaccard** | **29.3 ns** | — |
+| **SIMD Dot Product (768D)** | **19.8 ns** | **38.8 Gelem/s** |
+| **Euclidean** | **20.7 ns** | **37.1 Gelem/s** |
+| **Cosine** | **32.7 ns** | **23.5 Gelem/s** |
+| **Hamming** | **34.4 ns** | — |
+| **Jaccard** | **28.8 ns** | — |
 
 ### System Benchmarks (10K Vectors, 768D)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search (10K vectors)** | **42.8 µs** (k=10) |
+| **HNSW Search (10K vectors)** | **40.6 µs** (k=10) |
 | **VelesQL Cache Hit** | **1.06 µs** (~943K QPS) |
-| **Sparse Search** | **958 µs** (MaxScore DAAT) |
+| **Sparse Search** | **825 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
 
 ### Search Quality (Recall)
@@ -400,16 +400,16 @@ INSERT                      INDEX                       SEARCH
 | Mode | ef_search | Recall@10 | Latency (10K/128D) |
 |------|-----------|-----------|---------------------|
 | Fast | 64 | 92.2% | 36µs |
-| Balanced (default) | 128 | 98.8% | ~102µs |
+| Balanced (default) | 128 | 98.8% | 57µs |
 | Accurate | 512 | 100% | 130µs |
-| Perfect | 4096 | 100% | 163µs |
+| Perfect | 4096 | 100% | 200µs |
 | Adaptive | 32–512 | 95%+ | ~15-40µs (easy queries) |
 
 **Optimizations:** AVX-512/AVX2/NEON auto-detection, 4-accumulator ILP, zero-dispatch DistanceEngine, batch prefetch L1/L2, 64-byte aligned memory, batch WAL, memory-mapped files.
 
 > **Full benchmarks & methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
-*Measured March 20, 2026 on i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0. Criterion.rs, sequential runs on idle machine. Results depend on CPU, SIMD support, and dataset.*
+*Measured March 24, 2026 on i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0. Criterion.rs, sequential runs on idle machine. Results depend on CPU, SIMD support, and dataset.*
 
 ---
 
@@ -418,7 +418,7 @@ INSERT                      INDEX                       SEARCH
 | Feature | Technical Capability | Real-World Impact |
 |---------|----------------------|-------------------|
 | **Vector + Graph Fusion** | Unified query language for semantic + relationship queries | **Build smarter AI agents** with contextual understanding |
-| **42.8µs Search** | Native HNSW + AVX-512/AVX2/NEON SIMD | **Create real-time experiences** previously impossible |
+| **40.6µs Search** | Native HNSW + AVX-512/AVX2/NEON SIMD | **Create real-time experiences** previously impossible |
 | **6 MB Self-Contained** | No external services, single executable | **Deploy anywhere** — from servers to edge devices |
 | **Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |
@@ -550,6 +550,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 | **v1.2.0** | Released | Knowledge Graph, Vector-Graph Fusion, ColumnStore, 15 EPICs |
 | **v1.4.0** | Released | VelesQL v2.2.0, Multi-Score Fusion, Parallel Graph, 2,765 tests |
 | **v1.6.0** | Released | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
+| **v1.7.0** | Released | HNSW Upsert, GPU Acceleration, Batch SIMD, Chunked Insertion |
 
 <details>
 <summary><b>v1.2.0 — 15 EPICs Completed (click to expand)</b></summary>
@@ -602,6 +603,18 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 | **Hybrid Dense+Sparse** | RRF/RSF fusion, parallel branch execution, filtered sparse | Best of both worlds |
 | **Streaming Inserts** | Bounded channel, backpressure, delta buffer, immediate search | Real-time ingestion |
 | **Query Plan Cache** | Two-level LRU, write_generation invalidation, EXPLAIN metrics | Faster repeated queries |
+
+</details>
+
+<details>
+<summary><b>v1.7.0 — 4 Major Features (click to expand)</b></summary>
+
+| Feature | Description | Impact |
+|---------|-------------|--------|
+| **HNSW Upsert Semantics** | Update/replace vectors in-place without delete+reinsert | Simpler update workflows |
+| **GPU Acceleration** | Complete multi-metric GPU pipelines with adaptive thresholds (wgpu) | Hardware-accelerated distance computation |
+| **Batch Insert Optimization** | Chunked phase B with inter-chunk EP update, alloc/connect separation | Higher insertion throughput |
+| **search_layer Batch SIMD** | Batch SIMD distance computation + deferred indexing in search | Faster search at scale |
 
 </details>
 

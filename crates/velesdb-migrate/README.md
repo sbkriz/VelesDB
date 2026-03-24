@@ -10,7 +10,7 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 
 > **Why migrate to VelesDB?**
 > 
-> - ⚡ **Microsecond latency** — 42.8µs search (10K/768D), no network round-trip
+> - ⚡ **Microsecond latency** — 40.6µs search (10K/768D), no network round-trip
 > - 🎯 **SQL-native queries** — Use familiar VelesQL syntax, no new APIs to learn
 > - 💾 **4-32x compression** — SQ8 and Binary quantization built-in
 > - 🔒 **Self-hosted** — Your data stays on your infrastructure
@@ -443,7 +443,7 @@ options:
 ## 🔧 CLI Reference
 
 ```
-velesdb-migrate 1.6.0
+velesdb-migrate 1.7.0
 Migrate vectors from other databases to VelesDB
 
 USAGE:
@@ -805,7 +805,7 @@ velesdb-server --port 8080
 
 ### Why developers choose VelesDB:
 
-- ✅ **42.8µs local search** — no network overhead
+- ✅ **40.6µs local search** — no network overhead
 - ✅ **SQL syntax** you already know  
 - ✅ **Self-contained** — single 6 MB binary, no external services
 - ✅ **Self-hosted**, your data stays private

@@ -74,14 +74,14 @@ loads for zero-cost remainder.
 
 | Function | Latency | Throughput | vs Previous |
 |----------|---------|------------|-------------|
-| `dot_product_native` | **23.6ns** | 32.5 Gelem/s | Baseline |
-| `euclidean_native` | **22.7ns** | 33.8 Gelem/s | Improved |
-| `cosine_similarity_native` | **33.6ns** | 22.9 Gelem/s | Optimized (4-acc, single-sqrt finish) |
-| `cosine_normalized_native` | **23.6ns** | 32.5 Gelem/s | Same as dot |
-| `hamming_distance_native` | **34.3ns** | 22.4M ops/s | FP-domain 4-acc (no cross-domain penalty) + NEON + batch |
-| `jaccard_similarity_native` | **29.3ns** | 26.2 Gelem/s | Optimized (4-acc + NEON + batch) |
+| `dot_product_native` | **19.8ns** | 38.8 Gelem/s | Baseline |
+| `euclidean_native` | **20.7ns** | 37.1 Gelem/s | Improved |
+| `cosine_similarity_native` | **32.7ns** | 23.5 Gelem/s | Optimized (4-acc, single-sqrt finish) |
+| `cosine_normalized_native` | **19.8ns** | 38.8 Gelem/s | Same as dot |
+| `hamming_distance_native` | **34.4ns** | 22.3M ops/s | FP-domain 4-acc (no cross-domain penalty) + NEON + batch |
+| `jaccard_similarity_native` | **28.8ns** | 26.7 Gelem/s | Optimized (4-acc + NEON + batch) |
 
-*Measured March 20, 2026 on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.*
+*Measured March 24, 2026 on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.*
 
 ### Scaling by Dimension (simd_native)
 
@@ -89,7 +89,7 @@ loads for zero-cost remainder.
 |-----------|--------|-------------|-------|
 | 128 | 8.1ns | 5.4ns | MiniLM |
 | 384 | 20.1ns | 12.0ns | all-MiniLM-L6-v2 |
-| 768 | 33.6ns | 23.6ns | BERT, ada-002 |
+| 768 | 32.7ns | 19.8ns | BERT, ada-002 |
 | 1536 | 69.0ns | 43.8ns | text-embedding-3-small |
 | 3072 | 112.2ns | 91.2ns | text-embedding-3-large |
 

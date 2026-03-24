@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 2.2.0 | **Last Updated**: 2026-03-07
+**Version**: 3.0.0 | **Last Updated**: 2026-03-07
 
 ## Overview
 

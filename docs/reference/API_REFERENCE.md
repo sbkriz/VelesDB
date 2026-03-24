@@ -60,7 +60,7 @@ Complete REST API documentation for `velesdb-server`. All endpoints are served f
 | `/collections/{name}/indexes` | `POST` | Create index on property |
 | `/collections/{name}/indexes/{label}/{property}` | `DELETE` | Delete index |
 
-## VelesQL v2.2.0 (Unified Query)
+## VelesQL v3.0.0 (Unified Query)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -68,7 +68,7 @@ Complete REST API documentation for `velesdb-server`. All endpoints are served f
 | `/aggregate` | `POST` | Execute aggregation-only VelesQL queries (`GROUP BY`/`HAVING`) |
 | `/query/explain` | `POST` | Return query execution plan (EXPLAIN) |
 
-**VelesQL v2.2.0 Features:**
+**VelesQL v3.0.0 Features:**
 - `GROUP BY` / `HAVING` with AND/OR operators
 - `ORDER BY` multi-column + `similarity()` function
 - `JOIN ... ON` across collections (inner join runtime support)
@@ -132,6 +132,8 @@ curl -X POST http://localhost:8080/collections \
 ```
 
 ### Upsert Points
+
+Inserts new points or **replaces existing ones** if the ID already exists. Since v1.7, upsert is the default behavior: inserting a point with an existing ID updates the vector and payload in-place, and the HNSW graph edges are automatically reconnected. No separate delete is needed.
 
 ```bash
 curl -X POST http://localhost:8080/collections/my_vectors/points \
