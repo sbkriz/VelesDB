@@ -180,13 +180,26 @@ impl HnswIndex {
 
             let result = self.upsert_mapping(id);
 
-            if let Err(e) = self.inner.write().insert((vector, result.idx)) {
-                tracing::error!("insert_batch_sequential: insert failed for id={id}: {e}");
-                self.rollback_upsert(id, &result);
-                continue;
-            }
-            if self.enable_vector_storage {
-                self.vectors.insert(result.idx, vector);
+            // Use read() — consistent with insert_batch_parallel and
+            // VectorIndex::insert. NativeHnswInner manages its own locks.
+            let assigned_id = match self.inner.read().insert((vector, result.idx)) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("insert_batch_sequential: insert failed for id={id}: {e}");
+                    self.rollback_upsert(id, &result);
+                    continue;
+                }
+            };
+            // Fix mapping if HNSW assigned a different node_id (concurrent race)
+            if assigned_id == result.idx {
+                if self.enable_vector_storage {
+                    self.vectors.insert(result.idx, vector);
+                }
+            } else {
+                self.mappings.restore(id, assigned_id);
+                if self.enable_vector_storage {
+                    self.vectors.insert(assigned_id, vector);
+                }
             }
             inserted += 1;
         }

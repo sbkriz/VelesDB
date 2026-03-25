@@ -115,9 +115,15 @@ impl Collection {
             .collect();
         payload_storage.store_batch(&payload_entries)?;
 
-        // Handle payload deletes (points with payload=None that had old payloads)
+        // Handle payload deletes: points with payload=None need a delete if
+        // the ID had a payload before the batch OR another point in this batch
+        // stored a payload for the same ID (within-batch duplicate handling).
+        let stored_ids: std::collections::HashSet<u64> = payload_entries
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
         for (point, old) in points.iter().zip(&old_payloads) {
-            if point.payload.is_none() && old.is_some() {
+            if point.payload.is_none() && (old.is_some() || stored_ids.contains(&point.id)) {
                 let _ = payload_storage.delete(point.id);
             }
         }
@@ -138,6 +144,11 @@ impl Collection {
     }
 
     /// Phase 2: Per-point updates that don't need storage write locks.
+    ///
+    /// Tracks the effective "old payload" per ID to handle within-batch
+    /// duplicates correctly: when id=5 appears twice, the second occurrence
+    /// sees the first occurrence's payload as its "old" (not the pre-batch
+    /// original), ensuring secondary indexes stay consistent.
     fn per_point_updates(
         &self,
         points: &[Point],
@@ -146,8 +157,17 @@ impl Collection {
     ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
         let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
         let mut sparse_batch = Vec::new();
+        // Track effective old payload per ID for within-batch duplicate handling.
+        // When id=5 appears twice, the second occurrence must use the first's
+        // payload as "old" — not the pre-batch original.
+        let mut seen_payloads: std::collections::HashMap<u64, Option<serde_json::Value>> =
+            std::collections::HashMap::new();
 
-        for (point, old_payload) in points.iter().zip(old_payloads) {
+        for (point, pre_batch_old) in points.iter().zip(old_payloads) {
+            let effective_old = seen_payloads
+                .get(&point.id)
+                .unwrap_or(pre_batch_old);
+
             let (sq8, binary, pq) = (
                 quant_guards.sq8.as_deref_mut(),
                 quant_guards.binary.as_deref_mut(),
@@ -157,11 +177,14 @@ impl Collection {
 
             self.update_secondary_indexes_on_upsert(
                 point.id,
-                old_payload.as_ref(),
+                effective_old.as_ref(),
                 point.payload.as_ref(),
             );
             Self::update_text_index(&self.text_index, point);
             Self::collect_sparse_vectors(point, &mut sparse_batch);
+
+            // Record this point's payload as the "old" for any future duplicate
+            seen_payloads.insert(point.id, point.payload.clone());
         }
 
         sparse_batch
