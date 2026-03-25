@@ -264,8 +264,7 @@ fn test_sparse_wal_written_on_upsert() {
 #[test]
 fn test_upsert_batch_produces_searchable_results() {
     let dir = tempfile::tempdir().unwrap();
-    let coll =
-        Collection::create(dir.path().to_path_buf(), 16, DistanceMetric::Cosine).unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 16, DistanceMetric::Cosine).unwrap();
 
     #[allow(clippy::cast_precision_loss)] // Reason: i in [0,200); u64→f32 exact
     let points: Vec<Point> = (0u64..200)
@@ -294,8 +293,7 @@ fn test_upsert_throughput_not_degraded_vs_bulk() {
     let n = 500;
 
     let dir1 = tempfile::tempdir().unwrap();
-    let coll1 =
-        Collection::create(dir1.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
+    let coll1 = Collection::create(dir1.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
 
     #[allow(clippy::cast_precision_loss)]
     let points1: Vec<Point> = (0u64..n)
@@ -310,8 +308,7 @@ fn test_upsert_throughput_not_degraded_vs_bulk() {
     let upsert_dur = t0.elapsed();
 
     let dir2 = tempfile::tempdir().unwrap();
-    let coll2 =
-        Collection::create(dir2.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
+    let coll2 = Collection::create(dir2.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
 
     #[allow(clippy::cast_precision_loss)]
     let points2: Vec<Point> = (0u64..n)
@@ -322,7 +319,9 @@ fn test_upsert_throughput_not_degraded_vs_bulk() {
         .collect();
 
     let t0 = std::time::Instant::now();
-    coll2.upsert_bulk(&points2).expect("upsert_bulk should succeed");
+    coll2
+        .upsert_bulk(&points2)
+        .expect("upsert_bulk should succeed");
     let bulk_dur = t0.elapsed();
 
     let ratio = upsert_dur.as_secs_f64() / bulk_dur.as_secs_f64().max(0.001);

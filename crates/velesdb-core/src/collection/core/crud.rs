@@ -99,10 +99,7 @@ impl Collection {
     /// Pre-collects old payloads (needed for secondary index updates),
     /// then writes all vectors and payloads in single batch calls (1 fsync each).
     /// Returns the old payloads for Phase 2.
-    fn batch_store_all(
-        &self,
-        points: &[Point],
-    ) -> Result<Vec<Option<serde_json::Value>>> {
+    fn batch_store_all(&self, points: &[Point]) -> Result<Vec<Option<serde_json::Value>>> {
         let mut payload_storage = self.payload_storage.write();
 
         // Pre-collect old payloads (needed for secondary index diff in Phase 2)
