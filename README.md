@@ -374,7 +374,7 @@ memory.procedural.reinforce(procedure_id=1, success=False)  # confidence -0.05
 | **Snapshots / Rollback** | Versioned with CRC32 | Custom backup logic |
 | **Corporate-friendly** | No network, no 3rd-party accounts | Multiple vendor dependencies |
 
-> **110 tests** cover the Agent Memory SDK end-to-end. See [`crates/velesdb-core/src/agent/`](crates/velesdb-core/src/agent/) for the Rust implementation.
+> **110 tests** cover the Agent Memory SDK end-to-end. **[Full guide: embedding setup, retrieval patterns, TTL, snapshots](docs/guides/AGENT_MEMORY.md)** | [Source code](crates/velesdb-core/src/agent/)
 
 ---
 
