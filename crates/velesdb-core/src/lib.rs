@@ -199,7 +199,10 @@ pub use quantization::{
     BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode,
 };
 pub use scored_result::ScoredResult;
-pub use validation::{validate_dimension, validate_dimension_match, MAX_DIMENSION, MIN_DIMENSION};
+pub use validation::{
+    validate_collection_name, validate_dimension, validate_dimension_match,
+    MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MIN_DIMENSION,
+};
 
 #[cfg(feature = "persistence")]
 pub use column_store::{

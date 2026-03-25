@@ -116,6 +116,11 @@ SELECT * FROM active UNION SELECT * FROM archived
 
 ### Create Collection
 
+**Collection naming rules:** Names must be 1--128 characters, containing only ASCII
+letters, digits, underscores, and hyphens (`[a-zA-Z0-9_-]`). Names must not start
+with a hyphen, must not be `.` or `..`, and must not be Windows reserved device names
+(CON, PRN, etc.). Invalid names return HTTP 400 with error code `VELES-034`.
+
 ```bash
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \

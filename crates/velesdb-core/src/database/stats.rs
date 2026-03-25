@@ -9,13 +9,15 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection does not exist, analysis fails, or
-    /// stats cannot be serialized and written to disk.
+    /// Returns an error if the name is invalid, the collection does not exist,
+    /// analysis fails, or stats cannot be serialized and written to disk.
     #[allow(deprecated)]
     pub fn analyze_collection(
         &self,
         name: &str,
     ) -> Result<crate::collection::stats::CollectionStats> {
+        crate::validation::validate_collection_name(name)?;
+
         let collection = self
             .get_collection(name)
             .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
@@ -37,12 +39,14 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the on-disk stats file exists but cannot be read or
-    /// deserialized.
+    /// Returns an error if the name is invalid, or the on-disk stats file
+    /// exists but cannot be read or deserialized.
     pub fn get_collection_stats(
         &self,
         name: &str,
     ) -> Result<Option<crate::collection::stats::CollectionStats>> {
+        crate::validation::validate_collection_name(name)?;
+
         if let Some(stats) = self.collection_stats.read().get(name).cloned() {
             return Ok(Some(stats));
         }

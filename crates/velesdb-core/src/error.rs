@@ -187,6 +187,18 @@ pub enum Error {
     /// Indicates a memory allocation failure (out of memory or invalid layout).
     #[error("[VELES-033] Allocation failed: {0}")]
     AllocationFailed(String),
+
+    /// Invalid collection name (VELES-034).
+    ///
+    /// The collection name contains forbidden characters, path separators,
+    /// or is otherwise unsafe for use as a filesystem directory name.
+    #[error("[VELES-034] Invalid collection name '{name}': {reason}")]
+    InvalidCollectionName {
+        /// The rejected name.
+        name: String,
+        /// Human-readable explanation of why it was rejected.
+        reason: String,
+    },
 }
 
 impl Error {
@@ -227,6 +239,7 @@ impl Error {
             Self::DatabaseLocked(_) => "VELES-031",
             Self::InvalidDimension { .. } => "VELES-032",
             Self::AllocationFailed(_) => "VELES-033",
+            Self::InvalidCollectionName { .. } => "VELES-034",
         }
     }
 
