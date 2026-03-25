@@ -152,7 +152,7 @@ velesdb-server --data-dir ./my_data
 # Server running at http://localhost:8080
 
 curl http://localhost:8080/health
-# {"status":"ok","version":"1.7.0"}
+# {"status":"ok","version":"1.7.2"}
 ```
 
 ### Store your first vectors

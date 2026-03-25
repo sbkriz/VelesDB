@@ -90,15 +90,15 @@ npm install @wiscale/velesdb-sdk@^1.7.0
 ```bash
 # Server
 curl http://localhost:8080/health
-# {"status":"ok","version":"1.7.0"}
+# {"status":"ok","version":"1.7.2"}
 
 # CLI
 velesdb-cli --version
-# velesdb-cli 1.7.0
+# velesdb-cli 1.7.2
 
 # Python
 python -c "import velesdb; print(velesdb.__version__)"
-# 1.7.0
+# 1.7.2
 ```
 
 ---
