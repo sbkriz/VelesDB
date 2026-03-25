@@ -195,6 +195,15 @@ impl ShardedMappings {
         self.idx_to_id.insert(idx, id);
     }
 
+    /// Removes a stale reverse mapping (`idx` -> `id`) without touching the forward mapping.
+    ///
+    /// Used when `insert_and_correct_mapping` detects a concurrent race: the
+    /// forward mapping `id -> idx` was already corrected by `restore()`, but the
+    /// old `idx_to_id[old_idx]` entry is still dangling.
+    pub fn remove_reverse(&self, idx: usize) {
+        self.idx_to_id.remove(&idx);
+    }
+
     /// Removes an ID and returns its internal index if it existed.
     pub fn remove(&self, id: u64) -> Option<usize> {
         if let Some((_, idx)) = self.id_to_idx.remove(&id) {

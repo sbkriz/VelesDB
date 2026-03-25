@@ -151,6 +151,10 @@ impl HnswIndex {
         let idx = if assigned_id == result.idx {
             result.idx
         } else {
+            // Remove stale reverse mapping before restoring the correct one.
+            // upsert_mapping created idx_to_id[result.idx] = id, but the graph
+            // assigned a different node_id, so result.idx is now orphaned.
+            self.mappings.remove_reverse(result.idx);
             self.mappings.restore(id, assigned_id);
             assigned_id
         };
