@@ -19,7 +19,10 @@ impl VectorIndex for HnswIndex {
 
         let result = self.upsert_mapping(id);
 
-        if let Err(e) = self.inner.write().insert((vector, result.idx)) {
+        // Use read() — NativeHnswInner::insert takes &self and manages its
+        // own internal synchronization (per-node locks, atomic entry point).
+        // A write lock here serializes all inserts and blocks concurrent searches.
+        if let Err(e) = self.inner.read().insert((vector, result.idx)) {
             self.rollback_upsert(id, &result);
             tracing::error!("HnswIndex::insert failed for id={id}: {e}");
             return;

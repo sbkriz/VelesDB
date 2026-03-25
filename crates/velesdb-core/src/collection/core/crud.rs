@@ -69,21 +69,88 @@ impl Collection {
 
     /// Stores vectors, payloads, and indexes for a batch of points.
     ///
+    /// Three-phase pipeline to minimize lock contention and I/O:
+    /// 1. Batch storage: `store_batch()` for vectors + payloads (1 fsync each)
+    /// 2. Per-point updates: secondary indexes, quantization, text, sparse
+    /// 3. Batch HNSW insert via `bulk_index_or_defer()`
+    ///
     /// Returns buffered sparse vectors for deferred insertion.
     fn upsert_storage_and_index(
         &self,
         points: &[Point],
         storage_mode: StorageMode,
     ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
-        let mut vector_storage = self.vector_storage.write();
+        // Phase 1: Batch storage under write locks (1 fsync per storage)
+        let old_payloads = self.batch_store_all(points)?;
+
+        // Phase 2: Per-point updates (no storage locks held)
+        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode);
+
+        // Phase 3: Batch HNSW insert
+        let vector_refs: Vec<(u64, &[f32])> =
+            points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
+        self.bulk_index_or_defer(vector_refs);
+
+        Ok(sparse_batch)
+    }
+
+    /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
+    ///
+    /// Pre-collects old payloads (needed for secondary index updates),
+    /// then writes all vectors and payloads in single batch calls (1 fsync each).
+    /// Returns the old payloads for Phase 2.
+    fn batch_store_all(
+        &self,
+        points: &[Point],
+    ) -> Result<Vec<Option<serde_json::Value>>> {
         let mut payload_storage = self.payload_storage.write();
+
+        // Pre-collect old payloads (needed for secondary index diff in Phase 2)
+        let old_payloads: Vec<Option<serde_json::Value>> = points
+            .iter()
+            .map(|p| payload_storage.retrieve(p.id).ok().flatten())
+            .collect();
+
+        // Batch payload store (1 fsync for all payloads)
+        let payload_entries: Vec<(u64, &serde_json::Value)> = points
+            .iter()
+            .filter_map(|p| p.payload.as_ref().map(|pl| (p.id, pl)))
+            .collect();
+        payload_storage.store_batch(&payload_entries)?;
+
+        // Handle payload deletes (points with payload=None that had old payloads)
+        for (point, old) in points.iter().zip(&old_payloads) {
+            if point.payload.is_none() && old.is_some() {
+                let _ = payload_storage.delete(point.id);
+            }
+        }
+        payload_storage.flush()?;
+        drop(payload_storage);
+
+        // Batch vector store (1 WAL write + 1 flush)
+        let vector_refs: Vec<(u64, &[f32])> =
+            points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
+        let mut vector_storage = self.vector_storage.write();
+        vector_storage.store_batch(&vector_refs)?;
+        let point_count = vector_storage.len();
+        vector_storage.flush()?;
+        drop(vector_storage);
+
+        self.config.write().point_count = point_count;
+        Ok(old_payloads)
+    }
+
+    /// Phase 2: Per-point updates that don't need storage write locks.
+    fn per_point_updates(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+        storage_mode: StorageMode,
+    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
         let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
-
         let mut sparse_batch = Vec::new();
-        for point in points {
-            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            vector_storage.store(point.id, &point.vector)?;
 
+        for (point, old_payload) in points.iter().zip(old_payloads) {
             let (sq8, binary, pq) = (
                 quant_guards.sq8.as_deref_mut(),
                 quant_guards.binary.as_deref_mut(),
@@ -91,27 +158,16 @@ impl Collection {
             );
             self.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
 
-            Self::store_or_delete_payload(&mut payload_storage, point)?;
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 old_payload.as_ref(),
                 point.payload.as_ref(),
             );
-            self.insert_or_defer(point.id, &point.vector);
             Self::update_text_index(&self.text_index, point);
             Self::collect_sparse_vectors(point, &mut sparse_batch);
         }
 
-        let point_count = vector_storage.len();
-        vector_storage.flush()?;
-        payload_storage.flush()?;
-        drop(vector_storage);
-        drop(payload_storage);
-
-        self.config.write().point_count = point_count;
-        self.maybe_merge_deferred();
-
-        Ok(sparse_batch)
+        sparse_batch
     }
 
     fn store_or_delete_payload(
@@ -182,37 +238,6 @@ impl Collection {
         *self.cached_stats.lock() = None;
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Inserts into HNSW directly, or buffers in the deferred indexer.
-    ///
-    /// When a deferred indexer is present, the vector is pushed into the
-    /// deferred buffer instead of the HNSW graph. Otherwise falls through
-    /// to `VectorIndex::insert`.
-    ///
-    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
-    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
-    /// redundant `is_enabled()` check is needed here.
-    fn insert_or_defer(&self, id: u64, vector: &[f32]) {
-        #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
-            di.push(id, vector.to_vec());
-            return;
-        }
-        self.index.insert(id, vector);
-    }
-
-    /// Triggers a deferred merge if the buffer has reached threshold.
-    ///
-    /// Drains buffered vectors and batch-inserts them into HNSW.
-    /// No-op when deferred indexing is not configured.
-    fn maybe_merge_deferred(&self) {
-        #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
-            if di.should_merge() {
-                self.merge_deferred_batch(di);
-            }
-        }
     }
 
     /// Drains the deferred indexer and batch-inserts into HNSW.

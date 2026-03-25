@@ -259,3 +259,76 @@ fn test_sparse_wal_written_on_upsert() {
         "Sparse WAL should have content"
     );
 }
+
+/// Regression test: `upsert()` with a batch should produce searchable results.
+#[test]
+fn test_upsert_batch_produces_searchable_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 16, DistanceMetric::Cosine).unwrap();
+
+    #[allow(clippy::cast_precision_loss)] // Reason: i in [0,200); u64→f32 exact
+    let points: Vec<Point> = (0u64..200)
+        .map(|i| {
+            let v: Vec<f32> = (0..16).map(|d| (i as f32 + d as f32) * 0.01).collect();
+            Point::without_payload(i, v)
+        })
+        .collect();
+
+    coll.upsert(points).expect("batch upsert should succeed");
+
+    #[allow(clippy::cast_precision_loss)] // Reason: d in [0,16); i32→f32 exact
+    let query: Vec<f32> = (0..16).map(|d| d as f32 * 0.01).collect();
+    let results = coll.search(&query, 10).expect("search should succeed");
+    assert_eq!(results.len(), 10, "search should return k results");
+    assert_eq!(coll.config.read().point_count, 200);
+}
+
+/// Regression test: `upsert()` throughput should be close to `upsert_bulk()`.
+///
+/// With batched storage + batched HNSW, the gap should be within 3x.
+/// The remaining overhead is secondary indexes, quantization, text indexing.
+#[test]
+fn test_upsert_throughput_not_degraded_vs_bulk() {
+    let dim = 32;
+    let n = 500;
+
+    let dir1 = tempfile::tempdir().unwrap();
+    let coll1 =
+        Collection::create(dir1.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
+
+    #[allow(clippy::cast_precision_loss)]
+    let points1: Vec<Point> = (0u64..n)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|d| (i as f32 + d as f32) * 0.01).collect();
+            Point::without_payload(i, v)
+        })
+        .collect();
+
+    let t0 = std::time::Instant::now();
+    coll1.upsert(points1).expect("upsert should succeed");
+    let upsert_dur = t0.elapsed();
+
+    let dir2 = tempfile::tempdir().unwrap();
+    let coll2 =
+        Collection::create(dir2.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
+
+    #[allow(clippy::cast_precision_loss)]
+    let points2: Vec<Point> = (0u64..n)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|d| (i as f32 + d as f32) * 0.01).collect();
+            Point::without_payload(i, v)
+        })
+        .collect();
+
+    let t0 = std::time::Instant::now();
+    coll2.upsert_bulk(&points2).expect("upsert_bulk should succeed");
+    let bulk_dur = t0.elapsed();
+
+    let ratio = upsert_dur.as_secs_f64() / bulk_dur.as_secs_f64().max(0.001);
+    assert!(
+        ratio < 3.0,
+        "upsert() is {ratio:.1}x slower than upsert_bulk() — \
+         expected <3x (upsert={upsert_dur:?}, bulk={bulk_dur:?})"
+    );
+}
