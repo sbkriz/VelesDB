@@ -206,6 +206,14 @@ All multi-byte integers are stored in **little-endian** format.
 │     │                                                            │
 │     ▼                                                            │
 │  5. Load/rebuild HNSW index                                      │
+│     │                                                            │
+│     ▼                                                            │
+│  6. Gap detection: compare storage IDs vs HNSW IDs               │
+│     │                                                            │
+│     ├─── Counts match ──► No gap (O(1) fast path)                │
+│     │                                                            │
+│     └─── Gap found ────► Re-index missing vectors into HNSW      │
+│                          (crash during deferred merge recovery)   │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security**: Validate collection names against path traversal — reject `../`, backslashes, special characters, and Windows reserved names. New error code VELES-034 (`InvalidCollectionName`). (#381)
+- **Core**: Crash recovery gap detection for deferred HNSW indexer — vectors written to storage but not yet indexed in HNSW are automatically re-indexed on `Collection::open()`. (#382)
+
 ## [1.7.0] - 2026-03-24
 
 ### Highlights
