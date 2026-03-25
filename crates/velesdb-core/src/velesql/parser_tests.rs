@@ -255,6 +255,22 @@ fn test_parse_in_column_named_not_is_not_negated() {
 }
 
 #[test]
+fn test_parse_in_with_not_in_string_value() {
+    // Value containing "NOT IN" must NOT cause the IN to be treated as NOT IN.
+    // Regression test for Devin review finding: `status IN ('NOT IN STOCK')`.
+    let query =
+        Parser::parse("SELECT * FROM docs WHERE status IN ('NOT IN STOCK', 'AVAILABLE')").unwrap();
+    match query.select.where_clause {
+        Some(Condition::In(c)) => {
+            assert_eq!(c.column, "status");
+            assert!(!c.negated, "IN with 'NOT IN STOCK' value must not be negated");
+            assert_eq!(c.values.len(), 2);
+        }
+        _ => panic!("Expected IN condition"),
+    }
+}
+
+#[test]
 fn test_parse_string_with_escaped_quote() {
     let query = Parser::parse("SELECT * FROM docs WHERE name = 'O''Brien'").unwrap();
     match query.select.where_clause {

@@ -255,15 +255,16 @@ impl Parser {
     pub(crate) fn parse_in_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
-        let raw = pair.as_str();
         let mut inner = pair.into_inner();
         let column = Self::extract_leading_column(&mut inner)?;
 
-        // Detect NOT IN vs IN by checking the text AFTER the column name.
-        // Strip the column prefix so "not IN (...)" → " IN (...)" (not negated)
-        // while "status NOT IN (...)" → " NOT IN (...)" (negated).
-        let after_column = &raw[column.len()..].to_uppercase();
-        let negated = after_column.contains("NOT IN");
+        // Detect NOT IN via the named `not_kw` rule in the pest parse tree.
+        // This is immune to false positives from column names or string values
+        // containing "NOT IN" (e.g. 'NOT IN STOCK').
+        let negated = inner.peek().is_some_and(|p| p.as_rule() == Rule::not_kw);
+        if negated {
+            inner.next(); // consume the not_kw token
+        }
 
         let value_list = inner
             .find(|p| p.as_rule() == Rule::value_list)

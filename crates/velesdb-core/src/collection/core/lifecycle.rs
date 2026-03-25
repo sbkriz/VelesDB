@@ -415,6 +415,7 @@ impl Collection {
 
         // Crash recovery: detect vectors in storage but not in HNSW (gap from
         // crash during deferred merge, delta drain, or normal insert).
+        #[cfg(feature = "persistence")]
         if !config.metadata_only && config.dimension > 0 {
             let recovered = super::recovery::recover_hnsw_gap(
                 &vector_storage,

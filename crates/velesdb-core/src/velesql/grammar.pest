@@ -239,7 +239,7 @@ vector_literal = { "[" ~ vector_component ~ ("," ~ vector_component)* ~ "]" }
 match_expr = { where_column ~ ^"MATCH" ~ string }
 
 // IN / NOT IN expression: column [NOT] IN (value, ...)
-in_expr = { where_column ~ (^"NOT" ~ ^"IN" | ^"IN") ~ "(" ~ value_list ~ ")" }
+in_expr = { where_column ~ (not_kw ~ ^"IN" | ^"IN") ~ "(" ~ value_list ~ ")" }
 value_list = { value ~ ("," ~ value)* }
 
 // BETWEEN expression: column BETWEEN value AND value

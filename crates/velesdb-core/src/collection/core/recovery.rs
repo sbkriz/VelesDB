@@ -6,6 +6,15 @@
 //! or normal insert gap).
 //!
 //! This module detects such gaps and re-indexes the missing vectors.
+//!
+//! ## Known limitation
+//!
+//! If a crash occurs between the HNSW delete and the storage delete being
+//! persisted, a previously deleted vector may appear in storage but not in
+//! HNSW — indistinguishable from an insert gap. Recovery will re-index the
+//! deleted vector. This is an inherent trade-off without two-phase commit
+//! and is acceptable because (a) the window is very small, and (b) a
+//! resurrected vector is preferable to a silently lost one.
 
 use crate::index::HnswIndex;
 use crate::storage::{MmapStorage, VectorStorage};
