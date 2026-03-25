@@ -1,6 +1,6 @@
 # VelesDB Performance SLO
 
-Last updated: 2026-03-19
+Last updated: 2026-03-25
 
 This file defines measurable performance objectives used as CI regression gates.
 
@@ -35,6 +35,16 @@ On `main` and `develop` pushes:
    `python3 scripts/compare_perf.py --current benchmarks/results/latest.json --baseline benchmarks/baseline.json --threshold 15`
 
 If threshold is exceeded, CI fails.
+
+## v1.7.2 Optimization Notes
+
+v1.7.2 includes two internal optimizations that may improve SLO metrics:
+- **Partial sort** (#373) — HNSW search uses O(ef + k log k) instead of O(ef log ef)
+- **Batch fast-path** (#375) — pure-insert workloads skip DashMap write lock overhead
+
+The `baseline.json` is CI-authoritative and will be re-baselined automatically on the next `main` push. Local validation (i9-14900KF) confirmed no regression:
+- `smoke_insert/10k_128d`: 8.36s (CI baseline: 9.0s, threshold: 25%)
+- `smoke_search/10k_128d_k10`: 191.73 µs (local machine — CI baseline not directly comparable)
 
 ## Governance Rules
 

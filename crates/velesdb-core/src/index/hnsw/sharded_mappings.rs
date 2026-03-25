@@ -127,6 +127,39 @@ impl ShardedMappings {
         idx
     }
 
+    /// Batch version of `register_or_replace` with fast-path for new IDs.
+    ///
+    /// For each ID, checks existence with `contains_key()` (read lock) first.
+    /// New IDs use the cheaper `register()` path. Existing IDs fall back to
+    /// `register_or_replace()`.
+    ///
+    /// # TOCTOU Safety
+    ///
+    /// If a concurrent insert adds an ID between `contains_key()` and
+    /// `register()`, `register()` returns `None` and we fall back to
+    /// `register_or_replace()`. This is safe because `register_or_replace`
+    /// handles the existing-ID case atomically via `DashMap::entry()`.
+    pub fn register_or_replace_batch(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        let mut results = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if self.id_to_idx.contains_key(&id) {
+                // Existing ID: full replace path
+                results.push(self.register_or_replace(id));
+            } else {
+                // New ID: try fast register path (avoids entry() write lock)
+                match self.register(id) {
+                    Some(idx) => results.push((idx, None)),
+                    None => {
+                        // Race: another thread inserted this ID between
+                        // contains_key() and register(). Fall back to replace.
+                        results.push(self.register_or_replace(id));
+                    }
+                }
+            }
+        }
+        results
+    }
+
     /// Registers multiple IDs in a batch, returning their indices.
     ///
     /// # Returns

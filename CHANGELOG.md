@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-03-25
+
+### Performance
+
+- **HNSW Search Partial Sort** (#373) — `search_layer` now uses `select_nth_unstable_by` for O(n + k log k) candidate selection instead of full O(ef log ef) sort. Reduces wasted work when `ef_search` >> `k` (typical: ef=128, k=10). Shared `top_k_partial_sort` utility extracted to `index/mod.rs`, reused by both HNSW and BM25.
+- **Batch Insert Fast-Path** (#375) — Eliminated ~14% overhead on pure-insert workloads introduced by v1.7.0 upsert semantics. New `register_or_replace_batch()` uses `contains_key()` (read lock) to skip the expensive `DashMap::entry()` write lock for new IDs. TOCTOU-safe with automatic fallback.
+
+### Backward Compatibility
+
+No API changes. Both optimizations are internal and apply automatically.
+
 ## [1.7.1] - 2026-03-25
 
 ### Fixed

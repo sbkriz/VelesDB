@@ -103,4 +103,25 @@ python -c "import velesdb; print(velesdb.__version__)"
 
 ---
 
-*Documentation VelesDB v1.7.0 — March 2026*
+## v1.7.1 / v1.7.2 Patch Updates
+
+**Time to upgrade: 0 minutes — zero breaking changes.**
+
+### v1.7.1 (2026-03-25)
+
+Security and correctness fixes:
+- Collection name path traversal validation (VELES-034)
+- Crash recovery gap detection for deferred HNSW indexer
+- VelesQL grammar fixes (string escaping, compound queries, NOT IN)
+
+### v1.7.2 (2026-03-25)
+
+Internal performance optimizations (automatic, no configuration needed):
+- **HNSW search partial sort** (#373) — O(ef + k log k) candidate selection instead of O(ef log ef)
+- **Batch insert fast-path** (#375) — eliminates ~14% upsert overhead on pure-insert workloads
+
+No API changes, no configuration changes, no data migration. Simply update your dependency version.
+
+---
+
+*Documentation VelesDB v1.7.x — March 2026*

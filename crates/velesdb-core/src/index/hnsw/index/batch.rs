@@ -2,7 +2,7 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
-use crate::index::hnsw::upsert::UpsertResult;
+use crate::index::hnsw::upsert::{self, UpsertResult};
 use crate::scored_result::ScoredResult;
 use rayon::prelude::*;
 
@@ -49,11 +49,18 @@ impl HnswIndex {
             );
         }
 
+        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
+        let upsert_results = upsert::upsert_mapping_batch(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            &ids,
+        );
+
         let mut to_insert = Vec::with_capacity(items.len());
         let mut rollback_info = Vec::with_capacity(items.len());
 
-        for (id, vector) in items {
-            let result = self.upsert_mapping(id);
+        for ((id, vector), result) in items.into_iter().zip(upsert_results) {
             to_insert.push((result.idx, vector));
             rollback_info.push((id, result));
         }

@@ -313,13 +313,9 @@ impl Bm25Index {
         candidate_union
     }
 
-    /// Partial sort + truncate for top-k results.
+    /// Partial sort + truncate for top-k results (descending by score).
     fn top_k_sort(scores: &mut Vec<(u64, f32)>, k: usize) {
-        if scores.len() > k {
-            scores.select_nth_unstable_by(k, |a, b| b.1.total_cmp(&a.1));
-            scores.truncate(k);
-        }
-        scores.sort_by(|a, b| b.1.total_cmp(&a.1));
+        super::top_k_partial_sort(scores, k, |a, b| b.1.total_cmp(&a.1));
     }
 
     /// Fast BM25 scoring with pre-computed IDF cache.

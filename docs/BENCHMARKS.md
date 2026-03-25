@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 24, 2026 (v1.7.0 — sequential benchmarks on idle machine)*
+*Last updated: March 25, 2026 (v1.7.2 — sequential benchmarks on idle machine)*
 
 ---
 
@@ -174,6 +174,11 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 *Recall values from recall_benchmark. Latencies measured March 19, 2026. ef_search values are base values (scaled with k).*
 
 Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+
+### Search Optimization Notes (v1.7.2)
+
+- **Partial sort** — `search_layer` now uses `select_nth_unstable_by` to avoid full-sorting all `ef` candidates when only the top-k are needed. Complexity drops from O(ef log ef) to O(ef + k log k). Benefit is proportional to the ef/k ratio (e.g., ef=128 with k=10 avoids sorting ~92% of candidates).
+- **Batch insert fast-path** — Pure-insert workloads (all new IDs) skip the `DashMap::entry()` write lock overhead introduced by v1.7.0 upsert semantics. Read-lock `contains_key()` pre-check routes new IDs to the cheaper `register()` path.
 
 ---
 

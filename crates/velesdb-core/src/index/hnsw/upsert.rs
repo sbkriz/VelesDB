@@ -43,6 +43,31 @@ pub(crate) fn upsert_mapping(
     UpsertResult { idx, old_idx }
 }
 
+/// Batch version of `upsert_mapping` with fast-path for new IDs.
+///
+/// Uses `register_or_replace_batch` which skips the expensive `entry()`
+/// path for IDs that don't exist yet (common in pure-insert workloads).
+#[must_use]
+pub(crate) fn upsert_mapping_batch(
+    mappings: &ShardedMappings,
+    vectors: &ShardedVectors,
+    enable_vector_storage: bool,
+    ids: &[u64],
+) -> Vec<UpsertResult> {
+    let batch_results = mappings.register_or_replace_batch(ids);
+    batch_results
+        .into_iter()
+        .map(|(idx, old_idx)| {
+            if let Some(old) = old_idx {
+                if enable_vector_storage {
+                    vectors.remove(old);
+                }
+            }
+            UpsertResult { idx, old_idx }
+        })
+        .collect()
+}
+
 /// Rolls back mapping state after a failed graph insertion.
 ///
 /// Removes the newly-allocated mapping and, if this was an update,

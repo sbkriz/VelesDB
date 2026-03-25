@@ -168,6 +168,8 @@ Large batch inserts are automatically optimized with two techniques:
 
 Both optimizations are automatic and require no configuration. Use `insert_batch_parallel()` for best performance on large datasets.
 
+3. **Batch Upsert Fast-Path (v1.7.2)** — Pure-insert workloads (all new IDs) now skip the expensive `DashMap::entry()` write lock introduced by upsert semantics in v1.7.0. A read-lock `contains_key()` check routes new IDs to a cheaper allocation path. This eliminates the ~14% overhead observed on pure-insert workloads. Mixed workloads (some new, some existing IDs) automatically fall back to the full upsert path for correctness.
+
 ---
 
 ## Search Quality Modes

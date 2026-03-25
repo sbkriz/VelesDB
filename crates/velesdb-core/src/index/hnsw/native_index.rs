@@ -335,17 +335,21 @@ impl NativeHnswIndex {
             }
         }
 
+        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
+        let upsert_results = upsert::upsert_mapping_batch(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            &ids,
+        );
+
+        let mut data: Vec<(&[f32], usize)> = Vec::with_capacity(items.len());
         let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
 
-        let data: Vec<(&[f32], usize)> = items
-            .iter()
-            .map(|(id, vec)| {
-                let result = self.upsert_mapping(*id);
-                let idx = result.idx;
-                rollback_info.push((*id, result));
-                (vec.as_slice(), idx)
-            })
-            .collect();
+        for ((id, vec), result) in items.iter().zip(upsert_results) {
+            data.push((vec.as_slice(), result.idx));
+            rollback_info.push((*id, result));
+        }
 
         if let Err(e) = self.inner.read().parallel_insert(&data) {
             // Reverse order: undo last upsert first so duplicate-ID chains
