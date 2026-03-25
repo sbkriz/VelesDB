@@ -626,17 +626,17 @@ memory.load_latest_snapshot()?;
 |--------|--------|------|
 | `semantic.store()` | Yes | Yes |
 | `semantic.query()` | Yes | Yes |
-| `semantic.delete()` | No | Yes |
+| `semantic.delete()` | Yes | Yes |
 | `episodic.record()` | Yes | Yes |
 | `episodic.recent()` | Yes | Yes |
 | `episodic.recall_similar()` | Yes | Yes |
-| `episodic.older_than()` | No | Yes |
-| `episodic.delete()` | No | Yes |
+| `episodic.older_than()` | Yes | Yes |
+| `episodic.delete()` | Yes | Yes |
 | `procedural.learn()` | Yes | Yes |
 | `procedural.recall()` | Yes | Yes |
 | `procedural.reinforce()` | Yes | Yes |
-| `procedural.list_all()` | No | Yes |
-| `procedural.delete()` | No | Yes |
+| `procedural.list_all()` | Yes | Yes |
+| `procedural.delete()` | Yes | Yes |
 | TTL management | No | Yes |
 | Snapshots | No | Yes |
 
