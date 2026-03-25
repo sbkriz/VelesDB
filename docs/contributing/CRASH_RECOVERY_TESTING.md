@@ -158,6 +158,22 @@ For fast recovery, `LogPayloadStorage` supports snapshots:
 - Recovery loads snapshot + replays WAL delta
 - CRC32 checksum validates snapshot integrity
 
+### HNSW Gap Detection (Issue #382)
+
+After WAL replay and HNSW load, `Collection::open()` runs gap detection:
+1. Compares `storage.ids()` vs `index.mappings.contains()` (lock-free)
+2. Re-indexes gap vectors via `insert_batch_parallel()`
+3. Skips vectors with mismatched dimensions (corruption defense)
+
+This recovers vectors that were written to storage but not yet indexed
+in HNSW due to a crash during deferred merge or delta buffer drain.
+
+Unit tests in `collection/core/recovery_tests.rs` cover:
+- No-gap fast path (O(1) count comparison)
+- Simulated gap (direct storage write bypassing HNSW)
+- Full reopen cycle (create → gap → drop → reopen → verify search)
+- Metadata-only skip (no false positives)
+
 ## Future Work (EPIC-024)
 
 - **US-002**: Corruption tests (truncation, bitflip)

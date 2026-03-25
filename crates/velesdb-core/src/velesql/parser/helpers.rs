@@ -39,7 +39,7 @@ pub(crate) fn compare_op_from_str(op: &str) -> Result<CompareOp, ParseError> {
 /// Returns [`ParseError`] if the input cannot be recognized as any value type.
 pub(crate) fn parse_value_from_str(input: &str) -> Result<Value, ParseError> {
     if input.len() >= 2 && input.starts_with('\'') && input.ends_with('\'') {
-        return Ok(Value::String(input[1..input.len() - 1].to_string()));
+        return Ok(Value::String(unescape_string_literal(input)));
     }
     if input.eq_ignore_ascii_case("true") {
         return Ok(Value::Boolean(true));
@@ -95,8 +95,7 @@ pub(crate) fn parse_scalar_from_rule(
             Ok(Value::Float(v))
         }
         Rule::string => {
-            let s = pair.as_str().trim_matches('\'').to_string();
-            Ok(Value::String(s))
+            Ok(Value::String(unescape_string_literal(pair.as_str())))
         }
         Rule::boolean => {
             let b = pair.as_str().to_uppercase() == "TRUE";
@@ -130,6 +129,14 @@ pub(crate) fn parse_u64_clause(
     int_pair.as_str().parse::<u64>().map_err(|_| {
         ParseError::syntax(0, int_pair.as_str(), format!("Invalid {clause_name} value"))
     })
+}
+
+/// Strips surrounding single quotes and unescapes SQL-style doubled quotes.
+///
+/// `'O''Brien'` becomes `O'Brien`. The grammar guarantees the string starts
+/// and ends with `'` and is at least 2 chars long (atomic rule).
+pub(crate) fn unescape_string_literal(raw: &str) -> String {
+    raw[1..raw.len() - 1].replace("''", "'")
 }
 
 /// Strips surrounding backticks or double-quotes from an identifier segment.
@@ -237,5 +244,25 @@ mod tests {
     #[test]
     fn test_strip_identifier_quotes_trimmed() {
         assert_eq!(strip_identifier_quotes("  `spaced`  "), "spaced");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_simple() {
+        assert_eq!(unescape_string_literal("'hello'"), "hello");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_escaped_quote() {
+        assert_eq!(unescape_string_literal("'O''Brien'"), "O'Brien");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_multiple_escapes() {
+        assert_eq!(unescape_string_literal("'It''s a ''test'''"), "It's a 'test'");
+    }
+
+    #[test]
+    fn test_unescape_string_literal_empty() {
+        assert_eq!(unescape_string_literal("''"), "");
     }
 }

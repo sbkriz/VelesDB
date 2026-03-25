@@ -321,7 +321,8 @@ impl QueryPlan {
                 filter_conditions.push(format!("{} {} ?", cmp.column, cmp.operator.as_str()));
             }
             Condition::In(inc) => {
-                filter_conditions.push(format!("{} IN (...)", inc.column));
+                let op = if inc.negated { "NOT IN" } else { "IN" };
+                filter_conditions.push(format!("{} {op} (...)", inc.column));
             }
             Condition::Between(btw) => {
                 filter_conditions.push(format!("{} BETWEEN ? AND ?", btw.column));

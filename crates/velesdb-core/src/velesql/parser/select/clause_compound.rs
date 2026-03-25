@@ -10,26 +10,35 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Query, ParseError> {
         let mut select_stmts = Vec::new();
-        let mut set_op = None;
+        let mut set_ops = Vec::new();
+
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::select_stmt => select_stmts.push(Self::parse_select_stmt(inner_pair)?),
-                Rule::set_operator => set_op = Some(Self::parse_set_operator(inner_pair.as_str())),
+                Rule::set_operator => set_ops.push(Self::parse_set_operator(inner_pair.as_str())),
                 _ => {}
             }
         }
+
         let select = select_stmts
             .first()
             .cloned()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected SELECT statement"))?;
-        let compound = if let (Some(op), Some(right)) = (set_op, select_stmts.get(1).cloned()) {
-            Some(CompoundQuery {
-                operator: op,
-                right: Box::new(right),
-            })
-        } else {
+
+        let compound = if set_ops.is_empty() {
             None
+        } else {
+            let operations: Vec<(SetOperator, _)> = set_ops
+                .into_iter()
+                .zip(select_stmts.into_iter().skip(1))
+                .collect();
+            if operations.is_empty() {
+                None
+            } else {
+                Some(CompoundQuery { operations })
+            }
         };
+
         Ok(Query {
             select,
             compound,

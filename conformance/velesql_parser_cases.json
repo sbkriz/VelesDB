@@ -1,5 +1,5 @@
 {
-  "version": "2.3.0",
+  "version": "3.1.0",
   "cases": [
     {
       "id": "P001",
@@ -170,6 +170,66 @@
     {
       "id": "P033",
       "query": "SELECT * FROM t WHERE vector NEAR $v ORDER BY similarity() DESC, created_at ASC LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P034",
+      "query": "SELECT * FROM docs WHERE name = 'O''Brien'",
+      "should_parse": true
+    },
+    {
+      "id": "P035",
+      "query": "SELECT * FROM docs WHERE name = 'It''s a ''test'''",
+      "should_parse": true
+    },
+    {
+      "id": "P036",
+      "query": "SELECT * FROM docs WHERE name = ''",
+      "should_parse": true
+    },
+    {
+      "id": "P037",
+      "query": "SELECT * FROM docs WHERE vector NEAR [1, 2, 3] LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P038",
+      "query": "SELECT * FROM docs WHERE vector NEAR [1, 0.5, 2] LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P039",
+      "query": "SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted')",
+      "should_parse": true
+    },
+    {
+      "id": "P040",
+      "query": "SELECT * FROM docs WHERE id NOT IN (1, 2, 3)",
+      "should_parse": true
+    },
+    {
+      "id": "P041",
+      "query": "SELECT * FROM a UNION SELECT * FROM b UNION SELECT * FROM c",
+      "should_parse": true
+    },
+    {
+      "id": "P042",
+      "query": "SELECT * FROM a UNION SELECT * FROM b INTERSECT SELECT * FROM c",
+      "should_parse": true
+    },
+    {
+      "id": "P043",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1, $v2] LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P044",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf' (k=60) LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P045",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1] LIMIT 10",
       "should_parse": true
     }
   ]

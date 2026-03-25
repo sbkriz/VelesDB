@@ -199,7 +199,7 @@ fn test_union_basic() {
     let query = result.unwrap();
     assert!(query.compound.is_some());
     let compound = query.compound.unwrap();
-    assert_eq!(compound.operator, SetOperator::Union);
+    assert_eq!(compound.operations[0].0, SetOperator::Union);
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn test_union_all() {
 
     let query = result.unwrap();
     let compound = query.compound.unwrap();
-    assert_eq!(compound.operator, SetOperator::UnionAll);
+    assert_eq!(compound.operations[0].0, SetOperator::UnionAll);
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn test_intersect() {
 
     let query = result.unwrap();
     let compound = query.compound.unwrap();
-    assert_eq!(compound.operator, SetOperator::Intersect);
+    assert_eq!(compound.operations[0].0, SetOperator::Intersect);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn test_except() {
 
     let query = result.unwrap();
     let compound = query.compound.unwrap();
-    assert_eq!(compound.operator, SetOperator::Except);
+    assert_eq!(compound.operations[0].0, SetOperator::Except);
 }
 
 #[test]

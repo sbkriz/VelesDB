@@ -293,6 +293,20 @@ or internal bugs:
 - **Resolution**: Reduce memory usage (e.g., use quantization, reduce dataset size, increase system RAM). Consider using `StorageMode::SQ8` or `StorageMode::Binary` to reduce memory footprint.
 - **Recoverable**: **No** -- indicates resource exhaustion.
 
+### VELES-034: InvalidCollectionName
+
+- **Variant**: `InvalidCollectionName { name: String, reason: String }`
+- **Message**: `Invalid collection name '{name}': {reason}`
+- **Cause**: The collection name is unsafe for use as a filesystem directory. This check prevents path traversal attacks and filesystem errors.
+- **Naming rules**:
+  - 1--128 characters
+  - ASCII letters, digits, underscores, and hyphens only (`[a-zA-Z0-9_-]`)
+  - Must not start with a hyphen
+  - Must not be `.` or `..`
+  - Must not be a Windows reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`--`COM9`, `LPT1`--`LPT9`)
+- **Resolution**: Rename the collection using only allowed characters. Use `velesdb_core::validate_collection_name()` to check names before creation.
+- **Recoverable**: Yes
+
 ---
 
 ## Programmatic Usage
@@ -352,3 +366,4 @@ fn handle_error(err: &Error) {
 | VELES-031 | `DatabaseLocked` | Yes | Database |
 | VELES-032 | `InvalidDimension` | Yes | Validation |
 | VELES-033 | `AllocationFailed` | **No** | Resource |
+| VELES-034 | `InvalidCollectionName` | Yes | Validation |

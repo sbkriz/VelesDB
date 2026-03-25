@@ -234,8 +234,10 @@ impl QueryValidator {
             Self::validate_condition(condition, query.select.limit, config)?;
         }
         if let Some(ref compound) = query.compound {
-            if let Some(ref condition) = compound.right.where_clause {
-                Self::validate_condition(condition, compound.right.limit, config)?;
+            for (_, right_select) in &compound.operations {
+                if let Some(ref condition) = right_select.where_clause {
+                    Self::validate_condition(condition, right_select.limit, config)?;
+                }
             }
         }
 
@@ -243,8 +245,10 @@ impl QueryValidator {
         Self::validate_qualified_wildcards(&query.select)?;
 
         if let Some(ref compound) = query.compound {
-            Self::validate_similarity_context(&compound.right)?;
-            Self::validate_qualified_wildcards(&compound.right)?;
+            for (_, right_select) in &compound.operations {
+                Self::validate_similarity_context(right_select)?;
+                Self::validate_qualified_wildcards(right_select)?;
+            }
         }
 
         Ok(())
@@ -413,10 +417,12 @@ impl QueryValidator {
         }
 
         if let Some(ref compound) = query.compound {
-            if let Some(ref condition) = compound.right.where_clause {
-                let (depth, like_count) = Self::analyze_condition(condition);
-                stats.ast_depth = stats.ast_depth.max(depth);
-                stats.like_ilike_terms += like_count;
+            for (_, right_select) in &compound.operations {
+                if let Some(ref condition) = right_select.where_clause {
+                    let (depth, like_count) = Self::analyze_condition(condition);
+                    stats.ast_depth = stats.ast_depth.max(depth);
+                    stats.like_ilike_terms += like_count;
+                }
             }
         }
 

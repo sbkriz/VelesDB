@@ -39,18 +39,8 @@ impl Parser {
                 }
                 Rule::string => {
                     // USING clause: string value is the index name.
-                    //
-                    // The `string` grammar rule is defined as an atomic rule:
-                    //   string = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }
-                    // `pair.as_str()` therefore includes the surrounding single
-                    // quotes (e.g. `'my-index'`), so `trim_matches('\'')` is
-                    // required and correct — it is not a no-op.
-                    //
-                    // Only single-quoted strings are accepted by the grammar.
-                    // Double-quoted identifiers (e.g. `USING "body"`) are NOT
-                    // supported and will fail at the pest parse stage before
-                    // reaching this branch.
-                    index_name = Some(inner.as_str().trim_matches('\'').to_string());
+                    // Strips surrounding quotes and unescapes '' → '.
+                    index_name = Some(crate::velesql::parser::helpers::unescape_string_literal(inner.as_str()));
                 }
                 _ => {}
             }
@@ -186,7 +176,7 @@ impl Parser {
                 Rule::fusion_strategy => {
                     strategy = inner.into_inner().next().map_or_else(
                         || "rrf".to_string(),
-                        |s| s.as_str().trim_matches('\'').to_string(),
+                        |s| crate::velesql::parser::helpers::unescape_string_literal(s.as_str()),
                     );
                 }
                 Rule::fusion_params => {
@@ -211,11 +201,15 @@ impl Parser {
             Rule::vector_literal => {
                 let values: Result<Vec<f32>, _> = inner
                     .into_inner()
-                    .filter(|p| p.as_rule() == Rule::float)
+                    .filter(|p| p.as_rule() == Rule::vector_component)
                     .map(|p| {
-                        p.as_str()
+                        let child = p.into_inner().next().ok_or_else(|| {
+                            ParseError::syntax(0, "", "Expected numeric value in vector")
+                        })?;
+                        child
+                            .as_str()
                             .parse::<f32>()
-                            .map_err(|_| ParseError::syntax(0, p.as_str(), "Invalid float value"))
+                            .map_err(|_| ParseError::syntax(0, child.as_str(), "Invalid vector component"))
                     })
                     .collect();
                 Ok(VectorExpr::Literal(values?))

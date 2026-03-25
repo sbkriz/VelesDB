@@ -213,3 +213,229 @@ fn test_name_collision_across_collection_types() {
         .unwrap_err();
     assert!(matches!(err, crate::Error::CollectionExists(_)));
 }
+
+// =========================================================================
+// Collection name validation — path traversal prevention (issue #381)
+// =========================================================================
+
+/// Helper: asserts that creating a collection with the given name produces
+/// `InvalidCollectionName`.
+fn assert_name_rejected(db: &Database, name: &str) {
+    let err = db
+        .create_collection(name, 4, DistanceMetric::Cosine)
+        .unwrap_err();
+    assert!(
+        matches!(err, crate::Error::InvalidCollectionName { .. }),
+        "Expected InvalidCollectionName for {:?}, got: {err}",
+        name,
+    );
+}
+
+#[test]
+fn test_reject_empty_name() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, "");
+}
+
+#[test]
+fn test_reject_dot_names() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, ".");
+    assert_name_rejected(&db, "..");
+}
+
+#[test]
+fn test_reject_path_traversal_unix() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, "../etc/evil");
+    assert_name_rejected(&db, "../../passwd");
+    assert_name_rejected(&db, "foo/bar");
+    assert_name_rejected(&db, "a/b/c");
+}
+
+#[test]
+fn test_reject_path_traversal_windows() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, r"..\evil");
+    assert_name_rejected(&db, r"foo\bar");
+    assert_name_rejected(&db, r"C:\Windows");
+}
+
+#[test]
+fn test_reject_path_separators() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, "name/with/slash");
+    assert_name_rejected(&db, "name\\with\\backslash");
+}
+
+#[test]
+fn test_reject_special_characters() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, "name with spaces");
+    assert_name_rejected(&db, "name@special");
+    assert_name_rejected(&db, "name.dot");
+    assert_name_rejected(&db, "name#hash");
+    assert_name_rejected(&db, "name$dollar");
+    assert_name_rejected(&db, "name:colon");
+    assert_name_rejected(&db, "name*star");
+    assert_name_rejected(&db, "name?question");
+    assert_name_rejected(&db, "name<angle>");
+    assert_name_rejected(&db, "name|pipe");
+    assert_name_rejected(&db, "name\"quote");
+}
+
+#[test]
+fn test_reject_unicode() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, "café");
+    assert_name_rejected(&db, "日本語");
+    assert_name_rejected(&db, "коллекция");
+}
+
+#[test]
+fn test_reject_leading_hyphen() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_name_rejected(&db, "-leading");
+    assert_name_rejected(&db, "--double");
+}
+
+#[test]
+fn test_reject_too_long_name() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let long_name = "a".repeat(129);
+    assert_name_rejected(&db, &long_name);
+}
+
+#[test]
+fn test_reject_windows_reserved_names() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    for reserved in &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9", "con", "Con", "aux",
+    ] {
+        assert_name_rejected(&db, reserved);
+    }
+}
+
+// =========================================================================
+// Valid collection names — positive cases
+// =========================================================================
+
+#[test]
+fn test_accept_valid_names() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    for name in &[
+        "simple",
+        "with_underscore",
+        "with-hyphen",
+        "CamelCase",
+        "UPPERCASE",
+        "a",
+        "a1",
+        "collection_v2",
+        "test-123",
+        &"a".repeat(128), // exactly at the limit
+    ] {
+        db.create_collection(name, 4, DistanceMetric::Cosine)
+            .unwrap_or_else(|e| panic!("Expected name {:?} to be valid, got: {e}", name));
+    }
+}
+
+// =========================================================================
+// Validation on all collection types (vector, graph, metadata)
+// =========================================================================
+
+#[test]
+fn test_reject_invalid_name_on_vector_collection() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let err = db
+        .create_vector_collection("../evil", 4, DistanceMetric::Cosine)
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
+}
+
+#[test]
+fn test_reject_invalid_name_on_graph_collection() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let err = db
+        .create_graph_collection(
+            "../evil",
+            crate::collection::GraphSchema::schemaless(),
+        )
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
+}
+
+#[test]
+fn test_reject_invalid_name_on_metadata_collection() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let err = db.create_metadata_collection("../evil").unwrap_err();
+    assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
+}
+
+// =========================================================================
+// Validation on delete and stats paths
+// =========================================================================
+
+#[test]
+fn test_reject_invalid_name_on_delete() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let err = db.delete_collection("../evil").unwrap_err();
+    assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
+}
+
+#[test]
+fn test_reject_invalid_name_on_get_stats() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let err = db.get_collection_stats("../evil").unwrap_err();
+    assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
+}
+
+#[test]
+fn test_reject_invalid_name_on_analyze() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let err = db.analyze_collection("../evil").unwrap_err();
+    assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
+}
+
+// =========================================================================
+// Disk fallback read paths reject invalid names
+// =========================================================================
+
+#[test]
+fn test_get_vector_collection_rejects_traversal() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    // Should return None rather than attempting filesystem access.
+    assert!(db.get_vector_collection("../evil").is_none());
+}
+
+#[test]
+fn test_get_graph_collection_rejects_traversal() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert!(db.get_graph_collection("../evil").is_none());
+}
+
+#[test]
+fn test_get_metadata_collection_rejects_traversal() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert!(db.get_metadata_collection("../evil").is_none());
+}

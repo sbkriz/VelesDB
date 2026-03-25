@@ -45,8 +45,9 @@ impl Database {
 
     /// Returns the collection name if the directory entry is a loadable collection.
     ///
-    /// A directory is loadable when it contains `config.json` and is not
-    /// already registered in the legacy collections map.
+    /// A directory is loadable when it contains `config.json`, has a valid
+    /// collection name, and is not already registered in the legacy collections
+    /// map. Directories with invalid names are skipped with a warning.
     fn loadable_collection_name(&self, entry: &std::fs::DirEntry) -> Option<String> {
         let path = entry.path();
         if !path.is_dir() {
@@ -55,7 +56,15 @@ impl Database {
         if !path.join("config.json").exists() {
             return None;
         }
-        let name = path.file_name()?.to_str().unwrap_or("unknown").to_string();
+        let name = path.file_name()?.to_str()?.to_string();
+        if crate::validation::validate_collection_name(&name).is_err() {
+            tracing::warn!(
+                name = %name,
+                path = %path.display(),
+                "Skipping directory with invalid collection name"
+            );
+            return None;
+        }
         if self.collections.read().contains_key(&name) {
             return None;
         }

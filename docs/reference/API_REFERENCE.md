@@ -76,8 +76,10 @@ Complete REST API documentation for `velesdb-server`. All endpoints are served f
 - `UNION` / `INTERSECT` / `EXCEPT` set operations
 - `USING FUSION(strategy='rrf')` hybrid search
 - `SPARSE_NEAR` clause for sparse vector similarity search
+- `NEAR_FUSED` multi-vector fusion with RRF/weighted/maximum/RSF strategies
 - `TRAIN QUANTIZER ON <collection> WITH (m=8, k=256)` for explicit PQ training
-- `FUSE BY` / `USING FUSION` with `dense_weight`/`sparse_weight` for RSF fusion
+- `USING FUSION` with `dense_weight`/`sparse_weight` for RSF fusion
+- `NOT IN` operator for negative filtering
 - `WITH (max_groups=100)` query-time config
 
 ```sql
@@ -115,6 +117,11 @@ SELECT * FROM active UNION SELECT * FROM archived
 ## Request/Response Examples
 
 ### Create Collection
+
+**Collection naming rules:** Names must be 1--128 characters, containing only ASCII
+letters, digits, underscores, and hyphens (`[a-zA-Z0-9_-]`). Names must not start
+with a hyphen, must not be `.` or `..`, and must not be Windows reserved device names
+(CON, PRN, etc.). Invalid names return HTTP 400 with error code `VELES-034`.
 
 ```bash
 curl -X POST http://localhost:8080/collections \

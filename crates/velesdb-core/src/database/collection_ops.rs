@@ -14,11 +14,14 @@ use super::Database;
 // so `#[allow(deprecated)]` is applied at impl-block level rather than per-method.
 #[allow(deprecated)]
 impl Database {
-    /// Ensures a collection name is free in memory and on disk.
+    /// Ensures a collection name is valid, free in memory, and free on disk.
     ///
-    /// This prevents re-creating over a skipped/corrupted on-disk collection
-    /// that was not loaded into registries.
+    /// Validates the name against path traversal and forbidden characters
+    /// **before** any filesystem operation, then checks that no collection
+    /// with the same name already exists in any registry or on disk.
     pub(super) fn ensure_collection_name_available(&self, name: &str) -> Result<()> {
+        crate::validation::validate_collection_name(name)?;
+
         let exists_in_registry = self.collections.read().contains_key(name)
             || self.vector_colls.read().contains_key(name)
             || self.graph_colls.read().contains_key(name)
@@ -131,8 +134,11 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection does not exist in any registry.
+    /// Returns an error if the name is invalid or the collection does not
+    /// exist in any registry.
     pub fn delete_collection(&self, name: &str) -> Result<()> {
+        crate::validation::validate_collection_name(name)?;
+
         let exists = self.collections.read().contains_key(name)
             || self.vector_colls.read().contains_key(name)
             || self.graph_colls.read().contains_key(name)
@@ -192,11 +198,15 @@ impl Database {
 
     /// Reads and parses `config.json` from a collection directory.
     ///
-    /// Returns `None` if the config file does not exist or cannot be parsed.
+    /// Returns `None` if the name is invalid, the config file does not exist,
+    /// or the config cannot be parsed.
     pub(super) fn read_collection_config(
         &self,
         name: &str,
     ) -> Option<crate::collection::CollectionConfig> {
+        if crate::validation::validate_collection_name(name).is_err() {
+            return None;
+        }
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if !config_path.exists() {

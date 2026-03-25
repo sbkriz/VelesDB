@@ -116,11 +116,30 @@ fn test_in_condition() {
             VelesValue::String("a".to_string()),
             VelesValue::String("b".to_string()),
         ],
+        negated: false,
     };
     let cond = crate::velesql::Condition::In(inc);
     let result: Condition = cond.into();
     assert!(
         matches!(result, Condition::In { field, values } if field == "category" && values.len() == 2)
+    );
+}
+
+#[test]
+fn test_not_in_condition() {
+    let inc = InCondition {
+        column: "status".to_string(),
+        values: vec![
+            VelesValue::String("draft".to_string()),
+            VelesValue::String("deleted".to_string()),
+        ],
+        negated: true,
+    };
+    let cond = crate::velesql::Condition::In(inc);
+    let result: Condition = cond.into();
+    assert!(
+        matches!(result, Condition::Not { ref condition } if matches!(**condition, Condition::In { ref field, .. } if field == "status")),
+        "NOT IN should convert to Not(In(...))"
     );
 }
 

@@ -225,12 +225,12 @@ impl Parser {
         let mut inner = pair.into_inner();
         let column = Self::extract_leading_column(&mut inner)?;
 
-        let query = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected match query"))?
-            .as_str()
-            .trim_matches('\'')
-            .to_string();
+        let query = crate::velesql::parser::helpers::unescape_string_literal(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected match query"))?
+                .as_str(),
+        );
 
         Ok(Condition::Match(MatchCondition { column, query }))
     }
@@ -258,8 +258,16 @@ impl Parser {
         let mut inner = pair.into_inner();
         let column = Self::extract_leading_column(&mut inner)?;
 
+        // Detect NOT IN via the named `not_kw` rule in the pest parse tree.
+        // This is immune to false positives from column names or string values
+        // containing "NOT IN" (e.g. 'NOT IN STOCK').
+        let negated = inner.peek().is_some_and(|p| p.as_rule() == Rule::not_kw);
+        if negated {
+            inner.next(); // consume the not_kw token
+        }
+
         let value_list = inner
-            .next()
+            .find(|p| p.as_rule() == Rule::value_list)
             .ok_or_else(|| ParseError::syntax(0, "", "Expected value list"))?;
 
         let values: Result<Vec<_>, _> = value_list
@@ -271,6 +279,7 @@ impl Parser {
         Ok(Condition::In(InCondition {
             column,
             values: values?,
+            negated,
         }))
     }
 
@@ -311,12 +320,12 @@ impl Parser {
             .to_uppercase();
         let case_insensitive = like_op == "ILIKE";
 
-        let pattern = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected pattern"))?
-            .as_str()
-            .trim_matches('\'')
-            .to_string();
+        let pattern = crate::velesql::parser::helpers::unescape_string_literal(
+            inner
+                .next()
+                .ok_or_else(|| ParseError::syntax(0, "", "Expected pattern"))?
+                .as_str(),
+        );
 
         Ok(Condition::Like(LikeCondition {
             column,

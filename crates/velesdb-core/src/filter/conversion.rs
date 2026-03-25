@@ -72,10 +72,19 @@ impl From<crate::velesql::Condition> for Condition {
             crate::velesql::Condition::Comparison(cmp) => {
                 convert_comparison(cmp.column, cmp.operator, cmp.value)
             }
-            crate::velesql::Condition::In(inc) => Self::In {
-                field: inc.column,
-                values: inc.values.into_iter().map(velesql_value_to_json).collect(),
-            },
+            crate::velesql::Condition::In(inc) => {
+                let in_cond = Self::In {
+                    field: inc.column,
+                    values: inc.values.into_iter().map(velesql_value_to_json).collect(),
+                };
+                if inc.negated {
+                    Self::Not {
+                        condition: Box::new(in_cond),
+                    }
+                } else {
+                    in_cond
+                }
+            }
             crate::velesql::Condition::IsNull(isn) => {
                 if isn.is_null {
                     Self::IsNull { field: isn.column }

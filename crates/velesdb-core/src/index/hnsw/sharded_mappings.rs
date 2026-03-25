@@ -202,7 +202,6 @@ impl ShardedMappings {
 
     /// Checks if an ID is registered.
     #[must_use]
-    #[allow(dead_code)] // API completeness
     pub fn contains(&self, id: u64) -> bool {
         self.id_to_idx.contains_key(&id)
     }

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 3.0.0 | **Last Updated**: 2026-03-07
+**Version**: 3.1.0 | **Last Updated**: 2026-03-25
 
 ## Overview
 
@@ -27,7 +27,8 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
 | MATCH graph traversal | ✅ Stable | 2.1 |
 | SPARSE_NEAR sparse vector search | ✅ Stable | 2.2 |
-| FUSE BY fusion clause | 🔜 Planned | 2.2 |
+| NEAR_FUSED multi-vector fusion | ✅ Stable | 2.2 |
+| FUSE BY fusion clause | 🔜 Planned | - |
 | TRAIN QUANTIZER command | ✅ Stable | 2.2 |
 | Table aliases | 🔜 Planned | - |
 
@@ -260,6 +261,53 @@ LIMIT 10
 
 > **Note:** The `FUSE BY` syntax is planned but not yet implemented in the grammar. Use `USING FUSION(...)` for hybrid search. See the [FUSE BY clause (planned)](#fuse-by-clause-v22-planned-syntax) section below for the planned syntax.
 
+### Multi-Vector Fusion with NEAR_FUSED (v2.2+)
+
+`NEAR_FUSED` combines multiple embedding vectors into a single similarity search using a fusion strategy. This is useful for multi-modal search (text + image embeddings) or ensemble approaches.
+
+#### Syntax
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR_FUSED [$text_embedding, $image_embedding]
+USING FUSION 'rrf' (k=60)
+LIMIT 10
+```
+
+#### Vector Array
+
+The `NEAR_FUSED` clause accepts a vector array `[v1, v2, ...]` where each element is either a parameter (`$name`) or a vector literal (`[0.1, 0.2, ...]`).
+
+#### Fusion Strategies
+
+| Strategy | Description |
+|----------|-------------|
+| `'rrf'` | Reciprocal Rank Fusion (default). Parameter: `k` (default 60). |
+| `'weighted'` | Weighted average of scores. Parameters: per-vector weights. |
+| `'maximum'` | Takes the maximum score across vectors. |
+| `'rsf'` | Relative Score Fusion. |
+
+#### Examples
+
+```sql
+-- Two-vector fusion with RRF
+SELECT * FROM products
+WHERE vector NEAR_FUSED [$text_emb, $image_emb]
+USING FUSION 'rrf' (k=60)
+LIMIT 20
+
+-- Three-vector ensemble
+SELECT * FROM docs
+WHERE vector NEAR_FUSED [$query_v1, $query_v2, $query_v3]
+USING FUSION 'maximum'
+LIMIT 10
+
+-- Without explicit fusion (defaults to RRF)
+SELECT * FROM docs
+WHERE vector NEAR_FUSED [$v1, $v2]
+LIMIT 5
+```
+
 ### Similarity Function (v1.3+)
 
 The `similarity()` function enables **threshold-based vector filtering** - filter results by similarity score rather than just finding nearest neighbors.
@@ -457,7 +505,16 @@ JOIN products p ON o.product_id = p.id
 
 ## Set Operations (v2.0+)
 
-Combine results from multiple queries.
+Combine results from multiple queries. N-ary chaining is supported:
+
+```sql
+SELECT * FROM a UNION SELECT * FROM b INTERSECT SELECT * FROM c
+```
+
+> **Precedence note:** VelesQL evaluates set operators strictly **left-to-right**,
+> unlike standard SQL where `INTERSECT` binds tighter than `UNION`. The query
+> above is evaluated as `(A UNION B) INTERSECT C`. Use parenthesized subqueries
+> if different evaluation order is needed (when subquery execution is supported).
 
 ### UNION
 
@@ -827,7 +884,7 @@ SELECT id AS `select` FROM docs
 | `ORDER`, `BY`, `ASC`, `DESC` | Sorting |
 | `GROUP`, `HAVING` | Aggregation |
 | `WITH`, `AS` | Options and aliases |
-| `NEAR`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
+| `NEAR`, `NEAR_FUSED`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
 | `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions (`FUSE` reserved for planned syntax) |
 
 ## Grammar (EBNF) - v2.2
@@ -871,14 +928,19 @@ join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTE
 where_clause    = "WHERE" or_expr ;
 or_expr         = and_expr { "OR" and_expr } ;
 and_expr        = condition { "AND" condition } ;
-condition       = comparison | vector_search | sparse_search | similarity_cond | in_cond
-                | between_cond | like_cond | is_null_cond | "(" or_expr ")" ;
+condition       = comparison | vector_search | fused_search | sparse_search
+                | similarity_cond | in_cond | between_cond | like_cond
+                | is_null_cond | "(" or_expr ")" ;
 
 (* Vector operations *)
 vector_search   = identifier "NEAR" vector_expr ;
+fused_search    = identifier "NEAR_FUSED" vector_array [ fusion_clause ] ;
 sparse_search   = identifier "SPARSE_NEAR" sparse_vector_expr ;
 similarity_cond = "similarity" "(" identifier "," vector_expr ")" compare_op number ;
 vector_expr     = "$" identifier | "[" number { "," number } "]" ;
+vector_array    = "[" vector_expr { "," vector_expr } "]" ;
+fusion_clause   = "USING" "FUSION" string [ "(" fusion_params ")" ] ;
+fusion_params   = identifier "=" value { "," identifier "=" value } ;
 sparse_vector_expr = "$" identifier ;
 
 (* Comparisons *)
@@ -886,7 +948,7 @@ comparison      = column compare_op value ;
 compare_op      = "=" | "!=" | "<>" | ">" | ">=" | "<" | "<=" ;
 
 (* Special conditions *)
-in_cond         = column "IN" "(" value { "," value } ")" ;
+in_cond         = column [ "NOT" ] "IN" "(" value { "," value } ")" ;
 between_cond    = column "BETWEEN" value "AND" value ;
 like_cond       = column ("LIKE" | "ILIKE") string ;
 is_null_cond    = column "IS" ["NOT"] "NULL" ;
@@ -929,7 +991,7 @@ train_param     = identifier "=" integer ;
 (* Values *)
 value           = string | number | boolean | "NULL" | vector_literal ;
 vector_literal  = "[" number { "," number } "]" ;
-string          = "'" { char } "'" | '"' { char } '"' ;
+string          = "'" { char | "''" } "'" ;   (* '' escapes a single quote *)
 number          = ["-"] digit { digit } ["." digit { digit }] ;
 boolean         = "true" | "false" ;
 integer         = digit { digit } ;

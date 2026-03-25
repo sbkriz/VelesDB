@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security**: Validate collection names against path traversal — reject `../`, backslashes, special characters, and Windows reserved names. New error code VELES-034 (`InvalidCollectionName`). (#381)
+- **Core**: Crash recovery gap detection for deferred HNSW indexer — vectors written to storage but not yet indexed in HNSW are automatically re-indexed on `Collection::open()`. (#382)
+- **VelesQL**: Grammar bugs — `''` string escaping, N-ary compound queries (UNION/INTERSECT/EXCEPT chaining), vector literal integers `[1, 2, 3]`, `NOT IN` operator, version number alignment. **Note:** `CompoundQuery` AST struct shape changed (serde-breaking for external consumers serializing query ASTs; plan cache is unaffected). (#383)
+- **VelesQL**: Fix plan cache invalidation for compound queries — `referenced_collection_names` now includes collection names from all UNION/INTERSECT/EXCEPT operands.
+- **Docs**: VelesQL spec gaps — document `NEAR_FUSED` syntax and fusion strategies, fix FAQ INSERT/UPDATE/DELETE claims, correct API reference `FUSE BY` → `USING FUSION`, add conformance test cases. (#387)
+
 ## [1.7.0] - 2026-03-24
 
 ### Highlights

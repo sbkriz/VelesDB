@@ -209,25 +209,29 @@ impl Database {
 
         // compound is guaranteed Some here (non-compound returns above).
         if let Some(ref compound) = query.compound {
-            let mut right_query = crate::velesql::Query::new_select(*compound.right.clone());
-            right_query.select.limit = compound_limit;
-            let right_results = self.execute_single_select(&right_query, params)?;
-            let mut merged = crate::collection::search::query::set_operations::apply_set_operation(
-                left_results,
-                right_results,
-                compound.operator,
-            );
+            let mut accumulated = left_results;
+            for (operator, right_select) in &compound.operations {
+                let mut right_query = crate::velesql::Query::new_select(right_select.clone());
+                right_query.select.limit = compound_limit;
+                let right_results = self.execute_single_select(&right_query, params)?;
+                accumulated = crate::collection::search::query::set_operations::apply_set_operation(
+                    accumulated,
+                    right_results,
+                    *operator,
+                );
+            }
             // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
             if let Some(limit) = query.select.limit {
-                merged.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+                accumulated.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
             }
-            return Ok(merged);
+            return Ok(accumulated);
         }
 
         Ok(left_results)
     }
 
-    /// Collects sorted, deduplicated collection names referenced by a query.
+    /// Collects sorted, deduplicated collection names referenced by a query,
+    /// including all compound operands (UNION, INTERSECT, EXCEPT).
     ///
     /// RF-DEDUP: Shared by `build_plan_key` and `populate_plan_cache`, which
     /// both need the same sorted collection-name list from the query AST.
@@ -235,6 +239,14 @@ impl Database {
         let mut names = vec![query.select.from.clone()];
         for join in &query.select.joins {
             names.push(join.table.clone());
+        }
+        if let Some(ref compound) = query.compound {
+            for (_, right_select) in &compound.operations {
+                names.push(right_select.from.clone());
+                for join in &right_select.joins {
+                    names.push(join.table.clone());
+                }
+            }
         }
         names.sort();
         names.dedup();

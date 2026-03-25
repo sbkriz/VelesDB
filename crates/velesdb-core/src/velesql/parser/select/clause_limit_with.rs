@@ -52,7 +52,17 @@ impl Parser {
         for part in option.into_inner() {
             match part.as_rule() {
                 Rule::identifier => key = extract_identifier(&part).to_lowercase(),
-                Rule::fusion_value => value_str = part.as_str().trim_matches('\'').to_string(),
+                Rule::fusion_value => {
+                    // fusion_value = { string | float | integer }
+                    // Only unescape if the inner child is a string literal.
+                    if let Some(child) = part.into_inner().next() {
+                        value_str = if child.as_rule() == Rule::string {
+                            crate::velesql::parser::helpers::unescape_string_literal(child.as_str())
+                        } else {
+                            child.as_str().to_string()
+                        };
+                    }
+                }
                 _ => {}
             }
         }
