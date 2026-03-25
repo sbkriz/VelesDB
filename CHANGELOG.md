@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-03-25
+
 ### Fixed
 
 - **Security**: Validate collection names against path traversal — reject `../`, backslashes, special characters, and Windows reserved names. New error code VELES-034 (`InvalidCollectionName`). (#381)
