@@ -158,14 +158,21 @@ impl Collection {
         // Track effective old payload per ID for within-batch duplicate handling.
         // When id=5 appears twice, the second occurrence uses the first's payload
         // as "old" — not the pre-batch original — so secondary indexes stay correct.
+        //
+        // Uses `Option<Option<&Value>>`: outer Option = "seen this ID?",
+        // inner Option = "had a payload?". This distinguishes "seen with None"
+        // from "not seen" — `.flatten()` would collapse both to None.
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
 
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
-            let effective_old: Option<&serde_json::Value> = seen_payloads
-                .get(&point.id)
-                .copied()
-                .flatten()
-                .or(pre_batch_old.as_ref());
+            let effective_old: Option<&serde_json::Value> =
+                if let Some(&inner) = seen_payloads.get(&point.id) {
+                    // ID was seen earlier in this batch — use that point's payload as "old"
+                    inner
+                } else {
+                    // First occurrence — use the pre-batch original
+                    pre_batch_old.as_ref()
+                };
 
             let (sq8, binary, pq) = (
                 quant_guards.sq8.as_deref_mut(),
