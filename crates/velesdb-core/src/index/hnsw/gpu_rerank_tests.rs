@@ -8,6 +8,7 @@ use super::index::HnswIndex;
 use super::params::SearchQuality;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
+#[cfg(feature = "gpu")]
 use std::collections::HashSet;
 
 // =========================================================================

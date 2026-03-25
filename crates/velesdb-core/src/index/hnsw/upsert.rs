@@ -55,17 +55,16 @@ pub(crate) fn upsert_mapping_batch(
     ids: &[u64],
 ) -> Vec<UpsertResult> {
     let batch_results = mappings.register_or_replace_batch(ids);
-    batch_results
-        .into_iter()
-        .map(|(idx, old_idx)| {
-            if let Some(old) = old_idx {
-                if enable_vector_storage {
-                    vectors.remove(old);
-                }
+    let mut results = Vec::with_capacity(batch_results.len());
+    for (idx, old_idx) in batch_results {
+        if let Some(old) = old_idx {
+            if enable_vector_storage {
+                vectors.remove(old);
             }
-            UpsertResult { idx, old_idx }
-        })
-        .collect()
+        }
+        results.push(UpsertResult { idx, old_idx });
+    }
+    results
 }
 
 /// Rolls back mapping state after a failed graph insertion.
