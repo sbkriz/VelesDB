@@ -370,10 +370,7 @@ fn test_reject_invalid_name_on_graph_collection() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
     let err = db
-        .create_graph_collection(
-            "../evil",
-            crate::collection::GraphSchema::schemaless(),
-        )
+        .create_graph_collection("../evil", crate::collection::GraphSchema::schemaless())
         .unwrap_err();
     assert!(matches!(err, crate::Error::InvalidCollectionName { .. }));
 }

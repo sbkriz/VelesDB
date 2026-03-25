@@ -263,7 +263,10 @@ fn test_parse_in_with_not_in_string_value() {
     match query.select.where_clause {
         Some(Condition::In(c)) => {
             assert_eq!(c.column, "status");
-            assert!(!c.negated, "IN with 'NOT IN STOCK' value must not be negated");
+            assert!(
+                !c.negated,
+                "IN with 'NOT IN STOCK' value must not be negated"
+            );
             assert_eq!(c.values.len(), 2);
         }
         _ => panic!("Expected IN condition"),

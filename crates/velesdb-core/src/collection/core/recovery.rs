@@ -97,9 +97,11 @@ fn retrieve_valid_vectors(
                 "Skipping gap vector with mismatched dimension"
             ),
             Ok(None) => {} // Deleted between ids() and retrieve()
-            Err(e) => return Err(crate::error::Error::Storage(format!(
-                "failed to retrieve gap vector {id}: {e}"
-            ))),
+            Err(e) => {
+                return Err(crate::error::Error::Storage(format!(
+                    "failed to retrieve gap vector {id}: {e}"
+                )))
+            }
         }
     }
     Ok(vectors)
@@ -110,9 +112,6 @@ fn reindex_vectors(index: &HnswIndex, vectors: &[(u64, Vec<f32>)]) -> usize {
     if vectors.is_empty() {
         return 0;
     }
-    let refs: Vec<(u64, &[f32])> = vectors
-        .iter()
-        .map(|(id, v)| (*id, v.as_slice()))
-        .collect();
+    let refs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
     index.insert_batch_parallel(refs)
 }

@@ -73,7 +73,8 @@ impl Parser {
             .find(|p| p.as_rule() == Rule::string)
             .ok_or_else(|| ParseError::syntax(0, "", "Expected interval string"))?;
 
-        let interval_str = crate::velesql::parser::helpers::unescape_string_literal(string_pair.as_str());
+        let interval_str =
+            crate::velesql::parser::helpers::unescape_string_literal(string_pair.as_str());
         let interval_value = Self::parse_interval_string(&interval_str)?;
         Ok(TemporalExpr::Interval(interval_value))
     }
