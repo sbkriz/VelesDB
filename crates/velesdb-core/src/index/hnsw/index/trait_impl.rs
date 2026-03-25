@@ -18,34 +18,7 @@ impl VectorIndex for HnswIndex {
         );
 
         let result = self.upsert_mapping(id);
-
-        // Use read() — NativeHnswInner::insert takes &self and manages its
-        // own internal synchronization (per-node locks, atomic entry point).
-        // A write lock here serializes all inserts and blocks concurrent searches.
-        let assigned_id = match self.inner.read().insert((vector, result.idx)) {
-            Ok(id) => id,
-            Err(e) => {
-                self.rollback_upsert(id, &result);
-                tracing::error!("HnswIndex::insert failed for id={id}: {e}");
-                return;
-            }
-        };
-
-        // Fix mapping if HNSW assigned a different node_id than expected.
-        // This can happen under concurrent inserts: two threads both call
-        // upsert_mapping (getting idx=A and idx=B), then race into
-        // NativeHnsw::insert where the allocation order may reverse.
-        if assigned_id != result.idx {
-            self.mappings.restore(id, assigned_id);
-            if self.enable_vector_storage {
-                self.vectors.insert(assigned_id, vector);
-                return;
-            }
-        }
-
-        if self.enable_vector_storage {
-            self.vectors.insert(result.idx, vector);
-        }
+        self.insert_and_correct_mapping(id, vector, &result);
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {

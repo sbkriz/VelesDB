@@ -303,12 +303,7 @@ impl PyEpisodicMemory {
     /// Example:
     ///     >>> old_events = memory.episodic.older_than(before=yesterday, limit=20)
     #[pyo3(signature = (before, limit = 10))]
-    fn older_than(
-        &self,
-        py: Python<'_>,
-        before: i64,
-        limit: usize,
-    ) -> PyResult<PyObject> {
+    fn older_than(&self, py: Python<'_>, before: i64, limit: usize) -> PyResult<PyObject> {
         let memory = self.get_core_memory()?;
         let results = memory.older_than(before, limit).map_err(to_py_err)?;
 
