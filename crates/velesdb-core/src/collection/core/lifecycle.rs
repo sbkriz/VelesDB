@@ -413,11 +413,22 @@ impl Collection {
         let mut config = config;
         config.point_count = actual_count;
 
-        // TODO #370: implement crash recovery gap detection for deferred indexer.
-        // After loading HNSW and vector storage, detect vectors in storage but
-        // not in HNSW (gap vectors from a crash during deferred merge) and
-        // re-index them. This requires comparing storage IDs against HNSW IDs
-        // which may be expensive for large collections.
+        // Crash recovery: detect vectors in storage but not in HNSW (gap from
+        // crash during deferred merge, delta drain, or normal insert).
+        if !config.metadata_only && config.dimension > 0 {
+            let recovered = super::recovery::recover_hnsw_gap(
+                &vector_storage,
+                &index,
+                config.dimension,
+            )?;
+            if recovered > 0 {
+                tracing::info!(
+                    collection = %config.name,
+                    recovered,
+                    "Collection gap recovery completed on open"
+                );
+            }
+        }
 
         Ok(Self::assemble(CollectionParts {
             path,

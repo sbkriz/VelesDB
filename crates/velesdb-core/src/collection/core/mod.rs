@@ -19,6 +19,10 @@ mod index_management_tests;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(feature = "persistence")]
+mod recovery;
+#[cfg(all(test, feature = "persistence"))]
+mod recovery_tests;
 mod statistics;
 
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
