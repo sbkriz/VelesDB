@@ -173,7 +173,7 @@ impl Collection {
             }
 
             // Release GIL-dependent references before calling into core
-            drop(array);
+            let _ = array;
 
             self.inner
                 .upsert_bulk(&core_points)
