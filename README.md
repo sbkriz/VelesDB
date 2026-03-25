@@ -528,11 +528,11 @@ docker-compose up -d  # With persistence and auto-restart
 |----------|--------------|
 | **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` |
 | **Points** | `/collections/{name}/points`, `/collections/{name}/stream/insert` |
-| **Search** | `.../search`, `.../search/batch`, `.../search/hybrid`, `.../search/text`, `.../search/multi`, `.../search/ids`, `.../match` |
-| **Graph** | `.../graph/edges`, `.../graph/traverse`, `.../graph/traverse/stream`, `.../graph/nodes/{id}/degree` |
-| **Indexes** | `GET/POST .../indexes`, `DELETE .../indexes/{label}/{property}` |
+| **Search** | `/collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid`, `/collections/{name}/search/text`, `/collections/{name}/search/multi`, `/collections/{name}/search/ids`, `/collections/{name}/match` |
+| **Graph** | `/collections/{name}/graph/edges`, `/collections/{name}/graph/traverse`, `/collections/{name}/graph/traverse/stream`, `/collections/{name}/graph/nodes/{id}/degree` |
+| **Indexes** | `GET/POST /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}` |
 | **VelesQL** | `/query`, `/aggregate`, `/query/explain` |
-| **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `.../stats`, `.../config`, `.../flush`, `.../analyze` |
+| **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/analyze`, `/collections/{name}/empty`, `/collections/{name}/sanity` |
 
 > **Full API reference:** [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) | **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
 
