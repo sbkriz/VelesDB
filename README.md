@@ -323,6 +323,9 @@ memory.semantic.store(2, "The Eiffel Tower is in Paris", embedding)
 results = memory.semantic.query(query_embedding, top_k=5)
 for r in results:
     print(f"{r['content']} (score: {r['score']:.3f})")
+
+# Delete a fact
+memory.semantic.delete(1)
 ```
 
 ### Episodic Memory — What happened and when
@@ -339,6 +342,12 @@ events = memory.episodic.recent(limit=10)
 
 # Find similar past events
 similar = memory.episodic.recall_similar(query_embedding, top_k=5)
+
+# Get events older than a threshold
+old = memory.episodic.older_than(before=int(time.time()) - 86400, limit=20)
+
+# Delete an event
+memory.episodic.delete(1)
 ```
 
 ### Procedural Memory — What the agent learned to do
@@ -359,6 +368,12 @@ matches = memory.procedural.recall(task_embedding, top_k=3, min_confidence=0.5)
 # Reinforce based on outcome
 memory.procedural.reinforce(procedure_id=1, success=True)   # confidence +0.1
 memory.procedural.reinforce(procedure_id=1, success=False)  # confidence -0.05
+
+# List all learned procedures
+all_procs = memory.procedural.list_all()
+
+# Delete a procedure
+memory.procedural.delete(1)
 ```
 
 ### Why not SQLite + Vector DB + Graph DB?
@@ -374,7 +389,7 @@ memory.procedural.reinforce(procedure_id=1, success=False)  # confidence -0.05
 | **Snapshots / Rollback** | Versioned with CRC32 | Custom backup logic |
 | **Corporate-friendly** | No network, no 3rd-party accounts | Multiple vendor dependencies |
 
-> **110 tests** cover the Agent Memory SDK end-to-end. **[Full guide: embedding setup, retrieval patterns, TTL, snapshots](docs/guides/AGENT_MEMORY.md)** | [Source code](crates/velesdb-core/src/agent/)
+> **137 tests** (110 Rust + 27 Python) cover the Agent Memory SDK end-to-end. **[Full guide: embedding setup, retrieval patterns, TTL, snapshots](docs/guides/AGENT_MEMORY.md)** | [Source code](crates/velesdb-core/src/agent/)
 
 ---
 

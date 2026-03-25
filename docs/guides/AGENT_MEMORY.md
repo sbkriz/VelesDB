@@ -381,6 +381,9 @@ recent = memory.episodic.recent(limit=20)
 
 # Events since a specific time
 since_yesterday = memory.episodic.recent(limit=100, since=yesterday_timestamp)
+
+# Events older than a threshold
+old_events = memory.episodic.older_than(before=cutoff_timestamp, limit=50)
 ```
 
 ### Confidence-Based Search (procedural only)
@@ -392,6 +395,19 @@ reliable = memory.procedural.recall(
     top_k=100,
     min_confidence=0.8
 )
+
+# List all stored procedures (no embedding needed)
+all_procs = memory.procedural.list_all()
+```
+
+### Deleting Memories
+
+All three memory types support deletion by ID:
+
+```python
+memory.semantic.delete(fact_id)
+memory.episodic.delete(event_id)
+memory.procedural.delete(procedure_id)
 ```
 
 ### Complete Pattern: RAG Agent with Memory
@@ -666,10 +682,10 @@ Not currently. The SDK requires the `persistence` feature (mmap, filesystem), wh
 Export your data (text + embeddings) and import via `semantic.store()` / `episodic.record()` / `procedural.learn()`. There is no automated migration tool.
 
 **Q: Is this production-ready?**
-Yes. 110 tests cover the SDK end-to-end, including concurrent access, snapshot round-trips, TTL expiration, and reinforcement strategies.
+Yes. 137 tests (110 Rust + 27 Python) cover the SDK end-to-end, including concurrent access, snapshot round-trips, TTL expiration, and reinforcement strategies.
 
 ---
 
 > **Source code**: [`crates/velesdb-core/src/agent/`](../../crates/velesdb-core/src/agent/)
-> **Tests**: 110 tests cover the SDK end-to-end
+> **Tests**: 137 tests (110 Rust + 27 Python) cover the SDK end-to-end
 > **Python bindings**: [`crates/velesdb-python/src/agent.rs`](../../crates/velesdb-python/src/agent.rs)
