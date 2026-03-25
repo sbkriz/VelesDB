@@ -172,7 +172,8 @@ impl Collection {
                 core_points.push(Point::new(ids[i], vec_slice.to_vec(), payload));
             }
 
-            // Release GIL-dependent references before calling into core
+            // Note: array (ArrayView2) is Copy — this is a no-op.
+            // core_points already owns copied data; GIL is held until closure end.
             let _ = array;
 
             self.inner
