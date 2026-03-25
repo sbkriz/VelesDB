@@ -259,10 +259,11 @@ impl Parser {
         let mut inner = pair.into_inner();
         let column = Self::extract_leading_column(&mut inner)?;
 
-        // Detect NOT IN vs IN: the grammar `(^"NOT" ~ ^"IN" | ^"IN")` puts
-        // "NOT IN" or "IN" literally between column and "(". We check for
-        // " NOT IN " to avoid false positives on column names like "notification".
-        let negated = raw.to_uppercase().contains("NOT IN");
+        // Detect NOT IN vs IN by checking the text AFTER the column name.
+        // Strip the column prefix so "not IN (...)" → " IN (...)" (not negated)
+        // while "status NOT IN (...)" → " NOT IN (...)" (negated).
+        let after_column = &raw[column.len()..].to_uppercase();
+        let negated = after_column.contains("NOT IN");
 
         let value_list = inner
             .find(|p| p.as_rule() == Rule::value_list)

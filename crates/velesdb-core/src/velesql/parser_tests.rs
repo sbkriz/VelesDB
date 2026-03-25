@@ -220,8 +220,48 @@ fn test_parse_in_condition() {
         Some(Condition::In(c)) => {
             assert_eq!(c.column, "category");
             assert_eq!(c.values.len(), 2);
+            assert!(!c.negated, "IN should not be negated");
         }
         _ => panic!("Expected IN condition"),
+    }
+}
+
+#[test]
+fn test_parse_not_in_condition() {
+    let query =
+        Parser::parse("SELECT * FROM docs WHERE status NOT IN ('draft', 'deleted')").unwrap();
+    match query.select.where_clause {
+        Some(Condition::In(c)) => {
+            assert_eq!(c.column, "status");
+            assert_eq!(c.values.len(), 2);
+            assert!(c.negated, "NOT IN should be negated");
+        }
+        _ => panic!("Expected NOT IN condition"),
+    }
+}
+
+#[test]
+fn test_parse_in_column_named_not_is_not_negated() {
+    // Column named "not" with regular IN — must NOT be a false positive for NOT IN.
+    // Grammar: where_column greedily matches "not" as identifier, then "IN" follows.
+    let result = Parser::parse("SELECT * FROM docs WHERE not IN (1, 2)");
+    // If the grammar allows this, verify negated is false. If it fails to parse
+    // (because NOT is consumed as a keyword), that's also acceptable.
+    if let Ok(query) = result {
+        if let Some(Condition::In(c)) = query.select.where_clause {
+            assert!(!c.negated, "column named 'not' with IN must not be negated");
+        }
+    }
+}
+
+#[test]
+fn test_parse_string_with_escaped_quote() {
+    let query = Parser::parse("SELECT * FROM docs WHERE name = 'O''Brien'").unwrap();
+    match query.select.where_clause {
+        Some(Condition::Comparison(c)) => {
+            assert_eq!(c.value, Value::String("O'Brien".to_string()));
+        }
+        _ => panic!("Expected Comparison condition with escaped string"),
     }
 }
 
