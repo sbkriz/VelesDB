@@ -110,6 +110,86 @@ LIMIT 5
 
 ---
 
+## Agent Memory SDK
+
+Built-in memory subsystems for AI agents — no external vector DB, no graph DB, no extra dependencies. **99 tests** cover the SDK end-to-end.
+
+```python
+from velesdb import Database, AgentMemory
+
+db = Database("./agent_data")
+memory = AgentMemory(db, dimension=384)
+```
+
+### Three Memory Types
+
+| Memory | Purpose | Key methods |
+|--------|---------|-------------|
+| **Semantic** | Long-term knowledge facts | `store`, `query`, `delete`, `store_with_ttl` |
+| **Episodic** | Event timeline with context | `record`, `recent`, `older_than`, `recall_similar`, `delete` |
+| **Procedural** | Learned patterns & actions | `learn`, `recall`, `reinforce`, `list_all`, `delete` |
+
+### Semantic Memory — What the agent knows
+
+```python
+memory.semantic.store(1, "Paris is the capital of France", embedding)
+results = memory.semantic.query(query_embedding, top_k=5)
+memory.semantic.delete(1)  # Remove outdated knowledge
+```
+
+### Episodic Memory — What happened and when
+
+```python
+memory.episodic.record(1, "User asked about geography", int(time.time()), embedding)
+events = memory.episodic.recent(limit=10)
+old_events = memory.episodic.older_than(cutoff_timestamp, limit=50)
+similar = memory.episodic.recall_similar(query_embedding, top_k=5)
+memory.episodic.delete(1)
+```
+
+### Procedural Memory — What the agent learned to do
+
+```python
+memory.procedural.learn(
+    procedure_id=1, name="answer_geography",
+    steps=["search memory", "retrieve facts", "compose answer"],
+    embedding=task_embedding, confidence=0.8
+)
+matches = memory.procedural.recall(task_embedding, top_k=3, min_confidence=0.5)
+all_procedures = memory.procedural.list_all()
+memory.procedural.reinforce(procedure_id=1, success=True)   # confidence +0.1
+memory.procedural.delete(1)
+```
+
+### Advanced features
+
+| Feature | API |
+|---------|-----|
+| **TTL / Auto-expiration** | `store_with_ttl()`, `record_with_ttl()`, `learn_with_ttl()`, `auto_expire()` |
+| **Snapshots / Rollback** | `snapshot()`, `load_latest_snapshot()`, `list_snapshot_versions()` |
+| **Confidence eviction** | `evict_low_confidence_procedures(min_confidence)` |
+| **Reinforcement strategies** | `FixedRate`, `AdaptiveLearningRate`, `TemporalDecay`, `ContextualReinforcement` |
+| **Serialization** | `serialize()` / `deserialize()` on all memory types |
+
+<details>
+<summary>Why not SQLite + Vector DB + Graph DB?</summary>
+
+| | **VelesDB Agent Memory** | SQLite + pgvector + Neo4j |
+|---|---|---|
+| **Dependencies** | 0 (single binary) | 3 separate engines |
+| **Setup** | `pip install velesdb` | Install, configure, connect each |
+| **Semantic search** | Native HNSW (sub-ms) | Requires separate vector DB |
+| **Temporal queries** | Built-in B-tree index | Manual SQL schema |
+| **Confidence scoring** | 4 reinforcement strategies | Build from scratch |
+| **TTL / Auto-expiration** | Built-in | Manual cleanup jobs |
+| **Snapshots / Rollback** | Versioned with CRC32 | Custom backup logic |
+
+</details>
+
+> **[Full guide: embedding setup, retrieval patterns, TTL, snapshots](docs/guides/AGENT_MEMORY.md)** | [Source code](crates/velesdb-core/src/agent/)
+
+---
+
 ## Quick Comparison
 
 | | **VelesDB** | Chroma | Qdrant | pgvector |
@@ -362,86 +442,6 @@ LIMIT 10
 ```
 
 ColumnStore filters are applied as pre-filters or post-filters depending on selectivity, automatically optimized by the query planner.
-
----
-
-## Agent Memory SDK
-
-Built-in memory subsystems for AI agents — no external vector DB, no graph DB, no extra dependencies. **99 tests** cover the SDK end-to-end.
-
-```python
-from velesdb import Database, AgentMemory
-
-db = Database("./agent_data")
-memory = AgentMemory(db, dimension=384)
-```
-
-### Three Memory Types
-
-| Memory | Purpose | Key methods |
-|--------|---------|-------------|
-| **Semantic** | Long-term knowledge facts | `store`, `query`, `delete`, `store_with_ttl` |
-| **Episodic** | Event timeline with context | `record`, `recent`, `older_than`, `recall_similar`, `delete` |
-| **Procedural** | Learned patterns & actions | `learn`, `recall`, `reinforce`, `list_all`, `delete` |
-
-### Semantic Memory — What the agent knows
-
-```python
-memory.semantic.store(1, "Paris is the capital of France", embedding)
-results = memory.semantic.query(query_embedding, top_k=5)
-memory.semantic.delete(1)  # Remove outdated knowledge
-```
-
-### Episodic Memory — What happened and when
-
-```python
-memory.episodic.record(1, "User asked about geography", int(time.time()), embedding)
-events = memory.episodic.recent(limit=10)
-old_events = memory.episodic.older_than(cutoff_timestamp, limit=50)
-similar = memory.episodic.recall_similar(query_embedding, top_k=5)
-memory.episodic.delete(1)
-```
-
-### Procedural Memory — What the agent learned to do
-
-```python
-memory.procedural.learn(
-    procedure_id=1, name="answer_geography",
-    steps=["search memory", "retrieve facts", "compose answer"],
-    embedding=task_embedding, confidence=0.8
-)
-matches = memory.procedural.recall(task_embedding, top_k=3, min_confidence=0.5)
-all_procedures = memory.procedural.list_all()
-memory.procedural.reinforce(procedure_id=1, success=True)   # confidence +0.1
-memory.procedural.delete(1)
-```
-
-### Advanced features
-
-| Feature | API |
-|---------|-----|
-| **TTL / Auto-expiration** | `store_with_ttl()`, `record_with_ttl()`, `learn_with_ttl()`, `auto_expire()` |
-| **Snapshots / Rollback** | `snapshot()`, `load_latest_snapshot()`, `list_snapshot_versions()` |
-| **Confidence eviction** | `evict_low_confidence_procedures(min_confidence)` |
-| **Reinforcement strategies** | `FixedRate`, `AdaptiveLearningRate`, `TemporalDecay`, `ContextualReinforcement` |
-| **Serialization** | `serialize()` / `deserialize()` on all memory types |
-
-<details>
-<summary>Why not SQLite + Vector DB + Graph DB?</summary>
-
-| | **VelesDB Agent Memory** | SQLite + pgvector + Neo4j |
-|---|---|---|
-| **Dependencies** | 0 (single binary) | 3 separate engines |
-| **Setup** | `pip install velesdb` | Install, configure, connect each |
-| **Semantic search** | Native HNSW (sub-ms) | Requires separate vector DB |
-| **Temporal queries** | Built-in B-tree index | Manual SQL schema |
-| **Confidence scoring** | 4 reinforcement strategies | Build from scratch |
-| **TTL / Auto-expiration** | Built-in | Manual cleanup jobs |
-| **Snapshots / Rollback** | Versioned with CRC32 | Custom backup logic |
-
-</details>
-
-> **[Full guide: embedding setup, retrieval patterns, TTL, snapshots](docs/guides/AGENT_MEMORY.md)** | [Source code](crates/velesdb-core/src/agent/)
 
 ---
 
