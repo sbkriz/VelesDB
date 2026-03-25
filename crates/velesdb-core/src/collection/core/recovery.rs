@@ -29,6 +29,10 @@ use std::sync::Arc;
 /// # Early exit
 ///
 /// Returns `0` immediately if storage is empty or its count matches HNSW.
+/// This heuristic may miss gaps in the theoretical case where a gap and an
+/// HNSW orphan cancel out (e.g., one inserted + one deleted during the same
+/// crash). This scenario requires two complementary failure modes and is
+/// extremely unlikely in practice.
 ///
 /// # Errors
 ///

@@ -505,7 +505,16 @@ JOIN products p ON o.product_id = p.id
 
 ## Set Operations (v2.0+)
 
-Combine results from multiple queries.
+Combine results from multiple queries. N-ary chaining is supported:
+
+```sql
+SELECT * FROM a UNION SELECT * FROM b INTERSECT SELECT * FROM c
+```
+
+> **Precedence note:** VelesQL evaluates set operators strictly **left-to-right**,
+> unlike standard SQL where `INTERSECT` binds tighter than `UNION`. The query
+> above is evaluated as `(A UNION B) INTERSECT C`. Use parenthesized subqueries
+> if different evaluation order is needed (when subquery execution is supported).
 
 ### UNION
 

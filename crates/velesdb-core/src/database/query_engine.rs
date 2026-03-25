@@ -230,7 +230,8 @@ impl Database {
         Ok(left_results)
     }
 
-    /// Collects sorted, deduplicated collection names referenced by a query.
+    /// Collects sorted, deduplicated collection names referenced by a query,
+    /// including all compound operands (UNION, INTERSECT, EXCEPT).
     ///
     /// RF-DEDUP: Shared by `build_plan_key` and `populate_plan_cache`, which
     /// both need the same sorted collection-name list from the query AST.
@@ -238,6 +239,14 @@ impl Database {
         let mut names = vec![query.select.from.clone()];
         for join in &query.select.joins {
             names.push(join.table.clone());
+        }
+        if let Some(ref compound) = query.compound {
+            for (_, right_select) in &compound.operations {
+                names.push(right_select.from.clone());
+                for join in &right_select.joins {
+                    names.push(join.table.clone());
+                }
+            }
         }
         names.sort();
         names.dedup();
