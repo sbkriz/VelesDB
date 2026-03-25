@@ -127,13 +127,16 @@ pub enum CompareOp {
     Lte,
 }
 
-/// IN condition: column IN (value1, value2, ...)
+/// IN / NOT IN condition: column [NOT] IN (value1, value2, ...)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InCondition {
     /// Column name.
     pub column: String,
     /// List of values.
     pub values: Vec<Value>,
+    /// `true` when this is a `NOT IN` condition.
+    #[serde(default)]
+    pub negated: bool,
 }
 
 /// BETWEEN condition: column BETWEEN low AND high

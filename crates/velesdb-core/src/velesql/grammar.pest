@@ -1,5 +1,5 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 0.2.0 - WITH clause support
+// Version 3.1.0 — string escaping, NOT IN, vector literal integers, N-ary compound queries
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -52,8 +52,8 @@ return_expr = { similarity_return | property_access | identifier | "*" }
 similarity_return = { ^"similarity" ~ "(" ~ ")" }
 property_access = @{ identifier ~ "." ~ identifier }
 
-// Compound query: SELECT with optional UNION/INTERSECT/EXCEPT
-compound_query = { select_stmt ~ (set_operator ~ select_stmt)? }
+// Compound query: SELECT with zero or more UNION/INTERSECT/EXCEPT
+compound_query = { select_stmt ~ (set_operator ~ select_stmt)* }
 set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
 
 // INSERT statement: INSERT INTO table (col1, col2) VALUES (v1, v2)
@@ -232,13 +232,14 @@ fusion_param = { identifier ~ "=" ~ fusion_param_value }
 fusion_param_value = { float | integer }
 
 vector_value = { vector_literal | parameter }
-vector_literal = { "[" ~ float ~ ("," ~ float)* ~ "]" }
+vector_component = { float | integer }
+vector_literal = { "[" ~ vector_component ~ ("," ~ vector_component)* ~ "]" }
 
 // Full-text search: column MATCH 'query'
 match_expr = { where_column ~ ^"MATCH" ~ string }
 
-// IN expression: column IN (value, ...)
-in_expr = { where_column ~ ^"IN" ~ "(" ~ value_list ~ ")" }
+// IN / NOT IN expression: column [NOT] IN (value, ...)
+in_expr = { where_column ~ (^"NOT" ~ ^"IN" | ^"IN") ~ "(" ~ value_list ~ ")" }
 value_list = { value ~ ("," ~ value)* }
 
 // BETWEEN expression: column BETWEEN value AND value
@@ -277,7 +278,7 @@ now_function = { ^"NOW" ~ "(" ~ ")" }
 interval_expr = { ^"INTERVAL" ~ string }
 
 // Literals
-string = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }
+string = @{ "'" ~ (!"'" ~ ANY | "''")* ~ "'" }
 integer = @{ "-"? ~ ASCII_DIGIT+ }
 float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 

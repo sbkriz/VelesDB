@@ -116,6 +116,7 @@ fn test_in_condition() {
             VelesValue::String("a".to_string()),
             VelesValue::String("b".to_string()),
         ],
+        negated: false,
     };
     let cond = crate::velesql::Condition::In(inc);
     let result: Condition = cond.into();

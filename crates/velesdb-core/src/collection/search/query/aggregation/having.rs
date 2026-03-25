@@ -243,6 +243,7 @@ impl Collection {
                 Condition::In(crate::velesql::InCondition {
                     column: in_cond.column.clone(),
                     values: resolved_values,
+                    negated: in_cond.negated,
                 })
             }
             Condition::Between(btw) => {

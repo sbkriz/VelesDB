@@ -146,13 +146,14 @@ pub enum SetOperator {
     Except,
 }
 
-/// Compound query combining two queries with a set operator.
+/// Compound query combining queries with set operators (UNION/INTERSECT/EXCEPT).
+///
+/// Supports N-ary chaining: `SELECT ... UNION SELECT ... INTERSECT SELECT ...`
+/// is represented as `operations: [(Union, B), (Intersect, C)]`, applied left-to-right.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompoundQuery {
-    /// The set operator.
-    pub operator: SetOperator,
-    /// The second query.
-    pub right: Box<SelectStatement>,
+    /// Chained set operations: `(operator, right_select)` pairs, applied left-to-right.
+    pub operations: Vec<(SetOperator, SelectStatement)>,
 }
 
 #[cfg(test)]

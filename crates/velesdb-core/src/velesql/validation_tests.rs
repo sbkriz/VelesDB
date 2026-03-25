@@ -560,8 +560,7 @@ fn test_validate_compound_query_where_clause() {
             fusion_clause: None,
         },
         compound: Some(CompoundQuery {
-            operator: SetOperator::Union,
-            right: Box::new(SelectStatement {
+            operations: vec![(SetOperator::Union, SelectStatement {
                 distinct: crate::velesql::DistinctMode::None,
                 columns: SelectColumns::All,
                 from: "docs".to_string(),
@@ -575,7 +574,7 @@ fn test_validate_compound_query_where_clause() {
                 group_by: None,
                 having: None,
                 fusion_clause: None,
-            }),
+            })],
         }),
         match_clause: None,
         dml: None,
