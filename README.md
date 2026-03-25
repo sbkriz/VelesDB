@@ -282,7 +282,7 @@ curl -X POST http://localhost:8080/query \
 | Use Case                      | VelesDB Feature                     |
 |-------------------------------|-------------------------------------|
 | **RAG Pipelines**             | Sub-ms retrieval                    |
-| **AI Agents**                 | Embedded memory, local context      |
+| **AI Agents**                 | [Agent Memory SDK](#agent-memory-sdk) — semantic, episodic, procedural memory |
 | **Desktop Apps (Tauri/Electron)** | Single binary, no server needed     |
 | **Mobile AI (iOS/Android)**   | Native SDKs with 32x memory compression |
 | **Browser-side Search**       | WASM module, zero backend           |
@@ -290,6 +290,91 @@ curl -X POST http://localhost:8080/query \
 | **On-Prem / Air-Gapped**      | No cloud dependency, full data sovereignty |
 
 > **Business scenarios & demos:** [examples/](examples/) — E-commerce recommendation engine, GraphRAG, hybrid search, LangChain/LlamaIndex integration.
+
+---
+
+## Agent Memory SDK
+
+Built-in memory subsystems for AI agents — no external vector DB, no graph DB, no extra dependencies.
+
+```python
+from velesdb import Database, AgentMemory
+
+db = Database("./agent_data")
+memory = AgentMemory(db, dimension=384)
+```
+
+### Three Memory Types
+
+| Memory | Purpose | Storage | Retrieval |
+|--------|---------|---------|-----------|
+| **Semantic** | Long-term knowledge facts | Vector + payload | Similarity search |
+| **Episodic** | Event timeline with context | Vector + timestamp | Temporal + similarity |
+| **Procedural** | Learned patterns & actions | Vector + steps + confidence | Similarity + confidence filter |
+
+### Semantic Memory — What the agent knows
+
+```python
+# Store knowledge facts with embeddings
+memory.semantic.store(1, "Paris is the capital of France", embedding)
+memory.semantic.store(2, "The Eiffel Tower is in Paris", embedding)
+
+# Recall by similarity
+results = memory.semantic.query(query_embedding, top_k=5)
+for r in results:
+    print(f"{r['content']} (score: {r['score']:.3f})")
+```
+
+### Episodic Memory — What happened and when
+
+```python
+import time
+
+# Record events with timestamps
+memory.episodic.record(1, "User asked about French geography", int(time.time()), embedding)
+memory.episodic.record(2, "Agent retrieved France facts", int(time.time()))
+
+# Query recent events
+events = memory.episodic.recent(limit=10)
+
+# Find similar past events
+similar = memory.episodic.recall_similar(query_embedding, top_k=5)
+```
+
+### Procedural Memory — What the agent learned to do
+
+```python
+# Teach the agent a procedure
+memory.procedural.learn(
+    procedure_id=1,
+    name="answer_geography",
+    steps=["search semantic memory", "retrieve related facts", "compose answer"],
+    embedding=task_embedding,
+    confidence=0.8
+)
+
+# Recall relevant procedures
+matches = memory.procedural.recall(task_embedding, top_k=3, min_confidence=0.5)
+
+# Reinforce based on outcome
+memory.procedural.reinforce(procedure_id=1, success=True)   # confidence +0.1
+memory.procedural.reinforce(procedure_id=1, success=False)  # confidence -0.05
+```
+
+### Why not SQLite + Vector DB + Graph DB?
+
+| | **VelesDB Agent Memory** | SQLite + pgvector + Neo4j |
+|---|---|---|
+| **Dependencies** | 0 (single binary) | 3 separate engines |
+| **Setup** | `pip install velesdb` | Install, configure, connect each |
+| **Semantic search** | Native HNSW (sub-ms) | Requires separate vector DB |
+| **Temporal queries** | Built-in B-tree index | Manual SQL schema |
+| **Confidence scoring** | 4 reinforcement strategies | Build from scratch |
+| **TTL / Auto-expiration** | Built-in | Manual cleanup jobs |
+| **Snapshots / Rollback** | Versioned with CRC32 | Custom backup logic |
+| **Corporate-friendly** | No network, no 3rd-party accounts | Multiple vendor dependencies |
+
+> **110 tests** cover the Agent Memory SDK end-to-end. See [`crates/velesdb-core/src/agent/`](crates/velesdb-core/src/agent/) for the Rust implementation.
 
 ---
 
