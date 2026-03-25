@@ -119,6 +119,7 @@ Security and correctness fixes:
 Internal performance optimizations (automatic, no configuration needed):
 - **HNSW search partial sort** (#373) — O(ef + k log k) candidate selection instead of O(ef log ef)
 - **Batch insert fast-path** (#375) — eliminates ~14% upsert overhead on pure-insert workloads
+- **Upsert lock contention fix** — `Collection::upsert()` restructured into a 3-phase pipeline (batch storage, per-point secondary updates, batch HNSW insert). Write lock on HNSW index replaced with read lock (internal per-node synchronization was already sufficient). On local benchmarks the throughput gap between `upsert()` and `upsert_bulk()` dropped from ~19x to ~1x.
 
 No API changes, no configuration changes, no data migration. Simply update your dependency version.
 

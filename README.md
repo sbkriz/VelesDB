@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.1">Download v1.7.1</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.2">Download v1.7.2</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -39,7 +39,7 @@
 - **Batch Insert Optimization** — Chunked phase B with inter-chunk EP update, alloc/connect separation
 - **search_layer Batch SIMD** — Batch SIMD distance computation + deferred indexing in search
 
-> Full changelog: [What's New in v1.7](https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.1)
+> Full changelog: [What's New in v1.7](https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.2)
 
 ---
 
