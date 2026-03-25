@@ -118,9 +118,7 @@ fn test_gap_recovery_on_collection_reopen() {
     );
 
     // Verify search finds the recovered vector (orthogonal direction).
-    let results = reopened
-        .search(&[0.0, 0.0, 1.0, 0.0], 1)
-        .expect("search");
+    let results = reopened.search(&[0.0, 0.0, 1.0, 0.0], 1).expect("search");
     assert!(!results.is_empty(), "search should return results");
     assert_eq!(
         results[0].point.id, 100,

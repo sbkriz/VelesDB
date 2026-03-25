@@ -417,11 +417,8 @@ impl Collection {
         // crash during deferred merge, delta drain, or normal insert).
         #[cfg(feature = "persistence")]
         if !config.metadata_only && config.dimension > 0 {
-            let recovered = super::recovery::recover_hnsw_gap(
-                &vector_storage,
-                &index,
-                config.dimension,
-            )?;
+            let recovered =
+                super::recovery::recover_hnsw_gap(&vector_storage, &index, config.dimension)?;
             if recovered > 0 {
                 tracing::info!(
                     collection = %config.name,

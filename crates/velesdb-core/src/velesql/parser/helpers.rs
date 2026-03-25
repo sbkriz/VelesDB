@@ -94,9 +94,7 @@ pub(crate) fn parse_scalar_from_rule(
                 .map_err(|_| ParseError::syntax(0, pair.as_str(), "Invalid float"))?;
             Ok(Value::Float(v))
         }
-        Rule::string => {
-            Ok(Value::String(unescape_string_literal(pair.as_str())))
-        }
+        Rule::string => Ok(Value::String(unescape_string_literal(pair.as_str()))),
         Rule::boolean => {
             let b = pair.as_str().to_uppercase() == "TRUE";
             Ok(Value::Boolean(b))
@@ -258,7 +256,10 @@ mod tests {
 
     #[test]
     fn test_unescape_string_literal_multiple_escapes() {
-        assert_eq!(unescape_string_literal("'It''s a ''test'''"), "It's a 'test'");
+        assert_eq!(
+            unescape_string_literal("'It''s a ''test'''"),
+            "It's a 'test'"
+        );
     }
 
     #[test]

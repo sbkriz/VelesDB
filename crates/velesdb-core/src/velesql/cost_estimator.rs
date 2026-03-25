@@ -76,7 +76,11 @@ impl<'a> CostEstimator<'a> {
             Condition::In(cond) => {
                 let base = self.stats.estimate_selectivity(cond.column.as_str());
                 let sel = (base * cond.values.len() as f64).clamp(0.0, 1.0);
-                if cond.negated { 1.0 - sel } else { sel }
+                if cond.negated {
+                    1.0 - sel
+                } else {
+                    sel
+                }
             }
             Condition::Between(cond) => self.estimate_range_selectivity(cond.column.as_str()),
             Condition::Like(cond) => {

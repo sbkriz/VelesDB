@@ -40,7 +40,9 @@ impl Parser {
                 Rule::string => {
                     // USING clause: string value is the index name.
                     // Strips surrounding quotes and unescapes '' → '.
-                    index_name = Some(crate::velesql::parser::helpers::unescape_string_literal(inner.as_str()));
+                    index_name = Some(crate::velesql::parser::helpers::unescape_string_literal(
+                        inner.as_str(),
+                    ));
                 }
                 _ => {}
             }
@@ -206,10 +208,9 @@ impl Parser {
                         let child = p.into_inner().next().ok_or_else(|| {
                             ParseError::syntax(0, "", "Expected numeric value in vector")
                         })?;
-                        child
-                            .as_str()
-                            .parse::<f32>()
-                            .map_err(|_| ParseError::syntax(0, child.as_str(), "Invalid vector component"))
+                        child.as_str().parse::<f32>().map_err(|_| {
+                            ParseError::syntax(0, child.as_str(), "Invalid vector component")
+                        })
                     })
                     .collect();
                 Ok(VectorExpr::Literal(values?))

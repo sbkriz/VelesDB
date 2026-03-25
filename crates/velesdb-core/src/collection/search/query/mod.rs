@@ -139,7 +139,8 @@ impl Collection {
             for (operator, right_select) in &compound.operations {
                 let mut right_query = crate::velesql::Query::new_select(right_select.clone());
                 right_query.select.limit = compound_limit;
-                let right_results = self.execute_query_with_client(&right_query, params, "default")?;
+                let right_results =
+                    self.execute_query_with_client(&right_query, params, "default")?;
                 accumulated =
                     set_operations::apply_set_operation(accumulated, right_results, *operator);
             }
