@@ -170,7 +170,7 @@ coll.stream_insert([
 ### Query limitations
 
 - VelesQL parses subqueries but does not execute them yet. CTEs are not supported.
-- `UPDATE` and `DELETE ... WHERE` statements are not supported in VelesQL (use the programmatic API).
+- `INSERT` and `UPDATE` are parsed by VelesQL but runtime execution is not yet implemented (use the programmatic API). `DELETE` is planned.
 - Graph traversal in VelesQL is limited to `MATCH` patterns; recursive CTEs are not available.
 
 ---
@@ -194,9 +194,12 @@ VelesQL is a SQL-like query language with vector and graph extensions. It suppor
 | `vector NEAR $v` (similarity search) | Yes | No |
 | `MATCH` (graph traversal) | Yes | No |
 | `USING FUSION` (hybrid search) | Yes | No |
+| `NEAR_FUSED` (multi-vector fusion) | Yes | No |
+| `SPARSE_NEAR` (sparse vector search) | Yes | No |
 | `TRAIN QUANTIZER ON ...` | Yes | No |
 | Subqueries / CTEs | No | Yes |
-| `INSERT` / `UPDATE` / `DELETE` | No | Yes |
+| `INSERT` / `UPDATE` | Parsed (no runtime execution) | Yes |
+| `DELETE` | Planned | Yes |
 | `CREATE TABLE` / DDL | No | Yes |
 | Window functions | No | Yes |
 | Stored procedures | No | Yes |

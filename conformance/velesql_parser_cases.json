@@ -216,6 +216,21 @@
       "id": "P042",
       "query": "SELECT * FROM a UNION SELECT * FROM b INTERSECT SELECT * FROM c",
       "should_parse": true
+    },
+    {
+      "id": "P043",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1, $v2] LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P044",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf' (k=60) LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P045",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1] LIMIT 10",
+      "should_parse": true
     }
   ]
 }

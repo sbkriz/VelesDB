@@ -114,13 +114,16 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
                   | <compare_expr>
 
 <vector_search> ::= "vector" "NEAR" [<metric>] <vector_value>
+<fused_search>  ::= "vector" "NEAR_FUSED" <vector_array> [<fusion_clause>]
+<vector_array>  ::= "[" <vector_value> ("," <vector_value>)* "]"
+<fusion_clause> ::= "USING" "FUSION" <string> ["(" <fusion_params> ")"]
 <metric>        ::= "COSINE" | "EUCLIDEAN" | "DOT" | "HAMMING" | "JACCARD"
 <vector_value>  ::= <vector_literal> | <parameter>
 <vector_literal>::= "[" <float> ("," <float>)* "]"
 
 <match_expr>    ::= <identifier> "MATCH" <string>
 
-<in_expr>       ::= <identifier> "IN" "(" <value_list> ")"
+<in_expr>       ::= <identifier> ["NOT"] "IN" "(" <value_list> ")"
 <value_list>    ::= <value> ("," <value>)*
 
 <between_expr>  ::= <identifier> "BETWEEN" <value> "AND" <value>
