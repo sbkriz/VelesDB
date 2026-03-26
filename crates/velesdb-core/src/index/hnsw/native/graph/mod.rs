@@ -176,7 +176,13 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.len() == 0
     }
 
-    /// Computes the distance between two vectors using this index's distance engine.
+    /// Computes the raw distance between two vectors using this index's distance engine.
+    ///
+    /// **Note:** For `CachedSimdDistance` with Euclidean metric, this returns
+    /// **squared L2** (no sqrt). Pass the result through [`transform_score`]
+    /// to obtain actual Euclidean distance.
+    ///
+    /// [`transform_score`]: super::backend_adapter::NativeHnsw::transform_score
     #[inline]
     #[must_use]
     pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {

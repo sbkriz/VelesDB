@@ -129,7 +129,9 @@ impl NativeHnswInner {
     /// Transforms raw HNSW distance to the appropriate score based on metric type.
     ///
     /// - **Cosine**: `(1.0 - distance).clamp(0.0, 1.0)` (similarity in `[0,1]`)
-    /// - **Euclidean**/**Hamming**/**Jaccard**: raw distance (lower is better)
+    /// - **Euclidean**: `sqrt(raw_distance)` — the search loop stores squared L2
+    ///   to avoid per-comparison sqrt; this restores actual Euclidean distance.
+    /// - **Hamming**/**Jaccard**: raw distance (lower is better)
     /// - **`DotProduct`**: `-distance` (negated for consistency)
     #[inline]
     #[must_use]
@@ -158,10 +160,11 @@ impl NativeHnswInner {
         self.metric
     }
 
-    /// Computes the distance between two vectors using the index's distance metric.
+    /// Computes the raw distance between two vectors using the HNSW distance engine.
     ///
-    /// This is useful for brute-force search where we need to compute distances
-    /// outside of the HNSW graph traversal.
+    /// **Note:** For Euclidean metric, this returns **squared L2** (no sqrt).
+    /// Callers that need actual Euclidean distance must pass the result through
+    /// [`transform_score`](Self::transform_score).
     #[inline]
     #[must_use]
     pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {

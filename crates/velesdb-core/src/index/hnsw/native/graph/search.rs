@@ -296,6 +296,15 @@ fn process_batch_results(
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Searches for k nearest neighbors.
+    ///
+    /// # Distance semantics
+    ///
+    /// Returned distances are **raw engine distances** from `D::distance()`.
+    /// When `D = CachedSimdDistance`, Euclidean values are squared L2 (no
+    /// sqrt). Callers that expose results to users must apply
+    /// [`transform_score()`] to convert to the user-visible metric.
+    ///
+    /// [`transform_score()`]: super::backend_adapter::NativeHnsw::transform_score
     #[inline]
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {

@@ -89,8 +89,12 @@ pub trait HnswBackend: Send + Sync {
     ///
     /// Different distance metrics require different score transformations:
     /// - **Cosine**: `(1.0 - distance).clamp(0.0, 1.0)` (similarity in `[0,1]`)
-    /// - **Euclidean**/**Hamming**/**Jaccard**: raw distance (lower is better)
-    /// - **`DotProduct`**: `-distance` (`hnsw_rs` stores negated dot product)
+    /// - **Euclidean**: `sqrt(raw_distance)` -- the HNSW search loop stores
+    ///   squared L2 (via `CachedSimdDistance`) to skip redundant sqrt during
+    ///   traversal; this restores the actual Euclidean distance for user-visible
+    ///   scores.
+    /// - **Hamming**/**Jaccard**: raw distance (lower is better)
+    /// - **`DotProduct`**: `-distance` (negated for min-heap ordering)
     ///
     /// # Arguments
     ///

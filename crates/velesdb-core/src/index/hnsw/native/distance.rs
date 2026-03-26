@@ -235,7 +235,11 @@ impl DistanceEngine for CachedSimdDistance {
                 1.0 - self.engine.cosine_similarity(a, b).clamp(-1.0, 1.0)
             }
             DistanceMetric::Cosine => 1.0 - self.engine.cosine_similarity(a, b),
-            DistanceMetric::Euclidean => self.engine.euclidean(a, b),
+            // Reason: Returns squared L2 (no sqrt) because HNSW traversal only
+            // needs ordering and sqrt is monotone. The sqrt is deferred to
+            // `transform_score()` which is applied to the final k results only.
+            // This saves one f32::sqrt() per distance computation in the hot loop.
+            DistanceMetric::Euclidean => self.engine.euclidean_squared(a, b),
             DistanceMetric::DotProduct => -self.engine.dot_product(a, b),
             DistanceMetric::Hamming => self.engine.hamming(a, b),
             DistanceMetric::Jaccard => 1.0 - self.engine.jaccard(a, b),

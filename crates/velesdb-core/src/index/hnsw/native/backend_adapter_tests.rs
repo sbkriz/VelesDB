@@ -102,7 +102,19 @@ fn test_transform_score_euclidean() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
-    assert!((hnsw.transform_score(0.5) - 0.5).abs() < f32::EPSILON);
+    // Euclidean: transform_score applies sqrt (raw distances are squared L2)
+    assert!(
+        (hnsw.transform_score(0.25) - 0.5).abs() < f32::EPSILON,
+        "sqrt(0.25) should be 0.5"
+    );
+    assert!(
+        (hnsw.transform_score(25.0) - 5.0).abs() < 1e-5,
+        "sqrt(25.0) should be 5.0"
+    );
+    assert!(
+        hnsw.transform_score(0.0).abs() < f32::EPSILON,
+        "sqrt(0.0) should be 0.0"
+    );
 }
 
 #[test]

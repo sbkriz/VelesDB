@@ -106,6 +106,12 @@ pub trait NativeHnswBackend: Send + Sync {
     fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()>;
 
     /// Transforms raw distance to appropriate score based on metric type.
+    ///
+    /// For Euclidean metric, assumes the input is **squared L2** as produced
+    /// by `CachedSimdDistance`. Other distance engines (e.g. `SimdDistance`,
+    /// `NativeSimdDistance`) that already return actual Euclidean distance
+    /// should **not** have their results passed through this function, as
+    /// it would incorrectly apply `sqrt()` to an already-sqrt'd value.
     fn transform_score(&self, raw_distance: f32) -> f32;
 
     /// Returns the number of elements in the index.
@@ -303,15 +309,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Transforms raw distance to appropriate score based on metric type.
     ///
     /// - **Cosine**: `(1.0 - distance).clamp(0.0, 1.0)` (similarity in `[0,1]`)
-    /// - **Euclidean**/**Hamming**/**Jaccard**: raw distance (lower is better)
+    /// - **Euclidean**: `sqrt(raw_distance)` — the search loop stores squared L2
+    ///   to skip redundant sqrt during traversal; this restores the actual
+    ///   Euclidean distance for user-visible scores.
+    /// - **Hamming**/**Jaccard**: raw distance (lower is better)
     /// - **DotProduct**: `-distance` (negated for consistency)
     #[must_use]
     pub fn transform_score(&self, raw_distance: f32) -> f32 {
         match self.distance.metric() {
             DistanceMetric::Cosine => (1.0 - raw_distance).clamp(0.0, 1.0),
-            DistanceMetric::Euclidean | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
-                raw_distance
-            }
+            // Reason: CachedSimdDistance stores squared L2 during HNSW traversal
+            // to avoid per-comparison sqrt. Apply sqrt here on the final k results.
+            DistanceMetric::Euclidean => raw_distance.sqrt(),
+            DistanceMetric::Hamming | DistanceMetric::Jaccard => raw_distance,
             DistanceMetric::DotProduct => -raw_distance,
         }
     }

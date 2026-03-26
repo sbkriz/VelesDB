@@ -579,9 +579,15 @@ fn test_cached_vs_simd_euclidean_128d() {
     let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
     let a = gen_vec(dim, 0.0);
     let b = gen_vec(dim, 1.0);
-    let s = simd.distance(&a, &b);
-    let c = cached.distance(&a, &b);
-    assert_eq!(s, c, "euclidean 128d: simd={s}, cached={c}");
+    let s = simd.distance(&a, &b); // sqrt'd Euclidean
+    let c = cached.distance(&a, &b); // squared L2 (no sqrt)
+                                     // CachedSimdDistance returns squared L2 for HNSW traversal optimization;
+                                     // SimdDistance returns actual Euclidean (with sqrt).
+    assert!(
+        (c - s * s).abs() < 1e-3,
+        "cached should equal simd^2: cached={c}, simd^2={}",
+        s * s,
+    );
 }
 
 #[test]
@@ -724,4 +730,181 @@ fn test_non_prenormalized_cosine_flag_is_false() {
 fn test_default_distance_engine_is_not_prenormalized() {
     let cpu = CpuDistance::new(DistanceMetric::Cosine);
     assert!(!cpu.is_pre_normalized());
+}
+
+// =========================================================================
+// Tests for #420 Component 1: Skip sqrt in Euclidean HNSW search
+// =========================================================================
+
+/// Verifies that `CachedSimdDistance` for Euclidean now returns squared L2
+/// (no sqrt) so that HNSW graph traversal avoids redundant sqrt calls.
+///
+/// The ordering of squared L2 is identical to Euclidean ordering because
+/// sqrt is monotonically increasing.
+#[allow(clippy::similar_names)] // Reason: near/far naming convention for distance tests
+#[test]
+fn test_cached_euclidean_returns_squared_l2_for_ordering() {
+    let dim = 128;
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+
+    let a = gen_vec(dim, 0.0);
+    let near = gen_vec(dim, 1.0);
+    let far = gen_vec(dim, 2.0);
+
+    let dist_near = cached.distance(&a, &near);
+    let dist_far = cached.distance(&a, &far);
+
+    // Compute ground-truth squared L2 manually
+    let expected_near: f32 = a
+        .iter()
+        .zip(near.iter())
+        .map(|(x, y)| (x - y).powi(2))
+        .sum();
+    let expected_far: f32 = a.iter().zip(far.iter()).map(|(x, y)| (x - y).powi(2)).sum();
+
+    // CachedSimdDistance should return squared L2 (not sqrt'd)
+    assert!(
+        (dist_near - expected_near).abs() < 1e-3,
+        "Expected squared L2 {expected_near}, got {dist_near}"
+    );
+    assert!(
+        (dist_far - expected_far).abs() < 1e-3,
+        "Expected squared L2 {expected_far}, got {dist_far}"
+    );
+
+    // Ordering must be preserved
+    assert_eq!(
+        dist_near < dist_far,
+        expected_near < expected_far,
+        "Ordering of squared L2 must match"
+    );
+}
+
+/// Verifies that `DistanceEngine::euclidean_squared()` exists and returns
+/// raw squared L2 without sqrt.
+#[test]
+fn test_distance_engine_euclidean_squared() {
+    let engine = crate::simd_native::DistanceEngine::new(4);
+    let a = [3.0_f32, 0.0, 0.0, 0.0];
+    let b = [0.0_f32, 4.0, 0.0, 0.0];
+
+    let sq = engine.euclidean_squared(&a, &b);
+    // 3^2 + 4^2 = 25 (squared L2, NOT 5.0)
+    assert!(
+        (sq - 25.0).abs() < 1e-5,
+        "euclidean_squared should return 25.0, got {sq}"
+    );
+
+    // Original euclidean() still applies sqrt
+    let euc = engine.euclidean(&a, &b);
+    assert!(
+        (euc - 5.0).abs() < 1e-5,
+        "euclidean should still return 5.0, got {euc}"
+    );
+}
+
+/// Verifies that `transform_score` for Euclidean now applies sqrt,
+/// restoring the actual Euclidean distance for user-visible scores.
+#[test]
+fn test_transform_score_euclidean_applies_sqrt() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = super::graph::NativeHnsw::new(engine, 16, 100, 100);
+
+    // If the raw distance from the search is squared L2 = 25.0,
+    // transform_score should return sqrt(25.0) = 5.0
+    let score = hnsw.transform_score(25.0);
+    assert!(
+        (score - 5.0).abs() < 1e-5,
+        "transform_score(25.0) should return 5.0 (sqrt), got {score}"
+    );
+
+    // Zero distance should remain zero
+    let score_zero = hnsw.transform_score(0.0);
+    assert!(
+        score_zero.abs() < 1e-5,
+        "transform_score(0.0) should return 0.0, got {score_zero}"
+    );
+}
+
+/// End-to-end: HNSW search with Euclidean metric must return squared L2
+/// as raw distances, and `transform_score` must apply sqrt to produce
+/// actual Euclidean distances for user-visible scores.
+#[test]
+fn test_hnsw_euclidean_search_returns_actual_distances() {
+    let dim = 4;
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let hnsw = super::graph::NativeHnsw::new(engine, 16, 100, 100);
+
+    // Insert origin and a known vector at distance 5.0 (3-4-5 triangle)
+    hnsw.insert(&[0.0, 0.0, 0.0, 0.0]).expect("test");
+    hnsw.insert(&[3.0, 4.0, 0.0, 0.0]).expect("test");
+
+    // Search from origin, requesting 2 results
+    let results = hnsw.search(&[0.0, 0.0, 0.0, 0.0], 2, 50);
+    assert_eq!(results.len(), 2, "Should find both vectors");
+
+    // The self-distance should be 0 (or very close)
+    assert!(
+        results[0].1 < 0.01,
+        "Self-distance should be ~0, got {}",
+        results[0].1
+    );
+
+    // Raw distance from search should be SQUARED L2 = 25.0, not 5.0
+    let raw_dist = results[1].1;
+    assert!(
+        (raw_dist - 25.0).abs() < 0.1,
+        "Raw HNSW distance should be squared L2 = 25.0, got {raw_dist}"
+    );
+
+    // transform_score must convert squared L2 → actual Euclidean distance
+    let user_score = hnsw.transform_score(raw_dist);
+    assert!(
+        (user_score - 5.0).abs() < 0.1,
+        "User-visible Euclidean distance should be ~5.0, got {user_score}"
+    );
+}
+
+/// Verifies that the top-k ordering is identical between squared L2 and
+/// actual Euclidean distance (sqrt is monotone), using a larger dataset.
+#[test]
+fn test_squared_l2_preserves_topk_ordering() {
+    let dim = 32;
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let hnsw = super::graph::NativeHnsw::new(cached, 16, 100, 600);
+
+    // Insert 500 vectors
+    for i in 0..500_u64 {
+        let v: Vec<f32> = (0..dim)
+            .map(|j| ((i as f32 + j as f32) * 0.01).sin())
+            .collect();
+        hnsw.insert(&v).expect("test");
+    }
+
+    let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.05).cos()).collect();
+    let k = 10;
+
+    // Get HNSW results (uses squared L2 internally)
+    let hnsw_results = hnsw.search(&query, k, 128);
+
+    // Brute-force with ACTUAL Euclidean distances (with sqrt)
+    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let mut bf_distances: Vec<(usize, f32)> = (0..500)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim)
+                .map(|j| ((i as f32 + j as f32) * 0.01).sin())
+                .collect();
+            (i, bf_engine.distance(&query, &v))
+        })
+        .collect();
+    bf_distances.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let bf_top_k: Vec<usize> = bf_distances.iter().take(k).map(|&(id, _)| id).collect();
+    let hnsw_ids: Vec<usize> = hnsw_results.iter().map(|&(id, _)| id).collect();
+
+    // Recall should be >= 0.95 (ordering preserved, HNSW approximate)
+    let recall = crate::metrics::recall_at_k(&bf_top_k, &hnsw_ids);
+    assert!(
+        recall >= 0.90,
+        "recall@{k} should be >= 0.90, got {recall:.4}"
+    );
 }

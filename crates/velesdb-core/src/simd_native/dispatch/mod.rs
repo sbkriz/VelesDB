@@ -223,12 +223,32 @@ impl DistanceEngine {
         self.dispatch(self.squared_l2_fn, a, b)
     }
 
-    /// Computes Euclidean distance.
+    /// Computes Euclidean distance (includes sqrt).
+    ///
+    /// Returns `sqrt(sum((a_i - b_i)^2))`. Used by brute-force search and
+    /// public API paths where the actual Euclidean distance is needed.
     #[allow(clippy::inline_always)]
     #[inline(always)]
     #[must_use]
     pub fn euclidean(&self, a: &[f32], b: &[f32]) -> f32 {
         self.squared_l2(a, b).sqrt()
+    }
+
+    /// Computes squared Euclidean distance (no sqrt).
+    ///
+    /// Equivalent to [`squared_l2_native()`] -- exists for semantic clarity
+    /// at call sites that emphasize the "Euclidean without sqrt" intent.
+    ///
+    /// Returns `sum((a_i - b_i)^2)`. Used by HNSW graph traversal where
+    /// only ordering matters and sqrt can be deferred to the final results,
+    /// saving one `f32::sqrt()` per distance computation in the hot loop.
+    ///
+    /// [`squared_l2_native()`]: super::dispatch::squared_l2_native
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    #[must_use]
+    pub fn euclidean_squared(&self, a: &[f32], b: &[f32]) -> f32 {
+        self.dispatch(self.squared_l2_fn, a, b)
     }
 
     /// Computes cosine similarity with the pre-resolved kernel.

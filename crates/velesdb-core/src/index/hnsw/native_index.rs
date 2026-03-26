@@ -500,8 +500,12 @@ impl NativeHnswIndex {
             .par_iter()
             .filter_map(|(idx, vec)| {
                 let id = self.mappings.get_id(*idx)?;
-                let distance = inner.compute_distance(query, vec);
-                Some(ScoredResult::new(id, distance))
+                let raw_distance = inner.compute_distance(query, vec);
+                // Reason: compute_distance returns squared L2 for Euclidean
+                // (CachedSimdDistance optimization). Apply transform_score to
+                // restore actual Euclidean distance for user-visible scores.
+                let score = inner.transform_score(raw_distance);
+                Some(ScoredResult::new(id, score))
             })
             .collect();
 

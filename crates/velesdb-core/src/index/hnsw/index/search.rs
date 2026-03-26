@@ -49,6 +49,18 @@ impl HnswIndex {
     /// Computes exact SIMD distance between query and vector based on metric.
     ///
     /// This helper eliminates code duplication across search methods.
+    ///
+    /// # Invariant
+    ///
+    /// This method intentionally uses metric-specific `simd_native` functions
+    /// (e.g. `euclidean_native` which includes sqrt) rather than the HNSW inner
+    /// engine's `compute_distance()` (which returns squared L2 for Euclidean
+    /// via `CachedSimdDistance`). This ensures reranking scores in
+    /// `rerank_candidates_simd` are already in the user-visible metric space
+    /// and do not require a subsequent `transform_score()` call. Changing this
+    /// to use the inner engine's `compute_distance()` would produce squared L2
+    /// scores that break reranking sort order against `transform_score`-applied
+    /// HNSW results.
     #[inline]
     pub(crate) fn compute_distance(&self, query: &[f32], vector: &[f32]) -> f32 {
         match self.metric {
