@@ -5,13 +5,96 @@ use super::super::layer::NodeId;
 use super::super::ordered_float::OrderedFloat;
 use super::NativeHnsw;
 use crate::perf_optimizations::ContiguousVectors;
-use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::sync::atomic::Ordering;
+
+// =============================================================================
+// BitVecVisited — compact visited-node tracker (Issue #420, Component 2)
+// =============================================================================
+
+/// Compact visited-node tracker using one bit per node ID.
+///
+/// For 10K nodes this uses 1.25 KB (fits in L1 cache), compared to
+/// ~80 KB for `FxHashSet<usize>`. The bitset is stored as `Vec<u64>`
+/// for efficient 64-bit word operations.
+///
+/// # Usage
+///
+/// ```text
+/// let mut visited = BitVecVisited::with_capacity(10_000);
+/// visited.insert(42);
+/// assert!(visited.contains(42));
+/// visited.clear();     // O(n/64) memset, preserves allocation
+/// ```
+#[derive(Default)]
+pub(crate) struct BitVecVisited {
+    /// Each bit at position `i` indicates whether node `i` has been visited.
+    words: Vec<u64>,
+}
+
+impl BitVecVisited {
+    /// Creates a new `BitVecVisited` with enough capacity for node IDs in `[0, capacity)`.
+    ///
+    /// All bits are initially unset (not visited).
+    #[inline]
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        let word_count = capacity.div_ceil(64);
+        Self {
+            words: vec![0_u64; word_count],
+        }
+    }
+
+    /// Returns `true` if the given node ID has been marked as visited.
+    ///
+    /// Returns `false` for IDs beyond the current capacity (no panic).
+    #[inline]
+    pub(crate) fn contains(&self, id: usize) -> bool {
+        let word_idx = id / 64;
+        let bit_idx = id % 64;
+        self.words
+            .get(word_idx)
+            .is_some_and(|word| word & (1_u64 << bit_idx) != 0)
+    }
+
+    /// Marks a node ID as visited.
+    ///
+    /// Returns `true` if the node was **not** previously visited (newly inserted),
+    /// matching the `HashSet::insert` contract for drop-in replacement.
+    ///
+    /// Grows the internal storage if `id` exceeds the current capacity.
+    #[inline]
+    pub(crate) fn insert(&mut self, id: usize) -> bool {
+        self.ensure_capacity(id);
+        let word_idx = id / 64;
+        let bit_idx = id % 64;
+        let mask = 1_u64 << bit_idx;
+        let was_unset = self.words[word_idx] & mask == 0;
+        self.words[word_idx] |= mask;
+        was_unset
+    }
+
+    /// Resets all bits to zero without deallocating.
+    ///
+    /// Uses `fill(0)` which compiles to a single `memset` — O(n/64)
+    /// and far cheaper than dropping and reallocating.
+    #[inline]
+    pub(crate) fn clear(&mut self) {
+        self.words.fill(0);
+    }
+
+    /// Grows the internal storage so that `id` fits, if it does not already.
+    #[inline]
+    fn ensure_capacity(&mut self, id: usize) {
+        let required = id / 64 + 1;
+        if required > self.words.len() {
+            self.words.resize(required, 0);
+        }
+    }
+}
 
 /// Returns whether prefetch hints should be used for vectors of the given dimension.
 ///
@@ -23,26 +106,44 @@ fn should_prefetch(dimension: usize) -> bool {
     vector_bytes >= 2 * crate::simd_native::L2_CACHE_LINE_BYTES
 }
 
-// Thread-local pool of reusable visited sets to avoid repeated allocations
-// during batch HNSW searches. Each thread keeps up to 4 sets.
+/// Maximum number of `BitVecVisited` instances retained per thread.
+const VISITED_POOL_MAX: usize = 4;
+
+// Thread-local pool of reusable visited bitsets to avoid repeated allocations
+// during batch HNSW searches. Each thread keeps up to `VISITED_POOL_MAX` bitsets.
 thread_local! {
-    static VISITED_POOL: RefCell<Vec<FxHashSet<usize>>> = const { RefCell::new(Vec::new()) };
+    static VISITED_POOL: RefCell<Vec<BitVecVisited>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Borrows a visited set from the thread-local pool, or creates a new one.
+/// Borrows a visited bitset from the thread-local pool, or creates a new one.
+///
+/// `capacity_hint` is the current node count — the returned bitset is
+/// guaranteed to hold at least that many bits. Pooled bitsets are grown
+/// to `capacity_hint` if the index has expanded since they were returned.
 #[inline]
-fn acquire_visited_set() -> FxHashSet<usize> {
-    VISITED_POOL.with(|pool| pool.borrow_mut().pop().unwrap_or_default())
+fn acquire_visited_set(capacity_hint: usize) -> BitVecVisited {
+    VISITED_POOL.with(|pool| {
+        let mut set = pool
+            .borrow_mut()
+            .pop()
+            .unwrap_or_else(|| BitVecVisited::with_capacity(capacity_hint));
+        // Ensure pooled bitsets are large enough for the current index size.
+        if capacity_hint > 0 {
+            set.ensure_capacity(capacity_hint.saturating_sub(1));
+        }
+        set
+    })
 }
 
-/// Returns a visited set to the thread-local pool after clearing it.
-/// Keeps at most 4 sets per thread to bound memory usage.
+/// Returns a visited bitset to the thread-local pool after clearing it.
+///
+/// Keeps at most [`VISITED_POOL_MAX`] bitsets per thread to bound memory usage.
 #[inline]
-fn release_visited_set(mut set: FxHashSet<usize>) {
+fn release_visited_set(mut set: BitVecVisited) {
     set.clear();
     VISITED_POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
-        if pool.len() < 4 {
+        if pool.len() < VISITED_POOL_MAX {
             pool.push(set);
         }
     });
@@ -60,17 +161,20 @@ fn release_visited_set(mut set: FxHashSet<usize>) {
 struct SearchState {
     candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>>,
     results: BinaryHeap<(OrderedFloat, NodeId)>,
-    visited: FxHashSet<usize>,
+    visited: BitVecVisited,
     stagnation_count: usize,
 }
 
 impl SearchState {
-    /// Creates a fresh search state, acquiring a visited set from the pool.
-    fn new() -> Self {
+    /// Creates a fresh search state, acquiring a visited bitset from the pool.
+    ///
+    /// `capacity_hint` is the current node count of the HNSW index, used
+    /// to size the bitset so most inserts avoid reallocation.
+    fn new(capacity_hint: usize) -> Self {
         Self {
             candidates: BinaryHeap::new(),
             results: BinaryHeap::new(),
-            visited: acquire_visited_set(),
+            visited: acquire_visited_set(capacity_hint),
             stagnation_count: 0,
         }
     }
@@ -114,11 +218,12 @@ impl SearchState {
     /// to efficiently return only the top-k nearest results in O(n + k log k)
     /// instead of O(n log n).
     ///
-    /// Releases the visited set back to the thread-local pool.
-    fn into_sorted_results(self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
-        release_visited_set(self.visited);
+    /// The visited set is released back to the thread-local pool by the
+    /// [`Drop`] impl when `self` goes out of scope.
+    fn into_sorted_results(mut self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
+        let results = std::mem::take(&mut self.results);
         let mut result_vec: Vec<(NodeId, f32)> =
-            self.results.into_iter().map(|(d, n)| (n, d.0)).collect();
+            results.into_iter().map(|(d, n)| (n, d.0)).collect();
         let cmp = |a: &(NodeId, f32), b: &(NodeId, f32)| a.1.total_cmp(&b.1);
         if let Some(k) = limit {
             crate::index::top_k_partial_sort(&mut result_vec, k, cmp);
@@ -129,11 +234,23 @@ impl SearchState {
     }
 }
 
+impl Drop for SearchState {
+    fn drop(&mut self) {
+        // Return the visited set to the pool if it has capacity.
+        // An empty bitset (from Default after `into_sorted_results` partial
+        // move, or from a never-used state) is skipped as a no-op.
+        let visited = std::mem::take(&mut self.visited);
+        if !visited.words.is_empty() {
+            release_visited_set(visited);
+        }
+    }
+}
+
 /// Gathers vector slices for unvisited neighbors, marking them visited.
 #[inline]
 fn gather_unvisited_neighbors<'a>(
     neighbors: &[NodeId],
-    visited: &mut FxHashSet<usize>,
+    visited: &mut BitVecVisited,
     vectors: &'a ContiguousVectors,
 ) -> SmallVec<[(NodeId, &'a [f32]); 32]> {
     let mut batch = SmallVec::new();
@@ -431,7 +548,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         stagnation_limit: usize,
         result_limit: Option<usize>,
     ) -> Vec<(NodeId, f32)> {
-        let mut state = SearchState::new();
+        let capacity_hint = self.count.load(Ordering::Relaxed);
+        let mut state = SearchState::new(capacity_hint);
 
         self.with_vectors_and_layers_read(|vectors, layers| {
             // Initialize entry points
@@ -502,8 +620,8 @@ mod search_refactor_tests {
     use super::super::super::layer::NodeId;
     use super::super::super::ordered_float::OrderedFloat;
     use super::super::NativeHnsw;
-    use super::SearchState;
     use super::{gather_unvisited_neighbors, process_batch_results};
+    use super::{BitVecVisited, SearchState};
     use crate::distance::DistanceMetric;
     use rustc_hash::FxHashSet;
     use smallvec::SmallVec;
@@ -533,7 +651,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_search_state_new_and_push() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Push three candidates with known distances
         state.push_candidate(10, 0.5);
@@ -557,9 +675,9 @@ mod search_refactor_tests {
         assert!((furthest_dist - 0.9).abs() < f32::EPSILON);
 
         // Visited set should contain all three
-        assert!(state.visited.contains(&10));
-        assert!(state.visited.contains(&20));
-        assert!(state.visited.contains(&30));
+        assert!(state.visited.contains(10));
+        assert!(state.visited.contains(20));
+        assert!(state.visited.contains(30));
     }
 
     // =========================================================================
@@ -568,7 +686,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_search_state_should_terminate() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Fill ef=3 results with distances 0.1, 0.3, 0.5
         state.push_candidate(1, 0.1);
@@ -592,7 +710,7 @@ mod search_refactor_tests {
 
         // c_dist=0.6 > furthest but results.len() < ef => should NOT terminate
         // (simulate by creating state with only 2 results)
-        let mut state2 = SearchState::new();
+        let mut state2 = SearchState::new(0);
         state2.push_candidate(1, 0.1);
         state2.push_candidate(2, 0.3);
         assert!(
@@ -607,7 +725,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_search_state_stagnation() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Fill ef=2 results
         state.push_candidate(1, 0.1);
@@ -647,7 +765,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_search_state_into_sorted_results() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Insert results in non-sorted order
         state.push_candidate(10, 0.7);
@@ -693,7 +811,7 @@ mod search_refactor_tests {
         }
 
         let neighbors: Vec<NodeId> = vec![0, 1, 2, 3, 4];
-        let mut visited = FxHashSet::default();
+        let mut visited = BitVecVisited::with_capacity(5);
         // Pre-mark nodes 1 and 3 as visited
         visited.insert(1);
         visited.insert(3);
@@ -726,14 +844,14 @@ mod search_refactor_tests {
         }
 
         let neighbors: Vec<NodeId> = vec![0, 1, 2];
-        let mut visited = FxHashSet::default();
+        let mut visited = BitVecVisited::with_capacity(3);
 
         let _unvisited = gather_unvisited_neighbors(&neighbors, &mut visited, &vectors);
 
         // All returned neighbors should now be in the visited set
-        assert!(visited.contains(&0), "node 0 should be marked visited");
-        assert!(visited.contains(&1), "node 1 should be marked visited");
-        assert!(visited.contains(&2), "node 2 should be marked visited");
+        assert!(visited.contains(0), "node 0 should be marked visited");
+        assert!(visited.contains(1), "node 1 should be marked visited");
+        assert!(visited.contains(2), "node 2 should be marked visited");
     }
 
     // =========================================================================
@@ -742,7 +860,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_process_batch_results_updates_heaps() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
         let ef = 10;
 
         // Simulate a batch of 3 neighbors with their pre-computed distances
@@ -780,7 +898,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_process_batch_results_evicts_furthest_when_full() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
         let ef = 3;
 
         // Pre-fill with 3 results (ef is full)
@@ -906,7 +1024,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_into_sorted_results_with_limit() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Insert 10 results with known distances
         for i in 0..10_usize {
@@ -951,7 +1069,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_into_sorted_results_without_limit() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Insert 10 results
         for i in 0..10_usize {
@@ -977,7 +1095,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_into_sorted_results_limit_greater_than_results() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         // Insert only 5 results
         for i in 0..5_usize {
@@ -1007,7 +1125,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_into_sorted_results_limit_zero() {
-        let mut state = SearchState::new();
+        let mut state = SearchState::new(0);
 
         state.push_candidate(0, 0.5);
         state.push_candidate(1, 0.1);
@@ -1020,7 +1138,7 @@ mod search_refactor_tests {
 
     #[test]
     fn test_into_sorted_results_empty_state() {
-        let state = SearchState::new();
+        let state = SearchState::new(0);
 
         // None limit on empty state
         let sorted = state.into_sorted_results(None);
@@ -1029,13 +1147,177 @@ mod search_refactor_tests {
             "empty state with None should return empty vec"
         );
 
-        let state2 = SearchState::new();
+        let state2 = SearchState::new(0);
 
         // Some limit on empty state
         let sorted2 = state2.into_sorted_results(Some(5));
         assert!(
             sorted2.is_empty(),
             "empty state with Some(5) should return empty vec"
+        );
+    }
+
+    // =========================================================================
+    // 11. BitVecVisited unit tests (Issue #420, Component 2)
+    // =========================================================================
+
+    #[test]
+    fn test_bitvec_visited_insert_and_contains() {
+        let mut visited = BitVecVisited::with_capacity(1000);
+        assert!(!visited.contains(42));
+        visited.insert(42);
+        assert!(visited.contains(42));
+        assert!(!visited.contains(43));
+    }
+
+    #[test]
+    fn test_bitvec_visited_insert_returns_newly_inserted() {
+        let mut visited = BitVecVisited::with_capacity(100);
+        // First insert returns true (newly inserted)
+        assert!(visited.insert(10));
+        // Second insert of same ID returns false (already present)
+        assert!(!visited.insert(10));
+        // Different ID returns true
+        assert!(visited.insert(11));
+    }
+
+    #[test]
+    fn test_bitvec_visited_clear_resets() {
+        let mut visited = BitVecVisited::with_capacity(100);
+        visited.insert(50);
+        assert!(visited.contains(50));
+        visited.clear();
+        assert!(!visited.contains(50));
+    }
+
+    #[test]
+    fn test_bitvec_visited_clear_preserves_capacity() {
+        let mut visited = BitVecVisited::with_capacity(1000);
+        let words_before = visited.words.len();
+        visited.insert(999);
+        visited.clear();
+        // Capacity (word count) must not shrink after clear
+        assert_eq!(visited.words.len(), words_before);
+    }
+
+    #[test]
+    fn test_bitvec_visited_out_of_bounds_grows() {
+        let mut visited = BitVecVisited::with_capacity(10);
+        // Inserting beyond capacity should grow, not panic
+        visited.insert(100);
+        assert!(visited.contains(100));
+        assert!(!visited.contains(99));
+    }
+
+    #[test]
+    fn test_bitvec_visited_zero_capacity() {
+        let mut visited = BitVecVisited::with_capacity(0);
+        // Should handle zero capacity gracefully
+        assert!(!visited.contains(0));
+        visited.insert(0);
+        assert!(visited.contains(0));
+    }
+
+    #[test]
+    fn test_bitvec_visited_word_boundary() {
+        let mut visited = BitVecVisited::with_capacity(128);
+        // Test around the 64-bit word boundary
+        for id in [0, 1, 62, 63, 64, 65, 126, 127] {
+            visited.insert(id);
+        }
+        for id in [0, 1, 62, 63, 64, 65, 126, 127] {
+            assert!(visited.contains(id), "should contain {id}");
+        }
+        // IDs NOT inserted should be absent
+        for id in [2, 32, 66, 100] {
+            assert!(!visited.contains(id), "should not contain {id}");
+        }
+    }
+
+    #[test]
+    fn test_bitvec_visited_identical_to_hashset() {
+        // Same sequence of operations must produce same contains() results
+        let mut bv = BitVecVisited::with_capacity(10_000);
+        let mut hs = FxHashSet::default();
+        let ids = [0, 1, 42, 999, 5000, 9999, 7, 128, 255, 256, 1023];
+        for &id in &ids {
+            let bv_new = bv.insert(id);
+            let hs_new = hs.insert(id);
+            assert_eq!(
+                bv_new, hs_new,
+                "insert return mismatch at {id}: bv={bv_new}, hs={hs_new}"
+            );
+        }
+        for i in 0..10_000 {
+            assert_eq!(bv.contains(i), hs.contains(&i), "contains mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn test_bitvec_visited_recall_regression() {
+        // End-to-end recall test: build HNSW, search, verify >= 0.95
+        let dim = 32;
+        let n = 500;
+        let k = 10;
+        let ef_search = 128;
+        let n_queries = 20;
+
+        let engine = SimdDistance::new(DistanceMetric::Euclidean);
+        let hnsw = NativeHnsw::new(engine, 16, 200, n);
+
+        let vectors: Vec<Vec<f32>> = (0..n)
+            .map(|i| {
+                (0..dim)
+                    .map(|j| ((i * dim + j) as f32 * 0.001).sin())
+                    .collect()
+            })
+            .collect();
+
+        for v in &vectors {
+            hnsw.insert(v).expect("insert should succeed");
+        }
+
+        let mut total_recall = 0.0_f64;
+        for q_idx in 0..n_queries {
+            let query = &vectors[q_idx * (n / n_queries)];
+
+            let hnsw_ids: Vec<NodeId> = hnsw
+                .search(query, k, ef_search)
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+
+            // Brute-force ground truth
+            let mut brute: Vec<(NodeId, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let dist: f32 = v
+                        .iter()
+                        .zip(query.iter())
+                        .map(|(a, b)| (a - b) * (a - b))
+                        .sum();
+                    (i, dist)
+                })
+                .collect();
+            brute.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let gt: Vec<NodeId> = brute.iter().take(k).map(|(id, _)| *id).collect();
+
+            let hits = hnsw_ids.iter().filter(|id| gt.contains(id)).count();
+            #[allow(clippy::cast_precision_loss)]
+            {
+                total_recall += hits as f64 / k as f64;
+            }
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let avg_recall = total_recall / n_queries as f64;
+
+        assert!(
+            avg_recall >= 0.95,
+            "BitVecVisited recall@{k} must be >= 95% (got {:.1}%); \
+             bitvec visited set regression detected",
+            avg_recall * 100.0,
         );
     }
 }
