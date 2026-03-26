@@ -2,7 +2,7 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
-use crate::index::hnsw::upsert::UpsertResult;
+use crate::index::hnsw::upsert::{self, UpsertResult};
 use crate::scored_result::ScoredResult;
 use rayon::prelude::*;
 
@@ -23,6 +23,13 @@ impl HnswIndex {
     /// Returns a [`PreparedBatch`] containing insertion data and rollback
     /// information. Existing IDs are replaced (upsert semantics): the old
     /// mapping is updated and stale vector data is removed.
+    ///
+    /// # Phase Ordering Invariant
+    ///
+    /// Dimension validation runs to completion **before** any call to
+    /// `upsert_mapping_batch`. This prevents orphaned mappings when a
+    /// dimension mismatch panic would otherwise leave partially-mutated
+    /// state. See `docs/SOUNDNESS.md` "HNSW Batch Insertion Ordering".
     ///
     /// # Performance
     ///
@@ -49,11 +56,18 @@ impl HnswIndex {
             );
         }
 
+        let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
+        let upsert_results = upsert::upsert_mapping_batch(
+            &self.mappings,
+            &self.vectors,
+            self.enable_vector_storage,
+            &ids,
+        );
+
         let mut to_insert = Vec::with_capacity(items.len());
         let mut rollback_info = Vec::with_capacity(items.len());
 
-        for (id, vector) in items {
-            let result = self.upsert_mapping(id);
+        for ((id, vector), result) in items.into_iter().zip(upsert_results) {
             to_insert.push((result.idx, vector));
             rollback_info.push((id, result));
         }
@@ -68,6 +82,13 @@ impl HnswIndex {
     ///
     /// This method is optimized for bulk insertions and can significantly
     /// reduce indexing time on multi-core systems.
+    ///
+    /// # Ordering
+    ///
+    /// The pipeline executes: validate dims -> register mappings -> graph insert
+    /// -> sidecar store. On graph failure, rollback undoes mappings in reverse
+    /// order. Because `parallel_insert` uses rayon, the HNSW graph construction
+    /// order is non-deterministic across runs (see v1.7.2 CHANGELOG note).
     ///
     /// # Arguments
     ///
@@ -119,72 +140,62 @@ impl HnswIndex {
             .collect();
 
         // Insert into HNSW graph before storing vectors to avoid orphaned sidecar data.
-        if let Err(e) = self.inner.read().parallel_insert(&refs_for_hnsw) {
-            tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
-            // Reverse order: undo last upsert first so duplicate-ID chains
-            // restore correctly (each rollback depends on the previous state).
-            for (id, result) in batch.rollback_info.iter().rev() {
-                self.rollback_upsert(*id, result);
+        let assigned_ids = match self.inner.read().parallel_insert(&refs_for_hnsw) {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
+                // Reverse order: undo last upsert first so duplicate-ID chains
+                // restore correctly (each rollback depends on the previous state).
+                for (id, result) in batch.rollback_info.iter().rev() {
+                    self.rollback_upsert(*id, result);
+                }
+                return 0;
             }
-            return 0;
-        }
+        };
+
+        // Reconcile mappings: the graph may have assigned different node IDs
+        // than the indices pre-registered by upsert_mapping_batch. Fix any
+        // mismatches following the same pattern as insert_and_correct_mapping.
+        let storage_ids =
+            Self::reconcile_batch_mappings(&self.mappings, &batch.rollback_info, &assigned_ids);
 
         if self.enable_vector_storage {
-            batch.to_insert.par_iter().for_each(|(idx, vec)| {
-                self.vectors.insert(*idx, vec);
-            });
+            batch
+                .to_insert
+                .par_iter()
+                .zip(storage_ids.par_iter())
+                .for_each(|((_, vec), idx)| {
+                    self.vectors.insert(*idx, vec);
+                });
         }
 
         count
     }
 
-    /// Sequential batch insertion (deprecated in favor of `insert_batch_parallel`).
+    /// Reconciles pre-registered mapping indices with graph-assigned node IDs.
     ///
-    /// Each item is processed individually (upsert_mapping + graph insert +
-    /// rollback), identical to calling `VectorIndex::insert` in a loop.
-    /// This avoids the eager-batch-mapping issues that arise with duplicate IDs.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any vector has a dimension different from the index dimension.
-    ///
-    /// # Performance
-    ///
-    /// Significantly slower than `insert_batch_parallel`. Use only if you need
-    /// deterministic insertion order for debugging.
-    #[deprecated(
-        since = "0.8.5",
-        note = "Use insert_batch_parallel instead - 15x faster (29k/s vs 1.9k/s)"
-    )]
-    pub fn insert_batch_sequential<'a, I>(&self, vectors: I) -> usize
-    where
-        I: IntoIterator<Item = (u64, &'a [f32])>,
-    {
-        let mut inserted = 0;
-
-        for (id, vector) in vectors {
-            assert_eq!(
-                vector.len(),
-                self.dimension,
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            );
-
-            let result = self.upsert_mapping(id);
-
-            if let Err(e) = self.inner.write().insert((vector, result.idx)) {
-                tracing::error!("insert_batch_sequential: insert failed for id={id}: {e}");
-                self.rollback_upsert(id, &result);
-                continue;
+    /// For each item, if the graph-assigned ID differs from the pre-registered
+    /// index, removes the stale reverse mapping and restores the correct one.
+    /// Returns the authoritative storage index for each item.
+    fn reconcile_batch_mappings(
+        mappings: &crate::index::hnsw::sharded_mappings::ShardedMappings,
+        rollback_info: &[(u64, UpsertResult)],
+        assigned_ids: &[usize],
+    ) -> Vec<usize> {
+        let mut storage_ids = Vec::with_capacity(assigned_ids.len());
+        for (assigned_id, (ext_id, result)) in assigned_ids.iter().zip(rollback_info) {
+            if *assigned_id == result.idx {
+                storage_ids.push(result.idx);
+            } else {
+                // Graph assigned a different node ID than upsert_mapping expected.
+                // Remove the stale reverse mapping (result.idx -> ext_id) and
+                // establish the correct mapping (ext_id <-> assigned_id).
+                mappings.remove_reverse(result.idx);
+                mappings.restore(*ext_id, *assigned_id);
+                storage_ids.push(*assigned_id);
             }
-            if self.enable_vector_storage {
-                self.vectors.insert(result.idx, vector);
-            }
-            inserted += 1;
         }
-
-        inserted
+        storage_ids
     }
 
     /// Performs batch search for multiple queries in parallel.

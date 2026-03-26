@@ -578,65 +578,14 @@ fn test_hnsw_insert_batch_parallel_upserts_duplicates() {
     assert_eq!(index.len(), 2);
 }
 
-// =========================================================================
-// QW-3: insert_batch_sequential Tests (deprecated - kept for backward compat)
-// =========================================================================
-
 #[test]
-#[allow(deprecated)]
-fn test_hnsw_insert_batch_sequential() {
-    // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    let vectors: Vec<(u64, Vec<f32>)> = vec![
-        (1, vec![1.0, 0.0, 0.0]),
-        (2, vec![0.0, 1.0, 0.0]),
-        (3, vec![0.0, 0.0, 1.0]),
-        (4, vec![0.5, 0.5, 0.0]),
-        (5, vec![0.5, 0.0, 0.5]),
-    ];
-
-    // Act
-    let inserted = index.insert_batch_sequential(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
-
-    // Assert
-    assert_eq!(inserted, 5);
-    assert_eq!(index.len(), 5);
-
-    // Verify search works
-    let results = index.search(&[1.0, 0.0, 0.0], 3);
-    assert_eq!(results.len(), 3);
-    let result_ids: Vec<u64> = results.iter().map(|r| r.id).collect();
-    assert!(result_ids.contains(&1), "ID 1 should be in top 3 results");
-}
-
-#[test]
-#[allow(deprecated)]
-fn test_hnsw_insert_batch_sequential_upserts_duplicates() {
-    // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    index.insert(1, &[1.0, 0.0, 0.0]);
-
-    // Act - Insert batch with existing ID (upsert) + new ID
-    let vectors: Vec<(u64, Vec<f32>)> = vec![
-        (1, vec![0.0, 1.0, 0.0]), // Upsert: updates existing id=1
-        (2, vec![0.0, 0.0, 1.0]), // New
-    ];
-    let inserted = index.insert_batch_sequential(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
-
-    // Assert - Both vectors processed (1 upserted + 1 new)
-    assert_eq!(inserted, 2);
-    assert_eq!(index.len(), 2);
-}
-
-#[test]
-#[allow(deprecated)]
-fn test_hnsw_insert_batch_sequential_empty() {
+fn test_hnsw_insert_batch_parallel_empty() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, &[f32])> = vec![];
 
     // Act
-    let inserted = index.insert_batch_sequential(vectors);
+    let inserted = index.insert_batch_parallel(vectors);
 
     // Assert
     assert_eq!(inserted, 0);
@@ -644,15 +593,14 @@ fn test_hnsw_insert_batch_sequential_empty() {
 }
 
 #[test]
-#[allow(deprecated)]
 #[should_panic(expected = "Vector dimension mismatch")]
-fn test_hnsw_insert_batch_sequential_wrong_dimension() {
+fn test_hnsw_insert_batch_parallel_wrong_dimension() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, &[f32])> = vec![(1, &[1.0, 0.0])]; // Wrong dim
 
     // Act - should panic
-    index.insert_batch_sequential(vectors);
+    index.insert_batch_parallel(vectors);
 }
 
 // =========================================================================
@@ -2686,4 +2634,251 @@ fn test_repeated_upsert_accumulates_tombstones() {
         results[0].id, 1,
         "Search must return the latest upserted vector"
     );
+}
+
+// -------------------------------------------------------------------------
+// BUG-0002: insert_and_correct_mapping divergence correction
+// -------------------------------------------------------------------------
+
+/// Forces the HNSW graph node counter ahead of `ShardedMappings::next_idx`
+/// to simulate the concurrent insert divergence that BUG-0002 describes.
+///
+/// When `self.inner.read()` allows concurrent inserts, two threads can
+/// allocate mapping indices in one order but graph node IDs in another.
+/// `insert_and_correct_mapping` detects this and calls `remove_reverse` +
+/// `restore` to fix the bidirectional mapping.
+#[test]
+fn test_insert_and_correct_mapping_fixes_diverged_idx() {
+    let dim = 4;
+    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+
+    // Phase 1: normal insert so both counters advance to 1
+    index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(index.len(), 1);
+    assert_eq!(index.mappings.get_idx(100), Some(0));
+
+    // Phase 2: advance graph counter WITHOUT advancing mapping counter.
+    // This simulates a concurrent thread that got into the graph first.
+    let ghost_vec = [0.0, 1.0, 0.0, 0.0];
+    let ghost_node_id = index.inner.read().insert((&ghost_vec, 999)).unwrap();
+    assert_eq!(ghost_node_id, 1, "Graph should assign node_id=1");
+
+    // Phase 3: upsert_mapping for id=200 — mappings allocates idx=1
+    let result = index.upsert_mapping(200);
+    assert_eq!(result.idx, 1, "Mapping should allocate idx=1");
+    assert_eq!(result.old_idx, None, "New ID has no old mapping");
+
+    // Phase 4: insert_and_correct_mapping — graph assigns node_id=2 (not 1)
+    let vector = [0.0, 0.0, 1.0, 0.0];
+    let success = index.insert_and_correct_mapping(200, &vector, &result);
+    assert!(success, "insert_and_correct_mapping should succeed");
+
+    // Phase 5: verify mapping correction
+    // The graph assigned node_id=2, so mapping must point to 2, not 1
+    let corrected_idx = index.mappings.get_idx(200).unwrap();
+    assert_eq!(
+        corrected_idx, 2,
+        "Mapping must be corrected to actual graph node_id"
+    );
+    assert_eq!(
+        index.mappings.get_id(2),
+        Some(200),
+        "Reverse mapping must point to id=200"
+    );
+    // Stale reverse mapping for idx=1 must be gone
+    assert_eq!(
+        index.mappings.get_id(1),
+        None,
+        "Stale reverse mapping for original idx must be removed"
+    );
+}
+
+/// Verifies that search still returns correct results after the
+/// divergence correction path has been exercised.
+#[test]
+fn test_search_works_after_mapping_correction() {
+    let dim = 4;
+    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+
+    // Insert a baseline vector normally
+    index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
+
+    // Advance graph counter with a ghost insert
+    let ghost_vec = [0.5, 0.5, 0.0, 0.0];
+    index.inner.read().insert((&ghost_vec, 999)).unwrap();
+
+    // Force divergence path for id=200
+    let result = index.upsert_mapping(200);
+    let target = [0.0, 0.0, 0.0, 1.0];
+    index.insert_and_correct_mapping(200, &target, &result);
+
+    // Search for id=200's vector — should find it despite correction
+    let results = index.search(&[0.0, 0.0, 0.0, 1.0], 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].id, 200,
+        "Search must find the vector after mapping correction"
+    );
+}
+
+/// When `assigned_id == result.idx` (no divergence), the happy path
+/// should leave mappings unchanged.
+#[test]
+fn test_insert_and_correct_mapping_no_divergence_happy_path() {
+    let dim = 4;
+    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+
+    // Normal insert: no divergence expected
+    let result = index.upsert_mapping(42);
+    assert_eq!(result.idx, 0);
+
+    let vector = [1.0, 0.0, 0.0, 0.0];
+    let success = index.insert_and_correct_mapping(42, &vector, &result);
+    assert!(success, "Happy path should succeed");
+
+    // Mapping should be exactly as allocated — no correction needed
+    assert_eq!(index.mappings.get_idx(42), Some(0));
+    assert_eq!(index.mappings.get_id(0), Some(42));
+    assert_eq!(index.len(), 1);
+}
+
+// =========================================================================
+// Issue #396: parallel_insert ignores expected idx — mapping reconciliation
+// =========================================================================
+
+/// Regression test: batch insert after single inserts must reconcile mappings.
+///
+/// Single inserts consume graph node IDs, so when a subsequent batch
+/// pre-registers mapping indices, the graph may assign different node IDs.
+/// The reconciliation logic must correct the mappings to match.
+#[test]
+fn test_batch_after_single_insert_mapping_consistency() {
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+
+    // Single-insert 1 vector: consumes graph node 0
+    index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(index.len(), 1);
+
+    // Batch-insert 5 vectors. The mapping layer will pre-register indices
+    // starting from next_idx (1..=5), but the graph may assign node IDs
+    // starting from 1 as well — or they may diverge under races.
+    let batch: Vec<(u64, &[f32])> = vec![
+        (200, &[0.0, 1.0, 0.0, 0.0]),
+        (201, &[0.0, 0.0, 1.0, 0.0]),
+        (202, &[0.0, 0.0, 0.0, 1.0]),
+        (203, &[0.5, 0.5, 0.0, 0.0]),
+        (204, &[0.0, 0.5, 0.5, 0.0]),
+    ];
+    let inserted = index.insert_batch_parallel(batch);
+    assert_eq!(inserted, 5);
+    assert_eq!(index.len(), 6);
+
+    // Every external ID must resolve to a valid internal idx, and that idx
+    // must map back to the same external ID (bidirectional consistency).
+    for &ext_id in &[100u64, 200, 201, 202, 203, 204] {
+        let idx = index.mappings.get_idx(ext_id);
+        assert!(idx.is_some(), "get_idx({ext_id}) must return Some");
+        let reverse = index.mappings.get_id(idx.unwrap());
+        assert_eq!(
+            reverse,
+            Some(ext_id),
+            "Reverse mapping for idx {} must be {ext_id}, got {reverse:?}",
+            idx.unwrap()
+        );
+    }
+
+    // Verify search still returns correct results — the original vector
+    // should be the nearest to itself.
+    let results = index.search(&[1.0, 0.0, 0.0, 0.0], 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 100, "Nearest to [1,0,0,0] must be id=100");
+}
+
+/// Regression test: sidecar vectors stored at graph-assigned IDs.
+///
+/// After reconciliation, vectors in `ShardedVectors` must be stored at
+/// the graph-assigned node IDs (not the pre-registered mapping indices).
+#[test]
+fn test_batch_insert_vector_storage_uses_assigned_ids() {
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+
+    // Pre-populate to create a gap between mapping indices and graph node IDs
+    for i in 0..3u64 {
+        let v = [i as f32, 0.0, 0.0, 0.0];
+        index.insert(i, &v);
+    }
+    assert_eq!(index.len(), 3);
+
+    // Batch-insert 4 vectors
+    let batch: Vec<(u64, &[f32])> = vec![
+        (10, &[10.0, 0.0, 0.0, 0.0]),
+        (11, &[11.0, 0.0, 0.0, 0.0]),
+        (12, &[12.0, 0.0, 0.0, 0.0]),
+        (13, &[13.0, 0.0, 0.0, 0.0]),
+    ];
+    let inserted = index.insert_batch_parallel(batch);
+    assert_eq!(inserted, 4);
+
+    // For each batch-inserted ID, the sidecar vector at the mapped idx
+    // must exist and match the original vector.
+    for ext_id in 10..=13u64 {
+        let idx = index.mappings.get_idx(ext_id).expect("mapping must exist");
+        let stored = index.vectors.get(idx);
+        assert!(
+            stored.is_some(),
+            "ShardedVectors must have a vector at idx {idx} for id {ext_id}"
+        );
+        let expected_first = ext_id as f32;
+        let stored_vec = stored.unwrap();
+        assert!(
+            (stored_vec[0] - expected_first).abs() < f32::EPSILON,
+            "Vector for id {ext_id} at idx {idx}: expected first component {expected_first}, got {}",
+            stored_vec[0]
+        );
+    }
+}
+
+/// Regression test: batch upsert (insert + replace) maintains mapping consistency.
+///
+/// Insert 5 vectors, then batch-upsert 3 of them with new data. The replaced
+/// vectors must have updated mappings and the new graph node IDs must be valid.
+#[test]
+fn test_batch_upsert_mapping_consistency() {
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+
+    // Initial insert of 5 vectors
+    for i in 0..5u64 {
+        index.insert(i, &[i as f32, 0.0, 0.0, 0.0]);
+    }
+    assert_eq!(index.len(), 5);
+
+    // Batch-upsert: update IDs 1, 2, 3 with new vectors
+    let batch: Vec<(u64, &[f32])> = vec![
+        (1, &[100.0, 0.0, 0.0, 0.0]),
+        (2, &[200.0, 0.0, 0.0, 0.0]),
+        (3, &[300.0, 0.0, 0.0, 0.0]),
+    ];
+    let inserted = index.insert_batch_parallel(batch);
+    assert_eq!(inserted, 3);
+    // Still 5 live IDs (3 replaced, not added)
+    assert_eq!(index.len(), 5);
+
+    // Verify all 5 IDs have consistent bidirectional mappings
+    for ext_id in 0..5u64 {
+        let idx = index.mappings.get_idx(ext_id);
+        assert!(idx.is_some(), "get_idx({ext_id}) must return Some");
+        let reverse = index.mappings.get_id(idx.unwrap());
+        assert_eq!(
+            reverse,
+            Some(ext_id),
+            "Reverse mapping for idx {} must be {ext_id}, got {reverse:?}",
+            idx.unwrap()
+        );
+    }
+
+    // The replaced vectors should be searchable with their new values.
+    // Search for [100, 0, 0, 0] — nearest should be id=1.
+    let results = index.search(&[100.0, 0.0, 0.0, 0.0], 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 1, "Nearest to [100,0,0,0] must be id=1");
 }

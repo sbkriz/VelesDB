@@ -90,17 +90,46 @@ npm install @wiscale/velesdb-sdk@^1.7.0
 ```bash
 # Server
 curl http://localhost:8080/health
-# {"status":"ok","version":"1.7.0"}
+# {"status":"ok","version":"1.7.2"}
 
 # CLI
 velesdb-cli --version
-# velesdb-cli 1.7.0
+# velesdb-cli 1.7.2
 
 # Python
 python -c "import velesdb; print(velesdb.__version__)"
-# 1.7.0
+# 1.7.2
 ```
 
 ---
 
-*Documentation VelesDB v1.7.0 — March 2026*
+## v1.7.1 / v1.7.2 Patch Updates
+
+**Time to upgrade: 0 minutes — zero breaking changes.**
+
+### v1.7.1 (2026-03-25)
+
+Security and correctness fixes:
+- Collection name path traversal validation (VELES-034)
+- Crash recovery gap detection for deferred HNSW indexer
+- VelesQL grammar fixes (string escaping, compound queries, NOT IN)
+
+### v1.7.2 (2026-03-25)
+
+Internal performance optimizations (automatic, no configuration needed):
+- **HNSW search partial sort** (#373) — O(ef + k log k) candidate selection instead of O(ef log ef)
+- **Batch insert fast-path** (#375) — eliminates ~14% upsert overhead on pure-insert workloads
+- **Upsert lock contention fix** — `Collection::upsert()` restructured into a 3-phase pipeline (batch storage, per-point secondary updates, batch HNSW insert). Write lock on HNSW index replaced with read lock (internal per-node synchronization was already sufficient). On local benchmarks the throughput gap between `upsert()` and `upsert_bulk()` dropped from ~19x to ~1x.
+
+**Construction order note**: Both `upsert()` and `upsert_bulk()` now route
+through `insert_batch_parallel`, which uses rayon for parallel HNSW graph
+construction. The resulting graph topology is non-deterministic across runs
+for the same input. This does not affect search correctness or recall. If
+byte-identical index files are required (reproducible snapshots), the
+deprecated `insert_batch_sequential` path remains available.
+
+No API changes, no configuration changes, no data migration. Simply update your dependency version.
+
+---
+
+*Documentation VelesDB v1.7.x — March 2026*

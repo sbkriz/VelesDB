@@ -69,20 +69,174 @@ impl Collection {
 
     /// Stores vectors, payloads, and indexes for a batch of points.
     ///
+    /// Three-phase pipeline to minimize lock contention and I/O:
+    /// 1. Batch storage: `store_batch()` for vectors + payloads (1 fsync each)
+    /// 2. Per-point updates: secondary indexes, quantization, text, sparse
+    /// 3. Batch HNSW insert via `bulk_index_or_defer()`
+    ///
+    /// # Crash Recovery
+    ///
+    /// A crash between Phase 1 and Phase 3 leaves vectors durably stored but
+    /// absent from the HNSW index. On the next `Collection::open()`, gap
+    /// detection compares storage IDs against HNSW mappings and re-indexes
+    /// any missing vectors. The recovery window is bounded by one batch.
+    ///
     /// Returns buffered sparse vectors for deferred insertion.
     fn upsert_storage_and_index(
         &self,
         points: &[Point],
         storage_mode: StorageMode,
     ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
-        let mut vector_storage = self.vector_storage.write();
-        let mut payload_storage = self.payload_storage.write();
-        let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
+        // Phase 1: Batch storage under write locks (1 fsync per storage)
+        let old_payloads = self.batch_store_all(points)?;
 
+        // Phase 2: Per-point updates (no storage locks held)
+        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode);
+
+        // Phase 3: Batch HNSW insert
+        let vector_refs: Vec<(u64, &[f32])> =
+            points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
+        self.bulk_index_or_defer(vector_refs);
+
+        Ok(sparse_batch)
+    }
+
+    /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
+    ///
+    /// Pre-collects old payloads (needed for secondary index updates),
+    /// then writes all vectors and payloads in single batch calls (1 fsync each).
+    ///
+    /// Deduplicates intra-batch duplicate IDs using last-writer-wins semantics:
+    /// only the final occurrence per ID is written to the WAL, avoiding wasteful
+    /// intermediate entries that would bloat the log and slow replay.
+    ///
+    /// After this method returns, vectors and payloads are durable on disk.
+    /// A crash before Phase 3 (HNSW insertion) is recovered by gap detection
+    /// on the next `Collection::open()`.
+    ///
+    /// Returns the old payloads for Phase 2.
+    fn batch_store_all(&self, points: &[Point]) -> Result<Vec<Option<serde_json::Value>>> {
+        let mut payload_storage = self.payload_storage.write();
+
+        // Pre-collect old payloads, retrieving from storage only on the first
+        // occurrence of each ID. Subsequent occurrences get None because Phase 2
+        // (`per_point_updates`) uses `seen_payloads` to track intra-batch state.
+        let old_payloads = Self::collect_old_payloads(points, &payload_storage);
+
+        Self::write_deduped_payloads(points, &mut payload_storage)?;
+        payload_storage.flush()?;
+        drop(payload_storage);
+
+        self.write_deduped_vectors(points)?;
+
+        Ok(old_payloads)
+    }
+
+    /// Retrieves pre-batch payloads, querying storage only once per unique ID.
+    ///
+    /// For intra-batch duplicates, only the first occurrence needs the pre-batch
+    /// value; subsequent occurrences are handled by `seen_payloads` in Phase 2.
+    fn collect_old_payloads(
+        points: &[Point],
+        storage: &LogPayloadStorage,
+    ) -> Vec<Option<serde_json::Value>> {
+        let mut seen = std::collections::HashSet::new();
+        points
+            .iter()
+            .map(|p| {
+                if seen.insert(p.id) {
+                    // First occurrence — retrieve pre-batch payload from storage
+                    storage.retrieve(p.id).ok().flatten()
+                } else {
+                    None // Duplicate — Phase 2 uses seen_payloads instead
+                }
+            })
+            .collect()
+    }
+
+    /// Writes only the last payload per ID to the WAL, then deletes IDs whose
+    /// final occurrence has `payload=None`.
+    fn write_deduped_payloads(points: &[Point], storage: &mut LogPayloadStorage) -> Result<()> {
+        // Build last-writer-wins map: id -> (has_payload, index_of_last_occurrence)
+        let mut last_idx: HashMap<u64, usize> = HashMap::new();
+        for (i, p) in points.iter().enumerate() {
+            last_idx.insert(p.id, i);
+        }
+
+        // Only write the final payload per ID (skip intermediate duplicates)
+        let deduped: Vec<(u64, &serde_json::Value)> = points
+            .iter()
+            .enumerate()
+            .filter(|&(i, p)| last_idx.get(&p.id) == Some(&i) && p.payload.is_some())
+            .filter_map(|(_, p)| p.payload.as_ref().map(|pl| (p.id, pl)))
+            .collect();
+        storage.store_batch(&deduped)?;
+
+        // Delete IDs whose final occurrence has payload=None
+        for (i, p) in points.iter().enumerate() {
+            if last_idx.get(&p.id) == Some(&i) && p.payload.is_none() {
+                let _ = storage.delete(p.id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes only the last vector per ID to vector storage.
+    fn write_deduped_vectors(&self, points: &[Point]) -> Result<()> {
+        let mut last_idx: HashMap<u64, usize> = HashMap::new();
+        for (i, p) in points.iter().enumerate() {
+            last_idx.insert(p.id, i);
+        }
+
+        let deduped: Vec<(u64, &[f32])> = points
+            .iter()
+            .enumerate()
+            .filter(|&(i, p)| last_idx.get(&p.id) == Some(&i))
+            .map(|(_, p)| (p.id, p.vector.as_slice()))
+            .collect();
+
+        let mut vector_storage = self.vector_storage.write();
+        vector_storage.store_batch(&deduped)?;
+        let point_count = vector_storage.len();
+        vector_storage.flush()?;
+        drop(vector_storage);
+
+        self.config.write().point_count = point_count;
+        Ok(())
+    }
+
+    /// Phase 2: Per-point updates that don't need storage write locks.
+    ///
+    /// Tracks the effective "old payload" per ID to handle within-batch
+    /// duplicates correctly: when id=5 appears twice, the second occurrence
+    /// sees the first occurrence's payload as its "old" (not the pre-batch
+    /// original), ensuring secondary indexes stay consistent.
+    fn per_point_updates(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+        storage_mode: StorageMode,
+    ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+        let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
         let mut sparse_batch = Vec::new();
-        for point in points {
-            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            vector_storage.store(point.id, &point.vector)?;
+        // Track effective old payload per ID for within-batch duplicate handling.
+        // When id=5 appears twice, the second occurrence uses the first's payload
+        // as "old" — not the pre-batch original — so secondary indexes stay correct.
+        //
+        // Uses `Option<Option<&Value>>`: outer Option = "seen this ID?",
+        // inner Option = "had a payload?". This distinguishes "seen with None"
+        // from "not seen" — `.flatten()` would collapse both to None.
+        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
+
+        for (point, pre_batch_old) in points.iter().zip(old_payloads) {
+            let effective_old: Option<&serde_json::Value> =
+                if let Some(&inner) = seen_payloads.get(&point.id) {
+                    // ID was seen earlier in this batch — use that point's payload as "old"
+                    inner
+                } else {
+                    // First occurrence — use the pre-batch original
+                    pre_batch_old.as_ref()
+                };
 
             let (sq8, binary, pq) = (
                 quant_guards.sq8.as_deref_mut(),
@@ -91,39 +245,19 @@ impl Collection {
             );
             self.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
 
-            Self::store_or_delete_payload(&mut payload_storage, point)?;
             self.update_secondary_indexes_on_upsert(
                 point.id,
-                old_payload.as_ref(),
+                effective_old,
                 point.payload.as_ref(),
             );
-            self.insert_or_defer(point.id, &point.vector);
             Self::update_text_index(&self.text_index, point);
             Self::collect_sparse_vectors(point, &mut sparse_batch);
+
+            // Record this point's payload ref — zero-cost for the common case (no clone)
+            seen_payloads.insert(point.id, point.payload.as_ref());
         }
 
-        let point_count = vector_storage.len();
-        vector_storage.flush()?;
-        payload_storage.flush()?;
-        drop(vector_storage);
-        drop(payload_storage);
-
-        self.config.write().point_count = point_count;
-        self.maybe_merge_deferred();
-
-        Ok(sparse_batch)
-    }
-
-    fn store_or_delete_payload(
-        payload_storage: &mut LogPayloadStorage,
-        point: &Point,
-    ) -> Result<()> {
-        if let Some(payload) = &point.payload {
-            payload_storage.store(point.id, payload)?;
-        } else {
-            let _ = payload_storage.delete(point.id);
-        }
-        Ok(())
+        sparse_batch
     }
 
     fn collect_sparse_vectors(
@@ -184,37 +318,6 @@ impl Collection {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Inserts into HNSW directly, or buffers in the deferred indexer.
-    ///
-    /// When a deferred indexer is present, the vector is pushed into the
-    /// deferred buffer instead of the HNSW graph. Otherwise falls through
-    /// to `VectorIndex::insert`.
-    ///
-    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
-    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
-    /// redundant `is_enabled()` check is needed here.
-    fn insert_or_defer(&self, id: u64, vector: &[f32]) {
-        #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
-            di.push(id, vector.to_vec());
-            return;
-        }
-        self.index.insert(id, vector);
-    }
-
-    /// Triggers a deferred merge if the buffer has reached threshold.
-    ///
-    /// Drains buffered vectors and batch-inserts them into HNSW.
-    /// No-op when deferred indexing is not configured.
-    fn maybe_merge_deferred(&self) {
-        #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
-            if di.should_merge() {
-                self.merge_deferred_batch(di);
-            }
-        }
-    }
-
     /// Drains the deferred indexer and batch-inserts into HNSW.
     ///
     /// Filters out IDs that have been deleted from vector storage since they
@@ -265,7 +368,11 @@ impl Collection {
 
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            Self::store_or_delete_payload(&mut payload_storage, point)?;
+            if let Some(payload) = &point.payload {
+                payload_storage.store(point.id, payload)?;
+            } else {
+                let _ = payload_storage.delete(point.id);
+            }
             Self::update_text_index(&self.text_index, point);
             self.update_secondary_indexes_on_upsert(
                 point.id,
@@ -329,6 +436,11 @@ impl Collection {
     ///
     /// Returns the number of vectors processed (whether indexed directly
     /// or deferred for later merge).
+    ///
+    /// Since v1.7.2, both `upsert()` and `upsert_bulk()` route through this
+    /// method. The direct path calls `insert_batch_parallel` (rayon), which
+    /// yields non-deterministic HNSW graph topology across runs. Search
+    /// correctness and recall are unaffected.
     ///
     /// Invariant: `self.deferred_indexer` is `Some` only when enabled
     /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
@@ -558,15 +670,23 @@ impl Collection {
         Ok(())
     }
 
-    /// Returns the number of points in the collection.
-    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
+    /// Returns the number of points stored in the collection.
+    ///
+    /// This reflects the **storage count** (vectors written to disk), not the
+    /// number of points currently indexed in the HNSW graph. During a batch
+    /// upsert or when deferred indexing is active, `len()` may temporarily
+    /// exceed the HNSW-indexed count until the deferred merge completes.
+    ///
+    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock.
     #[must_use]
     pub fn len(&self) -> usize {
         self.config.read().point_count
     }
 
     /// Returns true if the collection is empty.
-    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
+    ///
+    /// Uses the same cached `point_count` as [`len()`](Self::len), reflecting
+    /// the storage count rather than the HNSW-indexed count.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.config.read().point_count == 0

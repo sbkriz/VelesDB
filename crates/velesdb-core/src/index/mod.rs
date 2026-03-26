@@ -22,6 +22,28 @@ pub use trigram::{extract_trigrams, TrigramIndex};
 
 use crate::distance::DistanceMetric;
 use crate::scored_result::ScoredResult;
+use std::cmp::Ordering;
+
+/// Partial sort + truncate for top-k results.
+///
+/// When `k < items.len()`, uses `select_nth_unstable_by` to partition the
+/// k smallest elements (according to `cmp`) in O(n), then sorts only those
+/// k elements in O(k log k). Total: O(n + k log k) instead of O(n log n).
+///
+/// When `k >= items.len()`, falls back to a full sort (no-op partition).
+///
+/// Used by both HNSW (ascending distance) and BM25 (descending score) to
+/// avoid duplicating the same algorithmic pattern.
+pub(crate) fn top_k_partial_sort<T, F>(items: &mut Vec<T>, k: usize, cmp: F)
+where
+    F: Fn(&T, &T) -> Ordering + Copy,
+{
+    if items.len() > k {
+        items.select_nth_unstable_by(k, cmp);
+        items.truncate(k);
+    }
+    items.sort_by(cmp);
+}
 
 /// Trait for vector index implementations.
 ///

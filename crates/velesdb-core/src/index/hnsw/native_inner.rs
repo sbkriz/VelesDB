@@ -82,10 +82,14 @@ impl NativeHnswInner {
 
     /// Parallel batch insert into the HNSW graph.
     ///
+    /// Returns a vector of graph-assigned node IDs, one per input vector,
+    /// in the same order as `data`. Callers must reconcile these against
+    /// their pre-registered mapping indices.
+    ///
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
-    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()> {
+    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
         self.inner.parallel_insert(data)
     }
 

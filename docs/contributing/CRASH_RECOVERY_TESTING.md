@@ -174,6 +174,20 @@ Unit tests in `collection/core/recovery_tests.rs` cover:
 - Full reopen cycle (create → gap → drop → reopen → verify search)
 - Metadata-only skip (no false positives)
 
+### Batch Pipeline and the Gap Window (v1.7.2+)
+
+The 3-phase upsert pipeline in `crud.rs` (`batch_store_all` -> `per_point_updates`
+-> `bulk_index_or_defer`) enlarges the crash recovery window compared to the
+previous per-point approach. Vectors and payloads are durably written in
+Phase 1, but HNSW graph insertion happens only in Phase 3. A crash between
+these phases leaves vectors in storage that are not yet present in the HNSW
+index.
+
+The HNSW gap detection mechanism described above recovers these vectors
+automatically on the next `Collection::open()`. The gap window is bounded
+by the batch size: at most one batch worth of vectors may need re-indexing
+after a crash.
+
 ## Future Work (EPIC-024)
 
 - **US-002**: Corruption tests (truncation, bitflip)

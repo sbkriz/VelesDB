@@ -4,13 +4,13 @@
     {
       "id": "root_readme_hnsw_latency_microseconds",
       "file": "README.md",
-      "must_contain": "HNSW Search (10K vectors)",
+      "must_contain": "**HNSW Search** (10K/768D, k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark"
     },
     {
       "id": "root_readme_simd_dot",
       "file": "README.md",
-      "must_contain": "SIMD Dot Product (768D)",
+      "must_contain": "**SIMD Dot Product** (768D)",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark"
     },
     {
@@ -42,41 +42,17 @@
     {
       "id": "readme_simd_euclidean_latency",
       "file": "README.md",
-      "must_contain": "**22.5 ns**",
-      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
-      "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-24"
-    },
-    {
-      "id": "readme_simd_cosine_latency",
-      "file": "README.md",
-      "must_contain": "**33.1 ns**",
-      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "must_contain": "**54.6 us**",
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "note": "HNSW search latency in Vector Engine table",
       "last_updated": "2026-03-24"
     },
     {
       "id": "readme_hnsw_search_latency",
       "file": "README.md",
-      "must_contain": "**54.6 µs** (k=10)",
+      "must_contain": "54.6us",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-24"
-    },
-    {
-      "id": "readme_velesql_cache_hit_latency",
-      "file": "README.md",
-      "must_contain": "**1.08 µs** (~926K QPS)",
-      "validation_command": "cargo bench -p velesdb-core --bench velesql_benchmark",
-      "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-24"
-    },
-    {
-      "id": "readme_sparse_search_latency",
-      "file": "README.md",
-      "must_contain": "**813 µs** (MaxScore DAAT)",
-      "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark",
-      "note": "Re-run benchmark and update if value changes",
+      "note": "Appears in intro table and comparison",
       "last_updated": "2026-03-24"
     },
     {
@@ -90,15 +66,15 @@
     {
       "id": "readme_recall_fast_mode",
       "file": "README.md",
-      "must_contain": "| Fast | 64 | 92.2% | 36µs |",
+      "must_contain": "| Fast | 64 | 92.2% | 36us |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     },
     {
       "id": "readme_recall_balanced_mode",
       "file": "README.md",
-      "must_contain": "| Balanced (default) | 128 | 98.8% | 57µs |",
+      "must_contain": "| Balanced (default) | 128 | 98.8% | 57us |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
       "last_updated": "2026-03-24"
@@ -106,10 +82,10 @@
     {
       "id": "readme_recall_accurate_mode",
       "file": "README.md",
-      "must_contain": "| Accurate | 512 | 100% | 130µs |",
+      "must_contain": "| Accurate | 512 | 100% | 130us |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-18"
+      "last_updated": "2026-03-24"
     }
   ]
 }

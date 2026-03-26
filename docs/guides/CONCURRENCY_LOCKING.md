@@ -364,6 +364,12 @@ The WAL (Write-Ahead Log) ensures durability in `Fsync` mode. On next
 `Database::open()`, the WAL is replayed to recover uncommitted writes.
 The OS automatically releases the file lock on crash.
 
+Additionally, HNSW gap detection runs on open: if vectors were written
+to storage but not yet indexed in the HNSW graph (e.g., due to a crash
+during the batch upsert pipeline), they are automatically re-indexed.
+See [Crash Recovery Testing](../contributing/CRASH_RECOVERY_TESTING.md)
+for details.
+
 ### Can reads and writes happen at the same time?
 
 Yes. VelesDB uses `RwLock` which allows multiple concurrent readers.

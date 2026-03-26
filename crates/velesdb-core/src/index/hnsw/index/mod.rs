@@ -129,6 +129,42 @@ impl HnswIndex {
         )
     }
 
+    /// Inserts a vector into the HNSW graph and corrects the mapping if the
+    /// assigned node_id differs from the expected index (concurrent race).
+    ///
+    /// Returns `true` on success, `false` on failure (mapping rolled back).
+    pub(crate) fn insert_and_correct_mapping(
+        &self,
+        id: u64,
+        vector: &[f32],
+        result: &UpsertResult,
+    ) -> bool {
+        let assigned_id = match self.inner.read().insert((vector, result.idx)) {
+            Ok(id) => id,
+            Err(e) => {
+                self.rollback_upsert(id, result);
+                tracing::error!("HnswIndex::insert failed for id={id}: {e}");
+                return false;
+            }
+        };
+
+        let idx = if assigned_id == result.idx {
+            result.idx
+        } else {
+            // Remove stale reverse mapping before restoring the correct one.
+            // upsert_mapping created idx_to_id[result.idx] = id, but the graph
+            // assigned a different node_id, so result.idx is now orphaned.
+            self.mappings.remove_reverse(result.idx);
+            self.mappings.restore(id, assigned_id);
+            assigned_id
+        };
+
+        if self.enable_vector_storage {
+            self.vectors.insert(idx, vector);
+        }
+        true
+    }
+
     /// Rolls back a mapping upsert after a failed graph insertion.
     ///
     /// Delegates to [`upsert::rollback_upsert`] to restore the previous

@@ -18,16 +18,7 @@ impl VectorIndex for HnswIndex {
         );
 
         let result = self.upsert_mapping(id);
-
-        if let Err(e) = self.inner.write().insert((vector, result.idx)) {
-            self.rollback_upsert(id, &result);
-            tracing::error!("HnswIndex::insert failed for id={id}: {e}");
-            return;
-        }
-
-        if self.enable_vector_storage {
-            self.vectors.insert(result.idx, vector);
-        }
+        self.insert_and_correct_mapping(id, vector, &result);
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {

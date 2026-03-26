@@ -172,9 +172,6 @@ impl Collection {
                 core_points.push(Point::new(ids[i], vec_slice.to_vec(), payload));
             }
 
-            // Release GIL-dependent references before calling into core
-            drop(array);
-
             self.inner
                 .upsert_bulk(&core_points)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_bulk: {e}")))

@@ -167,6 +167,19 @@ impl PySemanticMemory {
         Ok(list.into())
     }
 
+    /// Delete a knowledge fact by ID.
+    ///
+    /// Args:
+    ///     id: ID of the fact to delete
+    ///
+    /// Example:
+    ///     >>> memory.semantic.delete(1)
+    #[pyo3(signature = (id,))]
+    fn delete(&self, id: u64) -> PyResult<()> {
+        let memory = self.get_core_memory()?;
+        memory.delete(id).map_err(to_py_err)
+    }
+
     fn __repr__(&self) -> String {
         format!("SemanticMemory(dimension={})", self.dimension)
     }
@@ -278,6 +291,46 @@ impl PyEpisodicMemory {
         Ok(list.into())
     }
 
+    /// Get events older than a given timestamp.
+    ///
+    /// Args:
+    ///     before: Unix timestamp threshold
+    ///     limit: Maximum number of events (default: 10)
+    ///
+    /// Returns:
+    ///     List of dicts with 'id', 'description', 'timestamp' keys
+    ///
+    /// Example:
+    ///     >>> old_events = memory.episodic.older_than(before=yesterday, limit=20)
+    #[pyo3(signature = (before, limit = 10))]
+    fn older_than(&self, py: Python<'_>, before: i64, limit: usize) -> PyResult<PyObject> {
+        let memory = self.get_core_memory()?;
+        let results = memory.older_than(before, limit).map_err(to_py_err)?;
+
+        let list = pyo3::types::PyList::empty(py);
+        for (id, description, timestamp) in results {
+            let dict = PyDict::new(py);
+            dict.set_item("id", id)?;
+            dict.set_item("description", description)?;
+            dict.set_item("timestamp", timestamp)?;
+            list.append(dict)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Delete an event by ID.
+    ///
+    /// Args:
+    ///     event_id: ID of the event to delete
+    ///
+    /// Example:
+    ///     >>> memory.episodic.delete(1)
+    #[pyo3(signature = (event_id,))]
+    fn delete(&self, event_id: u64) -> PyResult<()> {
+        let memory = self.get_core_memory()?;
+        memory.delete(event_id).map_err(to_py_err)
+    }
+
     fn __repr__(&self) -> String {
         format!("EpisodicMemory(dimension={})", self.dimension)
     }
@@ -383,6 +436,43 @@ impl PyProceduralMemory {
     fn reinforce(&self, procedure_id: u64, success: bool) -> PyResult<()> {
         let memory = self.get_core_memory()?;
         memory.reinforce(procedure_id, success).map_err(to_py_err)
+    }
+
+    /// List all stored procedures.
+    ///
+    /// Returns:
+    ///     List of dicts with 'id', 'name', 'steps', 'confidence', 'score' keys
+    ///
+    /// Example:
+    ///     >>> all_procs = memory.procedural.list_all()
+    fn list_all(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let memory = self.get_core_memory()?;
+        let results = memory.list_all().map_err(to_py_err)?;
+
+        let list = pyo3::types::PyList::empty(py);
+        for m in results {
+            let dict = PyDict::new(py);
+            dict.set_item("id", m.id)?;
+            dict.set_item("name", &m.name)?;
+            dict.set_item("steps", &m.steps)?;
+            dict.set_item("confidence", m.confidence)?;
+            dict.set_item("score", m.score)?;
+            list.append(dict)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Delete a procedure by ID.
+    ///
+    /// Args:
+    ///     procedure_id: ID of the procedure to delete
+    ///
+    /// Example:
+    ///     >>> memory.procedural.delete(1)
+    #[pyo3(signature = (procedure_id,))]
+    fn delete(&self, procedure_id: u64) -> PyResult<()> {
+        let memory = self.get_core_memory()?;
+        memory.delete(procedure_id).map_err(to_py_err)
     }
 
     fn __repr__(&self) -> String {

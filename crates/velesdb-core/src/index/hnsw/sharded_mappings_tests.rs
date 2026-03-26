@@ -322,6 +322,196 @@ fn test_restore_after_register_or_replace_rollback() {
 }
 
 // -------------------------------------------------------------------------
+// remove_reverse tests (BUG-0002: concurrent insert mapping correction)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_remove_reverse_cleans_stale_idx_to_id() {
+    let mappings = ShardedMappings::new();
+    let idx = mappings.register(42).expect("register");
+
+    // Forward mapping intact before remove_reverse
+    assert_eq!(mappings.get_idx(42), Some(idx));
+    assert_eq!(mappings.get_id(idx), Some(42));
+
+    // remove_reverse only removes the reverse mapping (idx -> id)
+    mappings.remove_reverse(idx);
+
+    // Forward mapping (id -> idx) must survive
+    assert_eq!(mappings.get_idx(42), Some(idx));
+    // Reverse mapping (idx -> id) must be gone
+    assert_eq!(mappings.get_id(idx), None);
+    // Length is based on id_to_idx, so unchanged
+    assert_eq!(mappings.len(), 1);
+}
+
+#[test]
+fn test_remove_reverse_nonexistent_idx_is_noop() {
+    let mappings = ShardedMappings::new();
+    mappings.register(42).expect("register");
+
+    // Removing a reverse mapping for an idx that doesn't exist is a no-op
+    mappings.remove_reverse(999);
+
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(mappings.get_idx(42), Some(0));
+    assert_eq!(mappings.get_id(0), Some(42));
+}
+
+#[test]
+fn test_remove_reverse_then_restore_fixes_divergence() {
+    // Simulates the insert_and_correct_mapping pattern:
+    // 1. upsert_mapping allocates idx=0 for id=42 (id->0, 0->42)
+    // 2. HNSW graph assigns node_id=5 instead of 0 (divergence)
+    // 3. remove_reverse(0) cleans stale 0->42
+    // 4. restore(42, 5) sets id->5 and 5->42
+    let mappings = ShardedMappings::new();
+    let stale_idx = mappings.register(42).expect("register");
+    assert_eq!(stale_idx, 0);
+
+    let correct_idx: usize = 5;
+
+    // Step 3: remove stale reverse mapping
+    mappings.remove_reverse(stale_idx);
+    assert_eq!(mappings.get_id(stale_idx), None);
+
+    // Step 4: restore with correct idx
+    mappings.restore(42, correct_idx);
+    assert_eq!(mappings.get_idx(42), Some(correct_idx));
+    assert_eq!(mappings.get_id(correct_idx), Some(42));
+    // Stale reverse mapping still gone
+    assert_eq!(mappings.get_id(stale_idx), None);
+}
+
+// -------------------------------------------------------------------------
+// register_or_replace_batch tests (issue #375)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_register_or_replace_batch_all_new() {
+    let mappings = ShardedMappings::new();
+    let ids = vec![10, 20, 30, 40, 50];
+    let results = mappings.register_or_replace_batch(&ids);
+
+    assert_eq!(results.len(), 5);
+    for (i, (idx, old_idx)) in results.iter().enumerate() {
+        // All new IDs: each should get a sequential index, no old index
+        assert_eq!(*idx, i, "ID {} should get index {i}", ids[i]);
+        assert_eq!(*old_idx, None, "ID {} should have no old index", ids[i]);
+    }
+    assert_eq!(mappings.len(), 5);
+    // Verify bidirectional mappings
+    for (i, &id) in ids.iter().enumerate() {
+        assert_eq!(mappings.get_idx(id), Some(i));
+        assert_eq!(mappings.get_id(i), Some(id));
+    }
+}
+
+#[test]
+fn test_register_or_replace_batch_all_existing() {
+    let mappings = ShardedMappings::new();
+    // Pre-insert all IDs
+    let ids = vec![10, 20, 30];
+    for &id in &ids {
+        mappings.register(id);
+    }
+    let original_len = mappings.len();
+    assert_eq!(original_len, 3);
+
+    // Batch replace all existing IDs
+    let results = mappings.register_or_replace_batch(&ids);
+    assert_eq!(results.len(), 3);
+    for (idx, old_idx) in &results {
+        // All existing: each should have an old index
+        assert!(old_idx.is_some(), "existing ID should have old index");
+        // New index must differ from old
+        assert_ne!(idx, old_idx.as_ref().unwrap());
+    }
+    // Length unchanged (replaced, not duplicated)
+    assert_eq!(mappings.len(), 3);
+    // Old reverse mappings removed
+    assert_eq!(mappings.get_id(0), None); // old idx for id=10
+    assert_eq!(mappings.get_id(1), None); // old idx for id=20
+    assert_eq!(mappings.get_id(2), None); // old idx for id=30
+}
+
+#[test]
+fn test_register_or_replace_batch_mixed() {
+    let mappings = ShardedMappings::new();
+    // Pre-insert some IDs
+    mappings.register(20); // idx=0
+    mappings.register(40); // idx=1
+
+    let ids = vec![10, 20, 30, 40, 50];
+    let results = mappings.register_or_replace_batch(&ids);
+
+    assert_eq!(results.len(), 5);
+
+    // ID 10: new
+    assert_eq!(results[0].1, None);
+    // ID 20: existing (was idx=0)
+    assert_eq!(results[1].1, Some(0));
+    // ID 30: new
+    assert_eq!(results[2].1, None);
+    // ID 40: existing (was idx=1)
+    assert_eq!(results[3].1, Some(1));
+    // ID 50: new
+    assert_eq!(results[4].1, None);
+
+    // Total live mappings: 5 (2 replaced + 3 new)
+    assert_eq!(mappings.len(), 5);
+
+    // Verify all IDs are accessible
+    for &id in &ids {
+        assert!(mappings.contains(id), "ID {id} should be present");
+    }
+}
+
+#[test]
+fn test_register_or_replace_batch_empty() {
+    let mappings = ShardedMappings::new();
+    let results = mappings.register_or_replace_batch(&[]);
+    assert!(results.is_empty());
+    assert!(mappings.is_empty());
+}
+
+#[test]
+fn test_register_or_replace_batch_single_new() {
+    let mappings = ShardedMappings::new();
+    let results = mappings.register_or_replace_batch(&[42]);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], (0, None));
+    assert_eq!(mappings.get_idx(42), Some(0));
+}
+
+#[test]
+fn test_register_or_replace_batch_single_existing() {
+    let mappings = ShardedMappings::new();
+    mappings.register(42); // idx=0
+    let results = mappings.register_or_replace_batch(&[42]);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].1, Some(0)); // old_idx was 0
+    assert_ne!(results[0].0, 0); // new_idx differs
+    assert_eq!(mappings.len(), 1);
+}
+
+#[test]
+fn test_register_or_replace_batch_within_batch_duplicates() {
+    let mappings = ShardedMappings::new();
+    // Same ID twice in one batch: second occurrence should replace the first
+    let results = mappings.register_or_replace_batch(&[42, 42]);
+    assert_eq!(results.len(), 2);
+    // First occurrence: new ID
+    assert_eq!(results[0].1, None);
+    // Second occurrence: replaces the first
+    assert_eq!(results[1].1, Some(results[0].0));
+    // Only one live mapping
+    assert_eq!(mappings.len(), 1);
+    // Final mapping points to the second index
+    assert_eq!(mappings.get_idx(42), Some(results[1].0));
+}
+
+// -------------------------------------------------------------------------
 // Serialization tests (TDD for HnswIndex migration)
 // -------------------------------------------------------------------------
 

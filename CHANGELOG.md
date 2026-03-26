@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-03-25
+
+### Performance
+
+- **HNSW Search Partial Sort** (#373) — `search_layer` now uses `select_nth_unstable_by` for O(n + k log k) candidate selection instead of full O(ef log ef) sort. Reduces wasted work when `ef_search` >> `k` (typical: ef=128, k=10). Shared `top_k_partial_sort` utility extracted to `index/mod.rs`, reused by both HNSW and BM25.
+- **Batch Insert Fast-Path** (#375) — Eliminated ~14% overhead on pure-insert workloads introduced by v1.7.0 upsert semantics. New `register_or_replace_batch()` uses `contains_key()` (read lock) to skip the expensive `DashMap::entry()` write lock for new IDs. TOCTOU-safe with automatic fallback.
+- **Upsert Lock Contention Elimination** — Three-part fix to eliminate lock serialization in `Collection::upsert()`:
+  1. `trait_impl.rs`: Changed `self.inner.write()` to `self.inner.read()` for `HnswIndex::insert`. `NativeHnswInner::insert` takes `&self` and manages its own synchronization (per-node locks, atomic entry point); the outer write lock was unnecessarily serializing all inserts and blocking concurrent searches.
+  2. `crud.rs`: Restructured `upsert_storage_and_index()` into a 3-phase pipeline — batch storage (1 fsync per storage), per-point secondary updates (no storage locks held), batch HNSW insert via `bulk_index_or_defer()`. Replaces per-point `insert_or_defer()` with a single batch call.
+  3. `crud.rs`: Extracted `batch_store_all()` and `per_point_updates()` helpers for clear phase separation and minimal lock scope.
+
+  Measured on i9-14900KF (10K vectors, 384D): upsert throughput rose from ~808 vec/s to ~16,151 vec/s, closing the gap with `upsert_bulk()` from 19x to ~1x. Regression tests added for batch upsert correctness and throughput parity.
+
+### Backward Compatibility
+
+No API changes. All three optimizations are internal and apply automatically.
+
+**Note on HNSW graph construction order**: `insert_batch_parallel` and
+`bulk_index_or_defer` now use rayon-based parallel graph insertion. Because
+thread scheduling is non-deterministic, the resulting HNSW graph structure
+may differ between runs for the same input data. This does not affect
+correctness or recall — only the internal graph topology varies. If you
+depend on byte-identical index files across builds (e.g., for reproducible
+snapshots), use `insert_batch_sequential` (deprecated but deterministic).
+
 ## [1.7.1] - 2026-03-25
 
 ### Fixed

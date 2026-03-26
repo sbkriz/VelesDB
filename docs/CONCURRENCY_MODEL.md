@@ -179,6 +179,10 @@ for neighbor in neighbors {
    - Operations are atomic per-operation, not per-batch
    - Mitigation: Use flush() for durability checkpoints
 
+5. **Enlarged crash recovery window during batch upsert**:
+   - The 3-phase upsert pipeline (`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) writes vectors and payloads to storage before inserting into the HNSW graph. A crash between Phase 1 and Phase 3 leaves vectors in storage but missing from the HNSW index.
+   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [Crash Recovery Testing](contributing/CRASH_RECOVERY_TESTING.md) and [SOUNDNESS.md](SOUNDNESS.md#hnsw-batch-insertion-ordering) for details.
+
 ## Best Practices
 
 ### For Users
@@ -253,6 +257,11 @@ LOOM_MAX_PREEMPTIONS=2 cargo +nightly test --features loom,persistence --test lo
 # Run stress tests with multiple threads
 cargo test --test stress_concurrency_tests -- --test-threads=1
 ```
+
+### HNSW Batch Insertion Ordering
+
+For soundness analysis of the batch insertion pipeline and its ordering
+invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-batch-insertion-ordering).
 
 ## References
 

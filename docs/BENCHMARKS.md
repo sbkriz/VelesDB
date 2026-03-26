@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 24, 2026 (v1.7.0 — sequential benchmarks on idle machine)*
+*Last updated: March 25, 2026 (v1.7.2 — sequential benchmarks on idle machine)*
 
 ---
 
@@ -174,6 +174,21 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 *Recall values from recall_benchmark. Latencies measured March 19, 2026. ef_search values are base values (scaled with k).*
 
 Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+
+### Search Optimization Notes (v1.7.2)
+
+- **Partial sort** — `search_layer` now uses `select_nth_unstable_by` to avoid full-sorting all `ef` candidates when only the top-k are needed. Complexity drops from O(ef log ef) to O(ef + k log k). Benefit is proportional to the ef/k ratio (e.g., ef=128 with k=10 avoids sorting ~92% of candidates).
+- **Batch insert fast-path** — Pure-insert workloads (all new IDs) skip the `DashMap::entry()` write lock overhead introduced by v1.7.0 upsert semantics. Read-lock `contains_key()` pre-check routes new IDs to the cheaper `register()` path.
+
+### Upsert Path Optimization (v1.7.2)
+
+Three changes eliminated lock contention in `Collection::upsert()`:
+
+1. **Write-to-read lock** — `HnswIndex::insert` (in `trait_impl.rs`) now acquires `self.inner.read()` instead of `self.inner.write()`. `NativeHnswInner::insert` takes `&self` and manages its own internal synchronization (per-node locks, atomic entry point). The previous write lock serialized all inserts and blocked concurrent searches.
+2. **3-phase pipeline** — `upsert_storage_and_index()` (in `crud.rs`) restructured into: (a) batch storage with 1 fsync per store, (b) per-point secondary updates without holding storage locks, (c) batch HNSW insert via `bulk_index_or_defer()`. This replaces per-point `insert_or_defer()` which acquired and released the HNSW lock N times.
+3. **Batch I/O** — Vectors and payloads are written via `store_batch()` (1 WAL write + 1 flush each) instead of N individual `store()` calls with N fsyncs.
+
+Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s before, ~16,151 vec/s after. The upsert/bulk ratio dropped from ~19x to ~1x.
 
 ---
 

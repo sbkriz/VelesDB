@@ -110,12 +110,21 @@ impl SearchState {
 
     /// Consumes the state and returns results sorted by distance ascending.
     ///
+    /// When `limit` is `Some(k)`, uses partial sort (`select_nth_unstable_by`)
+    /// to efficiently return only the top-k nearest results in O(n + k log k)
+    /// instead of O(n log n).
+    ///
     /// Releases the visited set back to the thread-local pool.
-    fn into_sorted_results(self) -> Vec<(NodeId, f32)> {
+    fn into_sorted_results(self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
         release_visited_set(self.visited);
         let mut result_vec: Vec<(NodeId, f32)> =
             self.results.into_iter().map(|(d, n)| (n, d.0)).collect();
-        result_vec.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let cmp = |a: &(NodeId, f32), b: &(NodeId, f32)| a.1.total_cmp(&b.1);
+        if let Some(k) = limit {
+            crate::index::top_k_partial_sort(&mut result_vec, k, cmp);
+        } else {
+            result_vec.sort_by(cmp);
+        }
         result_vec
     }
 }
@@ -194,9 +203,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return self.search_multi_entry(query, k, ef_search, probes);
         }
 
-        let candidates =
-            self.search_layer(query, &[current_ep], ef_search, 0, self.stagnation_limit);
-        candidates.into_iter().take(k).collect()
+        self.search_layer(
+            query,
+            &[current_ep],
+            ef_search,
+            0,
+            self.stagnation_limit,
+            Some(k),
+        )
     }
 
     /// Adaptive number of entry-point probes for high-recall searches.
@@ -268,9 +282,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             }
         }
 
-        let candidates =
-            self.search_layer(query, &entry_points, ef_search, 0, self.stagnation_limit);
-        candidates.into_iter().take(k).collect()
+        self.search_layer(
+            query,
+            &entry_points,
+            ef_search,
+            0,
+            self.stagnation_limit,
+            Some(k),
+        )
     }
 
     // =========================================================================
@@ -396,6 +415,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// `stagnation_limit` controls early termination: 0 disables it (use
     /// during index construction to avoid degrading neighbor quality).
     /// For search queries, pass `self.stagnation_limit`.
+    ///
+    /// `result_limit` controls partial sort optimization: when `Some(k)`,
+    /// uses `select_nth_unstable_by` to return only the top-k nearest
+    /// results in O(n + k log k) instead of sorting all ef candidates
+    /// in O(ef log ef). Pass `None` during construction to get all
+    /// candidates sorted (needed for VAMANA neighbor selection).
     #[inline]
     pub(in crate::index::hnsw::native::graph) fn search_layer(
         &self,
@@ -404,6 +429,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         ef: usize,
         layer: usize,
         stagnation_limit: usize,
+        result_limit: Option<usize>,
     ) -> Vec<(NodeId, f32)> {
         let mut state = SearchState::new();
 
@@ -442,7 +468,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             }
         });
 
-        state.into_sorted_results()
+        state.into_sorted_results(result_limit)
     }
 
     /// Prepares a query vector for search or insertion. Returns `Cow::Borrowed`
@@ -630,7 +656,7 @@ mod search_refactor_tests {
         state.push_candidate(40, 0.1);
         state.push_candidate(50, 0.9);
 
-        let sorted = state.into_sorted_results();
+        let sorted = state.into_sorted_results(None);
 
         // Should be sorted ascending by distance
         assert_eq!(sorted.len(), 5);
@@ -871,6 +897,145 @@ mod search_refactor_tests {
             "search recall must be >= 90% (got {:.1}%); \
              if this fails after refactoring, the extraction broke correctness",
             avg_recall * 100.0,
+        );
+    }
+
+    // =========================================================================
+    // 10. into_sorted_results with partial sort limit (Issue #373)
+    // =========================================================================
+
+    #[test]
+    fn test_into_sorted_results_with_limit() {
+        let mut state = SearchState::new();
+
+        // Insert 10 results with known distances
+        for i in 0..10_usize {
+            #[allow(clippy::cast_precision_loss)]
+            state.push_candidate(i, (10 - i) as f32 * 0.1);
+        }
+        assert_eq!(state.results.len(), 10);
+
+        let sorted = state.into_sorted_results(Some(3));
+
+        // Exactly 3 results returned
+        assert_eq!(sorted.len(), 3, "limit=3 should return exactly 3 results");
+
+        // Must be sorted by distance ascending
+        for window in sorted.windows(2) {
+            assert!(
+                window[0].1 <= window[1].1,
+                "results must be sorted ascending: {} <= {}",
+                window[0].1,
+                window[1].1,
+            );
+        }
+
+        // Must contain the 3 nearest (smallest distances)
+        // Distances were: 0.1, 0.2, ..., 1.0 — top-3 are 0.1, 0.2, 0.3
+        assert!(
+            (sorted[0].1 - 0.1).abs() < f32::EPSILON,
+            "first result should be dist 0.1, got {}",
+            sorted[0].1,
+        );
+        assert!(
+            (sorted[1].1 - 0.2).abs() < f32::EPSILON,
+            "second result should be dist 0.2, got {}",
+            sorted[1].1,
+        );
+        assert!(
+            (sorted[2].1 - 0.3).abs() < f32::EPSILON,
+            "third result should be dist 0.3, got {}",
+            sorted[2].1,
+        );
+    }
+
+    #[test]
+    fn test_into_sorted_results_without_limit() {
+        let mut state = SearchState::new();
+
+        // Insert 10 results
+        for i in 0..10_usize {
+            #[allow(clippy::cast_precision_loss)]
+            state.push_candidate(i, (10 - i) as f32 * 0.1);
+        }
+
+        let sorted = state.into_sorted_results(None);
+
+        // All 10 results returned
+        assert_eq!(sorted.len(), 10, "None limit should return all results");
+
+        // Must be sorted by distance ascending
+        for window in sorted.windows(2) {
+            assert!(
+                window[0].1 <= window[1].1,
+                "results must be sorted ascending: {} <= {}",
+                window[0].1,
+                window[1].1,
+            );
+        }
+    }
+
+    #[test]
+    fn test_into_sorted_results_limit_greater_than_results() {
+        let mut state = SearchState::new();
+
+        // Insert only 5 results
+        for i in 0..5_usize {
+            #[allow(clippy::cast_precision_loss)]
+            state.push_candidate(i, (5 - i) as f32 * 0.1);
+        }
+
+        // Request limit=10, but only 5 exist — should not panic
+        let sorted = state.into_sorted_results(Some(10));
+
+        assert_eq!(
+            sorted.len(),
+            5,
+            "limit > len should return all available results"
+        );
+
+        // Must still be sorted ascending
+        for window in sorted.windows(2) {
+            assert!(
+                window[0].1 <= window[1].1,
+                "results must be sorted ascending: {} <= {}",
+                window[0].1,
+                window[1].1,
+            );
+        }
+    }
+
+    #[test]
+    fn test_into_sorted_results_limit_zero() {
+        let mut state = SearchState::new();
+
+        state.push_candidate(0, 0.5);
+        state.push_candidate(1, 0.1);
+        state.push_candidate(2, 0.9);
+
+        // limit=0 should return empty (truncate to 0)
+        let sorted = state.into_sorted_results(Some(0));
+        assert!(sorted.is_empty(), "limit=0 should return empty vec");
+    }
+
+    #[test]
+    fn test_into_sorted_results_empty_state() {
+        let state = SearchState::new();
+
+        // None limit on empty state
+        let sorted = state.into_sorted_results(None);
+        assert!(
+            sorted.is_empty(),
+            "empty state with None should return empty vec"
+        );
+
+        let state2 = SearchState::new();
+
+        // Some limit on empty state
+        let sorted2 = state2.into_sorted_results(Some(5));
+        assert!(
+            sorted2.is_empty(),
+            "empty state with Some(5) should return empty vec"
         );
     }
 }

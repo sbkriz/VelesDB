@@ -168,6 +168,10 @@ Large batch inserts are automatically optimized with two techniques:
 
 Both optimizations are automatic and require no configuration. Use `insert_batch_parallel()` for best performance on large datasets.
 
+3. **Batch Upsert Fast-Path (v1.7.2)** — Pure-insert workloads (all new IDs) now skip the expensive `DashMap::entry()` write lock introduced by upsert semantics in v1.7.0. A read-lock `contains_key()` check routes new IDs to a cheaper allocation path. This eliminates the ~14% overhead observed on pure-insert workloads. Mixed workloads (some new, some existing IDs) automatically fall back to the full upsert path for correctness.
+
+4. **Upsert Lock Contention Fix (v1.7.2)** — `Collection::upsert()` was previously bottlenecked by three sources of lock contention: (a) a write lock on the HNSW index for each insert (changed to a read lock since `NativeHnswInner::insert` uses internal per-node synchronization), (b) per-point `insert_or_defer()` calls replaced by a single `bulk_index_or_defer()` batch call, and (c) per-point I/O replaced by `store_batch()` with 1 fsync per storage. The result is a 3-phase pipeline: batch storage, per-point secondary updates (no storage locks held), then batch HNSW insert. On local benchmarks (i9-14900KF, 10K/384D), this closed the throughput gap between `upsert()` and `upsert_bulk()` from ~19x to ~1x.
+
 ---
 
 ## Search Quality Modes

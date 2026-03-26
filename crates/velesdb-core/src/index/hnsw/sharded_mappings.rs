@@ -127,6 +127,36 @@ impl ShardedMappings {
         idx
     }
 
+    /// Batch version of `register_or_replace` using a single `entry()` per ID.
+    ///
+    /// For each ID, acquires one shard-level write lock via `DashMap::entry()`:
+    /// - **Vacant**: allocates a new index and inserts bidirectional mappings.
+    /// - **Occupied**: replaces the forward mapping, removes the stale reverse
+    ///   mapping, and inserts the new reverse mapping.
+    ///
+    /// This eliminates the triple-lock pattern (`contains_key` + `register` +
+    /// `register_or_replace` fallback) from the previous implementation.
+    pub fn register_or_replace_batch(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        use dashmap::mapref::entry::Entry;
+
+        let mut results = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let result = match self.id_to_idx.entry(id) {
+                Entry::Vacant(entry) => (self.allocate_and_map(entry, id), None),
+                Entry::Occupied(mut entry) => {
+                    let old_idx = *entry.get();
+                    let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+                    entry.insert(new_idx);
+                    self.idx_to_id.remove(&old_idx);
+                    self.idx_to_id.insert(new_idx, id);
+                    (new_idx, Some(old_idx))
+                }
+            };
+            results.push(result);
+        }
+        results
+    }
+
     /// Registers multiple IDs in a batch, returning their indices.
     ///
     /// # Returns
@@ -160,6 +190,15 @@ impl ShardedMappings {
     pub fn restore(&self, id: u64, idx: usize) {
         self.id_to_idx.insert(id, idx);
         self.idx_to_id.insert(idx, id);
+    }
+
+    /// Removes a stale reverse mapping (`idx` -> `id`) without touching the forward mapping.
+    ///
+    /// Used when `insert_and_correct_mapping` detects a concurrent race: the
+    /// forward mapping `id -> idx` was already corrected by `restore()`, but the
+    /// old `idx_to_id[old_idx]` entry is still dangling.
+    pub fn remove_reverse(&self, idx: usize) {
+        self.idx_to_id.remove(&idx);
     }
 
     /// Removes an ID and returns its internal index if it existed.

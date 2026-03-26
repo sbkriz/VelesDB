@@ -50,6 +50,8 @@ mod sharded_mappings_tests;
 #[cfg(test)]
 mod sharded_vectors_tests;
 #[cfg(test)]
+mod upsert_tests;
+#[cfg(test)]
 mod vector_store_tests;
 
 // ============================================================================

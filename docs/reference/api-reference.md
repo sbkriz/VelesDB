@@ -20,7 +20,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "1.7.0"
+  "version": "1.7.2"
 }
 ```
 
@@ -109,6 +109,12 @@ Get collection details.
   "point_count": 1000
 }
 ```
+
+**Field notes:**
+
+| Field | Description |
+|-------|-------------|
+| `point_count` | Number of points in storage. During batch upsert or deferred indexing, this may temporarily exceed the HNSW-indexed count. All stored points are searchable once indexing completes. |
 
 ### DELETE /collections/:name
 
