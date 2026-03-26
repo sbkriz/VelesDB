@@ -24,18 +24,27 @@ use std::sync::atomic::Ordering;
 /// Format: `[op:1][id:8][len:4][data:N][crc32:4]`
 ///
 /// The CRC32 covers `op + id + len + data`.
-fn write_wal_store_entry(wal: &mut io::BufWriter<File>, id: u64, data: &[u8]) -> io::Result<()> {
-    let mut frame = Vec::with_capacity(1 + 8 + 4 + data.len());
-    frame.push(1u8);
-    frame.extend_from_slice(&id.to_le_bytes());
+///
+/// Reuses `buf` to avoid per-call heap allocation in batch mode.
+/// Callers must provide a `Vec<u8>` that will be `clear()`-ed and reused.
+/// Pattern mirrors `LogPayloadStorage::write_store_record`.
+fn write_wal_store_entry(
+    wal: &mut io::BufWriter<File>,
+    id: u64,
+    data: &[u8],
+    buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    buf.clear();
+    buf.push(1u8);
+    buf.extend_from_slice(&id.to_le_bytes());
     // Reason: Vector byte length is dimension * 4. With max dimension 65536,
     // max bytes = 262144 which fits in u32 (max 4,294,967,295).
     #[allow(clippy::cast_possible_truncation)]
     let len_u32 = data.len() as u32;
-    frame.extend_from_slice(&len_u32.to_le_bytes());
-    frame.extend_from_slice(data);
-    let crc = crc32_hash(&frame);
-    wal.write_all(&frame)?;
+    buf.extend_from_slice(&len_u32.to_le_bytes());
+    buf.extend_from_slice(data);
+    let crc = crc32_hash(buf);
+    wal.write_all(buf)?;
     wal.write_all(&crc.to_le_bytes())
 }
 
@@ -44,12 +53,19 @@ fn write_wal_store_entry(wal: &mut io::BufWriter<File>, id: u64, data: &[u8]) ->
 /// Format: `[op:1][id:8][crc32:4]`
 ///
 /// The CRC32 covers `op + id`.
-fn write_wal_delete_entry(wal: &mut io::BufWriter<File>, id: u64) -> io::Result<()> {
-    let mut frame = Vec::with_capacity(1 + 8);
-    frame.push(2u8);
-    frame.extend_from_slice(&id.to_le_bytes());
-    let crc = crc32_hash(&frame);
-    wal.write_all(&frame)?;
+///
+/// Reuses `buf` to avoid per-call heap allocation in batch mode.
+/// Pattern mirrors `write_wal_store_entry`.
+fn write_wal_delete_entry(
+    wal: &mut io::BufWriter<File>,
+    id: u64,
+    buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    buf.clear();
+    buf.push(2u8);
+    buf.extend_from_slice(&id.to_le_bytes());
+    let crc = crc32_hash(buf);
+    wal.write_all(buf)?;
     wal.write_all(&crc.to_le_bytes())
 }
 
@@ -74,7 +90,8 @@ impl VectorStorage for MmapStorage {
         // 1. Write to WAL with CRC32 framing (Issue #317)
         {
             let mut wal = self.wal.write();
-            write_wal_store_entry(&mut wal, id, vector_bytes)?;
+            let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_bytes.len());
+            write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
         }
 
         // 2. Determine offset (EPIC-033/US-004: Use sharded index)
@@ -142,11 +159,14 @@ impl VectorStorage for MmapStorage {
         }
 
         // 3. WAL append with CRC32 framing per entry (Issue #317)
+        // Issue #423: Allocate WAL frame buffer once and reuse across entries
+        // to avoid per-entry heap allocation (mirrors LogPayloadStorage pattern).
         {
             let mut wal = self.wal.write();
+            let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_size);
             for &(id, vector) in vectors {
                 let vector_bytes = vector_to_bytes(vector);
-                write_wal_store_entry(&mut wal, id, vector_bytes)?;
+                write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
             }
             // Note: no fsync here, caller controls durability via `flush()`.
         }
@@ -212,7 +232,8 @@ impl VectorStorage for MmapStorage {
         // 1. Write to WAL with CRC32 framing (Issue #317)
         {
             let mut wal = self.wal.write();
-            write_wal_delete_entry(&mut wal, id)?;
+            let mut buf = Vec::with_capacity(1 + 8);
+            write_wal_delete_entry(&mut wal, id, &mut buf)?;
         }
 
         // 2. Get offset before removing from index (for hole-punch)

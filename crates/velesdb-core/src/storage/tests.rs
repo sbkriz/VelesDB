@@ -1043,3 +1043,118 @@ fn test_hole_punch_fallback_zeros_data() {
         "Remaining bytes should be unchanged"
     );
 }
+
+// =============================================================================
+// Issue #423 Component 1: Batch WAL Buffer Reuse Tests
+// =============================================================================
+
+/// Verifies that `store_batch` produces WAL entries identical to individual
+/// `store` calls by comparing crash-recovery results.
+///
+/// The WAL format must remain backward-compatible after introducing the
+/// reusable buffer in `write_wal_store_entry`.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_store_batch_wal_recovery_matches_individual_stores() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 4;
+
+    // --- Path A: store via store_batch, crash (no flush), recover ---
+    let vectors_batch: Vec<(u64, Vec<f32>)> = (0u64..5)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|j| (i * 10 + j as u64) as f32).collect();
+            (i, v)
+        })
+        .collect();
+
+    {
+        let batch_path = path.join("batch");
+        let mut storage = MmapStorage::new(&batch_path, dim).unwrap();
+        let refs: Vec<(u64, &[f32])> = vectors_batch
+            .iter()
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+        storage.store_batch(&refs).unwrap();
+        // Intentional: NO flush() -- simulate crash
+        // Best-effort drop writes WAL to disk
+    }
+
+    // Reopen -- WAL replay recovers the batch
+    let batch_path = path.join("batch");
+    let storage_batch = MmapStorage::new(&batch_path, dim).unwrap();
+
+    // --- Path B: store via individual store() calls, crash, recover ---
+    {
+        let single_path = path.join("single");
+        let mut storage = MmapStorage::new(&single_path, dim).unwrap();
+        for (id, v) in &vectors_batch {
+            storage.store(*id, v).unwrap();
+        }
+        // Intentional: NO flush()
+    }
+
+    let single_path = path.join("single");
+    let storage_single = MmapStorage::new(&single_path, dim).unwrap();
+
+    // Both paths must recover identical data
+    assert_eq!(storage_batch.len(), storage_single.len());
+    for (id, expected) in &vectors_batch {
+        let from_batch = storage_batch.retrieve(*id).unwrap();
+        let from_single = storage_single.retrieve(*id).unwrap();
+        assert_eq!(
+            from_batch.as_ref(),
+            Some(expected),
+            "Batch WAL recovery mismatch for ID {id}"
+        );
+        assert_eq!(
+            from_batch, from_single,
+            "Batch and single-store WAL recovery must produce identical results for ID {id}"
+        );
+    }
+}
+
+/// Verifies that calling `store_batch` multiple times does not cause
+/// cross-contamination from the reusable WAL buffer.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_store_batch_multiple_batches_no_cross_contamination() {
+    let dir = tempdir().unwrap();
+    let dim = 3;
+    let mut storage = MmapStorage::new(dir.path(), dim).unwrap();
+
+    // Batch 1: IDs 0..3
+    let batch1: Vec<(u64, &[f32])> = vec![
+        (0, &[1.0, 2.0, 3.0]),
+        (1, &[4.0, 5.0, 6.0]),
+        (2, &[7.0, 8.0, 9.0]),
+    ];
+    storage.store_batch(&batch1).unwrap();
+
+    // Batch 2: IDs 10..13 with different data
+    let batch2: Vec<(u64, &[f32])> = vec![
+        (10, &[10.0, 20.0, 30.0]),
+        (11, &[40.0, 50.0, 60.0]),
+        (12, &[70.0, 80.0, 90.0]),
+    ];
+    storage.store_batch(&batch2).unwrap();
+
+    // Verify batch 1 data unchanged
+    assert_eq!(storage.retrieve(0).unwrap(), Some(vec![1.0, 2.0, 3.0]));
+    assert_eq!(storage.retrieve(1).unwrap(), Some(vec![4.0, 5.0, 6.0]));
+    assert_eq!(storage.retrieve(2).unwrap(), Some(vec![7.0, 8.0, 9.0]));
+
+    // Verify batch 2 data correct
+    assert_eq!(storage.retrieve(10).unwrap(), Some(vec![10.0, 20.0, 30.0]));
+    assert_eq!(storage.retrieve(11).unwrap(), Some(vec![40.0, 50.0, 60.0]));
+    assert_eq!(storage.retrieve(12).unwrap(), Some(vec![70.0, 80.0, 90.0]));
+
+    // Verify WAL recovery produces same result
+    storage.flush().unwrap();
+    drop(storage);
+
+    let storage2 = MmapStorage::new(dir.path(), dim).unwrap();
+    assert_eq!(storage2.len(), 6);
+    assert_eq!(storage2.retrieve(0).unwrap(), Some(vec![1.0, 2.0, 3.0]));
+    assert_eq!(storage2.retrieve(12).unwrap(), Some(vec![70.0, 80.0, 90.0]));
+}
