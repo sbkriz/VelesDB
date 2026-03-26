@@ -7,7 +7,8 @@ existing SDK consumers.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+import re
+from typing import Any, Iterable
 
 from velesdb.velesdb import (  # type: ignore[attr-defined]
     AgentMemory,
@@ -32,9 +33,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
 
 
 def _compile_like_pattern(pattern: str, case_insensitive: bool) -> Any:
-    import re
-
-    parts: List[str] = []
+    parts: list[str] = []
     for ch in pattern:
         if ch == "%":
             parts.append(".*")
@@ -48,8 +47,8 @@ def _compile_like_pattern(pattern: str, case_insensitive: bool) -> Any:
 
 
 def _extract_filter_condition(
-    filter_dict: Dict[str, Any],
-) -> Optional[tuple[str, str, str]]:
+    filter_dict: dict[str, Any],
+) -> tuple[str, str, str] | None:
     """Return (cond_type, field, pattern) from a filter dict, or None if invalid."""
     condition = filter_dict.get("condition")
     if not isinstance(condition, dict):
@@ -75,7 +74,7 @@ def _apply_string_condition(
     return True
 
 
-def _matches_filter(payload: Any, filter_dict: Optional[Dict[str, Any]]) -> bool:
+def _matches_filter(payload: Any, filter_dict: dict[str, Any] | None) -> bool:
     if not filter_dict:
         return True
     condition_parts = _extract_filter_condition(filter_dict)
@@ -93,7 +92,7 @@ def _matches_filter(payload: Any, filter_dict: Optional[Dict[str, Any]]) -> bool
 class GraphStore:
     """Compatibility adapter for GraphStore call shapes."""
 
-    def __init__(self, inner: Optional[_RawGraphStore] = None) -> None:
+    def __init__(self, inner: _RawGraphStore | None = None) -> None:
         self._inner = inner or _RawGraphStore()
 
     def __getattr__(self, name: str) -> Any:
@@ -103,16 +102,16 @@ class GraphStore:
         self,
         edge: Any,
         *,
-        source: Optional[int] = None,
-        target: Optional[int] = None,
-        label: Optional[str] = None,
-        properties: Optional[Dict[str, Any]] = None,
+        source: int | None = None,
+        target: int | None = None,
+        label: str | None = None,
+        properties: dict[str, Any] | None = None,
     ) -> None:
         if isinstance(edge, dict):
             self._inner.add_edge(edge)
             return
 
-        edge_dict: Dict[str, Any] = {
+        edge_dict: dict[str, Any] = {
             "id": int(edge),
             "source": int(source) if source is not None else 0,
             "target": int(target) if target is not None else 0,
@@ -128,8 +127,8 @@ class GraphStore:
         source: int,
         max_depth: int = 3,
         limit: int = 10_000,
-        relationship_types: Optional[List[str]] = None,
-    ) -> List[TraversalResult]:
+        relationship_types: list[str] | None = None,
+    ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
@@ -143,8 +142,8 @@ class GraphStore:
         source: int,
         max_depth: int = 3,
         limit: int = 10_000,
-        relationship_types: Optional[List[str]] = None,
-    ) -> List[TraversalResult]:
+        relationship_types: list[str] | None = None,
+    ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
@@ -158,7 +157,7 @@ class Collection:
 
     def __init__(self, inner: _RawCollection) -> None:
         self._inner = inner
-        self._graph_store: Optional[GraphStore] = None
+        self._graph_store: GraphStore | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -166,8 +165,8 @@ class Collection:
     def upsert(
         self,
         points_or_id: Any,
-        vector: Optional[Iterable[float]] = None,
-        payload: Optional[Dict[str, Any]] = None,
+        vector: Iterable[float] | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> int:
         if vector is None:
             return self._inner.upsert(points_or_id)
@@ -179,13 +178,13 @@ class Collection:
 
     def search(
         self,
-        vector: Optional[Iterable[float]] = None,
+        vector: Iterable[float] | None = None,
         top_k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
-        sparse_vector: Optional[Any] = None,
-        sparse_index_name: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        kwargs: Dict[str, Any] = {"top_k": top_k}
+        filter: dict[str, Any] | None = None,
+        sparse_vector: Any | None = None,
+        sparse_index_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        kwargs: dict[str, Any] = {"top_k": top_k}
         if vector is not None:
             kwargs["vector"] = list(vector)
         if sparse_vector is not None:
@@ -199,9 +198,9 @@ class Collection:
 
     def batch_search(
         self,
-        queries: List[Any],
+        queries: list[Any],
         top_k: int = 10,
-    ) -> List[List[Dict[str, Any]]]:
+    ) -> list[list[dict[str, Any]]]:
         if queries and isinstance(queries[0], dict):
             # Pass dicts through to Rust, injecting the default top_k only
             # when the caller omitted both "top_k" and "topK".
@@ -240,11 +239,11 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-    ) -> Collection:
+    ) -> "Collection":
         col = self._inner.create_collection(name, dimension, metric, storage_mode)
         return Collection(col)
 
-    def get_collection(self, name: str) -> Optional[Collection]:
+    def get_collection(self, name: str) -> "Collection | None":
         col = self._inner.get_collection(name)
         if col is None:
             return None
@@ -256,7 +255,7 @@ class Database:
         dimension: int,
         metric: str = "cosine",
         storage_mode: str = "full",
-    ) -> Collection:
+    ) -> "Collection":
         existing = self.get_collection(name)
         if existing is not None:
             return existing
@@ -264,7 +263,7 @@ class Database:
             name, dimension=dimension, metric=metric, storage_mode=storage_mode
         )
 
-    def create_metadata_collection(self, name: str) -> Collection:
+    def create_metadata_collection(self, name: str) -> "Collection":
         col = self._inner.create_metadata_collection(name)
         return Collection(col)
 
@@ -278,8 +277,6 @@ class VelesQL:
 
     @staticmethod
     def _normalize_legacy_query(query: str) -> str:
-        import re
-
         normalized = query
         normalized = re.sub(
             r"USING\s+FUSION\s+([a-zA-Z_][a-zA-Z0-9_]*)\b",
@@ -305,7 +302,7 @@ class VelesQL:
     def parse(query: str) -> ParsedStatement:
         try:
             return _RawVelesQL.parse(query)
-        except Exception:
+        except (VelesQLSyntaxError, VelesQLParameterError):
             normalized = VelesQL._normalize_legacy_query(query)
             if normalized == query:
                 raise

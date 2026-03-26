@@ -16,6 +16,9 @@ use crate::FusionStrategy;
 
 use super::Collection;
 
+/// Default fusion strategy when none is specified by the caller.
+const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
+
 /// A parsed batch search query ready for dispatch.
 struct ParsedSearch {
     vector: Vec<f32>,
@@ -214,9 +217,7 @@ impl Collection {
                 .iter()
                 .map(|v| extract_vector(py, v))
                 .collect::<PyResult<_>>()?;
-            let fusion_strategy = fusion
-                .map(|f| f.inner())
-                .unwrap_or(CoreFusionStrategy::RRF { k: 60 });
+            let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
             let filter_obj = parse_optional_filter(py, filter)?;
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
             let results = self
@@ -240,9 +241,7 @@ impl Collection {
                 .iter()
                 .map(|v| extract_vector(py, v))
                 .collect::<PyResult<_>>()?;
-            let fusion_strategy = fusion
-                .map(|f| f.inner())
-                .unwrap_or(CoreFusionStrategy::RRF { k: 60 });
+            let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
             let results = self
                 .inner
@@ -354,7 +353,11 @@ impl Collection {
             }
         }
 
-        // All slots must be filled; every index was assigned to exactly one group.
+        // Invariant: every query index was assigned to exactly one group.
+        debug_assert!(
+            output.iter().all(Option::is_some),
+            "batch dispatch left unassigned slots"
+        );
         Ok(output.into_iter().map(|o| o.unwrap_or_default()).collect())
     }
 

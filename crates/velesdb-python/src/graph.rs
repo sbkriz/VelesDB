@@ -10,6 +10,21 @@ use std::collections::HashMap;
 use crate::utils::{json_to_python, python_to_json};
 use velesdb_core::collection::graph::{GraphEdge, GraphNode, TraversalResult};
 
+/// Parse a Python properties dict into a JSON properties map.
+///
+/// Used by both [`dict_to_node`] and [`dict_to_edge`] to avoid duplicating
+/// the `PyObject` -> `HashMap<String, serde_json::Value>` conversion.
+fn parse_properties(
+    py: Python<'_>,
+    props_obj: &PyObject,
+) -> PyResult<HashMap<String, serde_json::Value>> {
+    let props_dict: HashMap<String, PyObject> = props_obj.extract(py)?;
+    props_dict
+        .into_iter()
+        .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+        .collect()
+}
+
 /// Convert a Python dict to a GraphNode.
 pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResult<GraphNode> {
     let id: u64 = dict
@@ -26,13 +41,7 @@ pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
     let node = GraphNode::new(id, &label);
 
     let node = if let Some(props) = dict.get("properties") {
-        let props_dict: HashMap<String, PyObject> = props.extract(py)?;
-        let mut properties = HashMap::new();
-        for (key, value) in props_dict {
-            let json_val = python_to_json(py, &value)?;
-            properties.insert(key, json_val);
-        }
-        node.with_properties(properties)
+        node.with_properties(parse_properties(py, props)?)
     } else {
         node
     };
@@ -74,13 +83,7 @@ pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
         .map_err(|e| PyValueError::new_err(format!("Invalid edge: {e}")))?;
 
     let edge = if let Some(props) = dict.get("properties") {
-        let props_dict: HashMap<String, PyObject> = props.extract(py)?;
-        let mut properties = HashMap::new();
-        for (key, value) in props_dict {
-            let json_val = python_to_json(py, &value)?;
-            properties.insert(key, json_val);
-        }
-        edge.with_properties(properties)
+        edge.with_properties(parse_properties(py, props)?)
     } else {
         edge
     };

@@ -14,9 +14,14 @@ import tempfile
 import numpy as np
 import pytest
 
-from conftest import _SKIP_NO_BINDINGS
+from conftest import _SKIP_NO_BINDINGS, VELESDB_AVAILABLE
 
 pytestmark = _SKIP_NO_BINDINGS
+
+if VELESDB_AVAILABLE:
+    from velesdb import Database
+else:
+    Database = None  # type: ignore[assignment,misc]
 
 N_VECTORS = 10_000
 DIM = 128
@@ -36,9 +41,6 @@ def recall_env():
     np.random.seed(42)
     vectors = np.random.randn(N_VECTORS, DIM).astype(np.float32)
     tmp = tempfile.mkdtemp()
-    # Import is safe here: conftest.py already skipped the module if unavailable.
-    from velesdb import Database  # noqa: PLC0415
-
     db = Database(tmp)
     yield db, vectors
     shutil.rmtree(tmp, ignore_errors=True)

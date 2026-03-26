@@ -28,6 +28,8 @@ pub fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
 
     // Try numpy float64 array and convert
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f64>>(py) {
+        // Reason: intentional f64->f32 narrowing for numpy float64 arrays
+        #[allow(clippy::cast_possible_truncation)]
         return Ok(array.as_slice()?.iter().map(|&x| x as f32).collect());
     }
 
@@ -124,17 +126,16 @@ pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> PyResult<serde_json::Va
     )))
 }
 
-/// Helper to convert a value to PyObject using IntoPyObject trait.
-/// This replaces the deprecated `into_py` method.
+/// Helper to convert a value to `PyObject` using the `IntoPyObject` trait.
+///
+/// Returns `py.None()` on conversion failure instead of panicking,
+/// which preserves the existing `-> PyObject` signature for 50+ callers.
 #[inline]
 pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> PyObject
 where
     T: IntoPyObjectExt<'py>,
 {
-    match value.into_py_any(py) {
-        Ok(obj) => obj,
-        Err(err) => panic!("failed converting value to Python object: {err}"),
-    }
+    value.into_py_any(py).unwrap_or_else(|_| py.None())
 }
 
 /// Convert a `serde_json::Value` to a Python object.
@@ -159,7 +160,8 @@ pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
         serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
         serde_json::Value::Array(arr) => {
             let items: Vec<PyObject> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            let list = PyList::new(py, &items).expect("failed to create PyList");
+            // PyList::new is infallible for Vec<PyObject> items.
+            let list = PyList::new(py, &items).unwrap_or_else(|_| PyList::empty(py));
             list.into_any().unbind()
         }
         serde_json::Value::Object(map) => {

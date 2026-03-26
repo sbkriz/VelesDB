@@ -40,11 +40,15 @@ class TestIssue357GraphImports:
 
     def test_pygraphcollection_is_same_as_native(self):
         """PyGraphCollection alias must point to the native GraphCollection."""
-        assert PyGraphCollection is GraphCollection
+        assert PyGraphCollection is GraphCollection, (
+            "PyGraphCollection must be the same object as GraphCollection"
+        )
 
     def test_pygraphschema_is_same_as_native(self):
         """PyGraphSchema alias must point to the native GraphSchema."""
-        assert PyGraphSchema is GraphSchema
+        assert PyGraphSchema is GraphSchema, (
+            "PyGraphSchema must be the same object as GraphSchema"
+        )
 
     def test_graphschema_schemaless(self):
         """GraphSchema.schemaless() must work through the alias."""
@@ -186,7 +190,7 @@ class TestIssue413SilentDataLoss:
         ValueError — not TypeError.  The union was overly broad.
         """
         col = temp_db.create_collection("data_loss_test", dimension=4)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"unsupported|type|payload"):
             col.upsert([{
                 "id": 1,
                 "vector": [1.0, 0.0, 0.0, 0.0],
@@ -196,7 +200,7 @@ class TestIssue413SilentDataLoss:
     def test_unsupported_type_in_list_raises(self, temp_db):
         """Unsupported types inside lists must also raise ValueError."""
         col = temp_db.create_collection("list_loss_test", dimension=4)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"unsupported|type|payload"):
             col.upsert([{
                 "id": 1,
                 "vector": [1.0, 0.0, 0.0, 0.0],
@@ -235,6 +239,14 @@ class TestIssue413SilentDataLoss:
         assert p["empty_dict"] == {}
 
 
+def _assert_batch_len(results, query_idx, expected):
+    """Assert result count for a single query in a batch result."""
+    actual = len(results[query_idx])
+    assert actual == expected, (
+        f"Query {query_idx} returned {actual} results, expected {expected}"
+    )
+
+
 class TestIssue419BatchSearchPerQueryTopK:
     """Regression tests for #419: batch_search per-query top_k.
 
@@ -269,16 +281,9 @@ class TestIssue419BatchSearchPerQueryTopK:
             {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2},
             {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 10},
         ])
-        if len(results) != 2:
-            raise AssertionError(f"Expected 2 result sets, got {len(results)}")
-        if len(results[0]) != 2:
-            raise AssertionError(
-                f"Query with top_k=2 returned {len(results[0])} results, expected 2"
-            )
-        if len(results[1]) != 10:
-            raise AssertionError(
-                f"Query with top_k=10 returned {len(results[1])} results, expected 10"
-            )
+        assert len(results) == 2, f"Expected 2 result sets, got {len(results)}"
+        _assert_batch_len(results, 0, 2)
+        _assert_batch_len(results, 1, 10)
 
     def test_uniform_topk_still_works(self, temp_db):
         """batch_search where all queries share the same top_k (fast path)."""
@@ -288,13 +293,9 @@ class TestIssue419BatchSearchPerQueryTopK:
             {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 3},
             {"vector": [0.0, 0.0, 1.0, 0.0], "top_k": 3},
         ])
-        if len(results) != 3:
-            raise AssertionError(f"Expected 3 result sets, got {len(results)}")
-        for i, r in enumerate(results):
-            if len(r) != 3:
-                raise AssertionError(
-                    f"Query {i} with top_k=3 returned {len(r)} results, expected 3"
-                )
+        assert len(results) == 3, f"Expected 3 result sets, got {len(results)}"
+        for i in range(3):
+            _assert_batch_len(results, i, 3)
 
     def test_default_topk_is_10(self, temp_db):
         """Queries without explicit top_k default to 10."""
@@ -302,12 +303,8 @@ class TestIssue419BatchSearchPerQueryTopK:
         results = col.batch_search([
             {"vector": [1.0, 0.0, 0.0, 0.0]},
         ])
-        if len(results) != 1:
-            raise AssertionError(f"Expected 1 result set, got {len(results)}")
-        if len(results[0]) != 10:
-            raise AssertionError(
-                f"Default top_k query returned {len(results[0])} results, expected 10"
-            )
+        assert len(results) == 1, f"Expected 1 result set, got {len(results)}"
+        _assert_batch_len(results, 0, 10)
 
     def test_topk_alias_topK_works(self, temp_db):
         """The 'topK' alias (camelCase) must work identically to 'top_k'."""
@@ -315,10 +312,7 @@ class TestIssue419BatchSearchPerQueryTopK:
         results = col.batch_search([
             {"vector": [1.0, 0.0, 0.0, 0.0], "topK": 5},
         ])
-        if len(results[0]) != 5:
-            raise AssertionError(
-                f"topK=5 returned {len(results[0])} results, expected 5"
-            )
+        _assert_batch_len(results, 0, 5)
 
     def test_three_distinct_topk_values(self, temp_db):
         """Three queries with k=1, k=5, k=15 — each gets its own count."""
@@ -328,24 +322,14 @@ class TestIssue419BatchSearchPerQueryTopK:
             {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 5},
             {"vector": [0.0, 0.0, 1.0, 0.0], "top_k": 15},
         ])
-        if len(results[0]) != 1:
-            raise AssertionError(
-                f"top_k=1 returned {len(results[0])} results, expected 1"
-            )
-        if len(results[1]) != 5:
-            raise AssertionError(
-                f"top_k=5 returned {len(results[1])} results, expected 5"
-            )
-        if len(results[2]) != 15:
-            raise AssertionError(
-                f"top_k=15 returned {len(results[2])} results, expected 15"
-            )
+        _assert_batch_len(results, 0, 1)
+        _assert_batch_len(results, 1, 5)
+        _assert_batch_len(results, 2, 15)
 
     def test_empty_batch_returns_empty(self, temp_db):
         """An empty batch should return an empty list, not error."""
         col = self._build_collection(temp_db)
         results = col.batch_search([])
-        if len(results) != 0:
-            raise AssertionError(
-                f"Empty batch returned {len(results)} results, expected 0"
-            )
+        assert len(results) == 0, (
+            f"Empty batch returned {len(results)} results, expected 0"
+        )

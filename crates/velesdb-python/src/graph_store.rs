@@ -225,6 +225,8 @@ impl GraphStore {
                     .map(|e| (e.source(), e.label().to_string()))
                     .unwrap_or((start_node, String::new()));
 
+                // Reason: depth is bounded by SAFETY_MAX_DEPTH (100), always fits in usize.
+                #[allow(clippy::cast_possible_truncation)]
                 Some(TraversalResult {
                     depth: r.depth as usize,
                     source,

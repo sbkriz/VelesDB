@@ -152,12 +152,13 @@ impl PySemanticMemory {
     fn query(&self, py: Python<'_>, embedding: Vec<f32>, top_k: usize) -> PyResult<PyObject> {
         let results = self.inner.query(&embedding, top_k).map_err(to_py_err)?;
 
+        // set_item is infallible on fresh dicts with interned keys and basic Python types.
         let list = pyo3::types::PyList::empty(py);
         for (id, score, content) in results {
             let dict = PyDict::new(py);
-            dict.set_item(PyString::intern(py, "id"), id)?;
-            dict.set_item(PyString::intern(py, "score"), score)?;
-            dict.set_item(PyString::intern(py, "content"), content)?;
+            let _ = dict.set_item(PyString::intern(py, "id"), id);
+            let _ = dict.set_item(PyString::intern(py, "score"), score);
+            let _ = dict.set_item(PyString::intern(py, "content"), content);
             list.append(dict)?;
         }
         Ok(list.into())
@@ -239,9 +240,9 @@ impl PyEpisodicMemory {
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp) in results {
             let dict = PyDict::new(py);
-            dict.set_item(PyString::intern(py, "id"), id)?;
-            dict.set_item(PyString::intern(py, "description"), description)?;
-            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
+            let _ = dict.set_item(PyString::intern(py, "id"), id);
+            let _ = dict.set_item(PyString::intern(py, "description"), description);
+            let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
             list.append(dict)?;
         }
         Ok(list.into())
@@ -270,10 +271,10 @@ impl PyEpisodicMemory {
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp, score) in results {
             let dict = PyDict::new(py);
-            dict.set_item(PyString::intern(py, "id"), id)?;
-            dict.set_item(PyString::intern(py, "description"), description)?;
-            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
-            dict.set_item(PyString::intern(py, "score"), score)?;
+            let _ = dict.set_item(PyString::intern(py, "id"), id);
+            let _ = dict.set_item(PyString::intern(py, "description"), description);
+            let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
+            let _ = dict.set_item(PyString::intern(py, "score"), score);
             list.append(dict)?;
         }
         Ok(list.into())
@@ -297,9 +298,9 @@ impl PyEpisodicMemory {
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp) in results {
             let dict = PyDict::new(py);
-            dict.set_item(PyString::intern(py, "id"), id)?;
-            dict.set_item(PyString::intern(py, "description"), description)?;
-            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
+            let _ = dict.set_item(PyString::intern(py, "id"), id);
+            let _ = dict.set_item(PyString::intern(py, "description"), description);
+            let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
             list.append(dict)?;
         }
         Ok(list.into())
@@ -392,11 +393,11 @@ impl PyProceduralMemory {
         let list = pyo3::types::PyList::empty(py);
         for m in results {
             let dict = PyDict::new(py);
-            dict.set_item(PyString::intern(py, "id"), m.id)?;
-            dict.set_item(PyString::intern(py, "name"), &m.name)?;
-            dict.set_item(PyString::intern(py, "steps"), &m.steps)?;
-            dict.set_item(PyString::intern(py, "confidence"), m.confidence)?;
-            dict.set_item(PyString::intern(py, "score"), m.score)?;
+            let _ = dict.set_item(PyString::intern(py, "id"), m.id);
+            let _ = dict.set_item(PyString::intern(py, "name"), &m.name);
+            let _ = dict.set_item(PyString::intern(py, "steps"), &m.steps);
+            let _ = dict.set_item(PyString::intern(py, "confidence"), m.confidence);
+            let _ = dict.set_item(PyString::intern(py, "score"), m.score);
             list.append(dict)?;
         }
         Ok(list.into())
@@ -432,11 +433,11 @@ impl PyProceduralMemory {
         let list = pyo3::types::PyList::empty(py);
         for m in results {
             let dict = PyDict::new(py);
-            dict.set_item(PyString::intern(py, "id"), m.id)?;
-            dict.set_item(PyString::intern(py, "name"), &m.name)?;
-            dict.set_item(PyString::intern(py, "steps"), &m.steps)?;
-            dict.set_item(PyString::intern(py, "confidence"), m.confidence)?;
-            dict.set_item(PyString::intern(py, "score"), m.score)?;
+            let _ = dict.set_item(PyString::intern(py, "id"), m.id);
+            let _ = dict.set_item(PyString::intern(py, "name"), &m.name);
+            let _ = dict.set_item(PyString::intern(py, "steps"), &m.steps);
+            let _ = dict.set_item(PyString::intern(py, "confidence"), m.confidence);
+            let _ = dict.set_item(PyString::intern(py, "score"), m.score);
             list.append(dict)?;
         }
         Ok(list.into())

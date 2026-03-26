@@ -6,14 +6,15 @@ Run with: pytest tests/test_graph.py -v
 
 import pytest
 
-# Import will fail until the module is built with maturin
+from conftest import _SKIP_NO_BINDINGS
+
+pytestmark = _SKIP_NO_BINDINGS
+
 try:
     from velesdb import GraphStore, StreamingConfig
-except ImportError:
-    pytest.skip(
-        "velesdb module not built yet - run 'maturin develop' first",
-        allow_module_level=True,
-    )
+except (ImportError, AttributeError):
+    GraphStore = None  # type: ignore[assignment,misc]
+    StreamingConfig = None  # type: ignore[assignment,misc]
 
 
 class TestGraphStore:
@@ -107,7 +108,6 @@ class TestGraphStore:
 
         store.remove_edge(1)
         assert store.edge_count() == 0
-
 
 
 class TestStreamingConfig:

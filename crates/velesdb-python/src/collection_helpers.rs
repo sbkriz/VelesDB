@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::utils::json_to_python;
+use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
@@ -207,4 +207,78 @@ pub fn parse_sparse_vectors_from_point(
     Err(PyValueError::new_err(
         "sparse_vector must be dict[int, float] or dict[str, dict[int, float]]",
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Point dict parsing helpers (DRY-02, DRY-03, FOWL-04)
+// ---------------------------------------------------------------------------
+
+/// Convert a Python `dict[str, Any]` to a `serde_json::Value::Object`.
+///
+/// Shared helper used by both `upsert_bulk_numpy`'s payload loop and
+/// `parse_payload` to avoid duplicating the dict-to-JSON conversion.
+pub fn dict_to_json_map(
+    py: Python<'_>,
+    dict: &HashMap<String, PyObject>,
+) -> PyResult<serde_json::Value> {
+    let json_map: serde_json::Map<String, serde_json::Value> = dict
+        .iter()
+        .map(|(k, v)| python_to_json(py, v).map(|jv| (k.clone(), jv)))
+        .collect::<PyResult<_>>()?;
+    Ok(serde_json::Value::Object(json_map))
+}
+
+/// Extract the `"id"` field from a point dict as `u64`.
+pub fn extract_point_id(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResult<u64> {
+    dict.get("id")
+        .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
+        .extract(py)
+}
+
+/// Extract the `"vector"` field from a point dict as `Vec<f32>`.
+pub fn extract_point_vector(
+    py: Python<'_>,
+    dict: &HashMap<String, PyObject>,
+) -> PyResult<Vec<f32>> {
+    let obj = dict
+        .get("vector")
+        .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
+    extract_vector(py, obj)
+}
+
+/// Parse a list of point dicts into core `Point` values.
+///
+/// Each dict must contain `"id"` (u64) and `"vector"` (list/numpy) keys,
+/// with optional `"payload"` (dict) and `"sparse_vector"` entries.
+///
+/// Shared by [`Collection::upsert`] and [`Collection::stream_insert`].
+pub fn parse_point_dicts(
+    py: Python<'_>,
+    points: &[HashMap<String, PyObject>],
+) -> PyResult<Vec<Point>> {
+    let mut result = Vec::with_capacity(points.len());
+    for point_dict in points {
+        let id = extract_point_id(py, point_dict)?;
+        let vector = extract_point_vector(py, point_dict)?;
+        let payload = parse_payload(py, point_dict.get("payload"))?;
+        let sparse_vectors = parse_sparse_vectors_from_point(py, point_dict)?;
+        result.push(Point::with_sparse(id, vector, payload, sparse_vectors));
+    }
+    Ok(result)
+}
+
+/// Parse an optional payload `PyObject` into a JSON value.
+pub fn parse_payload(
+    py: Python<'_>,
+    payload_obj: Option<&PyObject>,
+) -> PyResult<Option<serde_json::Value>> {
+    match payload_obj {
+        Some(p) => {
+            let dict: HashMap<String, PyObject> = p
+                .extract(py)
+                .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
+            Ok(Some(dict_to_json_map(py, &dict)?))
+        }
+        None => Ok(None),
+    }
 }

@@ -23,6 +23,9 @@ use velesdb_core::{
     Collection as CoreCollection, Filter, FusionStrategy as CoreFusionStrategy, SearchResult,
 };
 
+/// Default fusion strategy when none is specified by the caller.
+const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
+
 /// A vector collection in VelesDB.
 ///
 /// Collections store vectors with optional metadata (payload) and support
@@ -59,20 +62,16 @@ impl Collection {
             sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
 
         match (dense, sparse, filter) {
-            (Some(d), Some(s), Some(f)) => {
-                let strategy = CoreFusionStrategy::RRF { k: 60 };
-                self.inner
-                    .hybrid_sparse_search_named_with_filter(
-                        &d, &s, top_k, &strategy, index_name, f,
-                    )
-                    .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))
-            }
-            (Some(d), Some(s), None) => {
-                let strategy = CoreFusionStrategy::RRF { k: 60 };
-                self.inner
-                    .hybrid_sparse_search_named(&d, &s, top_k, &strategy, index_name)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))
-            }
+            (Some(d), Some(s), Some(f)) => self
+                .inner
+                .hybrid_sparse_search_named_with_filter(
+                    &d, &s, top_k, &DEFAULT_FUSION, index_name, f,
+                )
+                .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}"))),
+            (Some(d), Some(s), None) => self
+                .inner
+                .hybrid_sparse_search_named(&d, &s, top_k, &DEFAULT_FUSION, index_name)
+                .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}"))),
             (Some(d), None, Some(f)) => self
                 .inner
                 .search_with_filter(&d, top_k, f)

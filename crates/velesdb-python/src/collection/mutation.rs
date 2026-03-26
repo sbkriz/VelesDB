@@ -5,8 +5,9 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use velesdb_core::Point;
 
-use crate::collection_helpers::parse_sparse_vectors_from_point;
-use crate::utils::{extract_vector, python_to_json};
+use crate::collection_helpers::{
+    dict_to_json_map, extract_point_id, extract_point_vector, parse_payload, parse_point_dicts,
+};
 
 use super::Collection;
 
@@ -16,29 +17,11 @@ impl Collection {
     #[pyo3(signature = (points))]
     fn upsert(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
         Python::with_gil(|py| {
-            let mut core_points = Vec::with_capacity(points.len());
-
-            for point_dict in points {
-                let id: u64 = point_dict
-                    .get("id")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
-                    .extract(py)?;
-
-                let vector_obj = point_dict
-                    .get("vector")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
-                let vector = extract_vector(py, vector_obj)?;
-
-                let payload = parse_payload(py, point_dict.get("payload"))?;
-                let sparse_vectors = parse_sparse_vectors_from_point(py, &point_dict)?;
-                core_points.push(Point::with_sparse(id, vector, payload, sparse_vectors));
-            }
-
+            let core_points = parse_point_dicts(py, &points)?;
             let count = core_points.len();
             self.inner
                 .upsert(core_points)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert: {e}")))?;
-
             Ok(count)
         })
     }
@@ -49,16 +32,11 @@ impl Collection {
         Python::with_gil(|py| {
             let mut core_points = Vec::with_capacity(points.len());
 
-            for point_dict in points {
-                let id: u64 = point_dict
-                    .get("id")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
-                    .extract(py)?;
-
+            for point_dict in &points {
+                let id = extract_point_id(py, point_dict)?;
                 let payload = parse_payload(py, point_dict.get("payload"))?.ok_or_else(|| {
                     PyValueError::new_err("Metadata-only point must have 'payload' field")
                 })?;
-
                 core_points.push(Point::metadata_only(id, payload));
             }
 
@@ -66,7 +44,6 @@ impl Collection {
             self.inner
                 .upsert_metadata(core_points)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_metadata: {e}")))?;
-
             Ok(count)
         })
     }
@@ -77,17 +54,9 @@ impl Collection {
         Python::with_gil(|py| {
             let mut core_points = Vec::with_capacity(points.len());
 
-            for point_dict in points {
-                let id: u64 = point_dict
-                    .get("id")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
-                    .extract(py)?;
-
-                let vector_obj = point_dict
-                    .get("vector")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
-                let vector = extract_vector(py, vector_obj)?;
-
+            for point_dict in &points {
+                let id = extract_point_id(py, point_dict)?;
+                let vector = extract_point_vector(py, point_dict)?;
                 let payload = parse_payload(py, point_dict.get("payload"))?;
                 core_points.push(Point::new(id, vector, payload));
             }
@@ -126,46 +95,19 @@ impl Collection {
         Python::with_gil(|py| {
             let array = vectors.as_array();
             let n = array.nrows();
-
-            if ids.len() != n {
-                return Err(PyValueError::new_err(format!(
-                    "ids length ({}) must match vectors row count ({n})",
-                    ids.len()
-                )));
-            }
-
-            if let Some(ref p) = payloads {
-                if p.len() != n {
-                    return Err(PyValueError::new_err(format!(
-                        "payloads length ({}) must match vectors row count ({n})",
-                        p.len()
-                    )));
-                }
-            }
+            validate_numpy_lengths(n, &ids, &payloads)?;
 
             let mut core_points = Vec::with_capacity(n);
-
             for i in 0..n {
                 let row = array.row(i);
                 let vec_slice = row
                     .as_slice()
                     .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
 
-                let payload = if let Some(ref p_list) = payloads {
-                    match &p_list[i] {
-                        Some(dict) => {
-                            let json_map: serde_json::Map<String, serde_json::Value> = dict
-                                .iter()
-                                .map(|(k, v)| python_to_json(py, v).map(|jv| (k.clone(), jv)))
-                                .collect::<PyResult<_>>()?;
-                            Some(serde_json::Value::Object(json_map))
-                        }
-                        None => None,
-                    }
-                } else {
-                    None
+                let payload = match payloads.as_ref().and_then(|p| p[i].as_ref()) {
+                    Some(dict) => Some(dict_to_json_map(py, dict)?),
+                    None => None,
                 };
-
                 core_points.push(Point::new(ids[i], vec_slice.to_vec(), payload));
             }
 
@@ -228,22 +170,7 @@ impl Collection {
     fn stream_insert(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
         Python::with_gil(|py| {
             // Phase 1: Parse all points while holding the GIL (required for PyObject access)
-            let mut parsed = Vec::with_capacity(points.len());
-            for point_dict in &points {
-                let id: u64 = point_dict
-                    .get("id")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
-                    .extract(py)?;
-
-                let vector_obj = point_dict
-                    .get("vector")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
-                let vector = extract_vector(py, vector_obj)?;
-
-                let payload = parse_payload(py, point_dict.get("payload"))?;
-                let sparse_vectors = parse_sparse_vectors_from_point(py, point_dict)?;
-                parsed.push(Point::with_sparse(id, vector, payload, sparse_vectors));
-            }
+            let parsed = parse_point_dicts(py, &points)?;
 
             // Phase 2: Send all parsed points to the channel in a tight loop
             let mut count = 0usize;
@@ -255,28 +182,30 @@ impl Collection {
                 })?;
                 count += 1;
             }
-
             Ok(count)
         })
     }
 }
 
-/// Parse an optional payload PyObject into a JSON value.
-fn parse_payload(
-    py: Python<'_>,
-    payload_obj: Option<&PyObject>,
-) -> PyResult<Option<serde_json::Value>> {
-    match payload_obj {
-        Some(p) => {
-            let dict: HashMap<String, PyObject> = p
-                .extract(py)
-                .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
-            let json_map: serde_json::Map<String, serde_json::Value> = dict
-                .into_iter()
-                .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
-                .collect::<PyResult<_>>()?;
-            Ok(Some(serde_json::Value::Object(json_map)))
-        }
-        None => Ok(None),
+/// Validate that ids and optional payloads lengths match the vector row count.
+fn validate_numpy_lengths(
+    n: usize,
+    ids: &[u64],
+    payloads: &Option<Vec<Option<HashMap<String, PyObject>>>>,
+) -> PyResult<()> {
+    if ids.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "ids length ({}) must match vectors row count ({n})",
+            ids.len()
+        )));
     }
+    if let Some(ref p) = *payloads {
+        if p.len() != n {
+            return Err(PyValueError::new_err(format!(
+                "payloads length ({}) must match vectors row count ({n})",
+                p.len()
+            )));
+        }
+    }
+    Ok(())
 }

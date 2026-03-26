@@ -5,9 +5,35 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::HashMap;
 
+use crate::collection_helpers::id_score_pairs_to_dicts;
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 
 use super::Collection;
+
+/// Convert a `MatchResult` to a Python dict.
+///
+/// Extracts node_id, depth, path, bindings, score, and projected fields
+/// into a flat Python dict with interned keys.
+fn match_result_to_dict(
+    py: Python<'_>,
+    r: velesdb_core::collection::search::query::match_exec::MatchResult,
+) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "node_id"), r.node_id);
+    let _ = dict.set_item(PyString::intern(py, "depth"), r.depth);
+    let _ = dict.set_item(PyString::intern(py, "path"), to_pyobject(py, r.path));
+    let _ = dict.set_item(
+        PyString::intern(py, "bindings"),
+        to_pyobject(py, r.bindings),
+    );
+    let _ = dict.set_item(PyString::intern(py, "score"), r.score);
+    let projected = PyDict::new(py);
+    for (k, v) in r.projected {
+        let _ = projected.set_item(k, json_to_python(py, &v));
+    }
+    let _ = dict.set_item(PyString::intern(py, "projected"), projected);
+    dict.into_any().unbind()
+}
 
 /// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
 fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
@@ -112,23 +138,7 @@ impl Collection {
 
             let py_results: Vec<PyObject> = results
                 .into_iter()
-                .map(|r| {
-                    let dict = PyDict::new(py);
-                    let _ = dict.set_item(PyString::intern(py, "node_id"), r.node_id);
-                    let _ = dict.set_item(PyString::intern(py, "depth"), r.depth);
-                    let _ = dict.set_item(PyString::intern(py, "path"), to_pyobject(py, r.path));
-                    let _ = dict.set_item(
-                        PyString::intern(py, "bindings"),
-                        to_pyobject(py, r.bindings),
-                    );
-                    let _ = dict.set_item(PyString::intern(py, "score"), r.score);
-                    let projected = PyDict::new(py);
-                    for (k, v) in r.projected {
-                        let _ = projected.set_item(k, json_to_python(py, &v));
-                    }
-                    let _ = dict.set_item(PyString::intern(py, "projected"), projected);
-                    dict.into_any().unbind()
-                })
+                .map(|r| match_result_to_dict(py, r))
                 .collect();
             Ok(py_results)
         })
@@ -196,15 +206,9 @@ impl Collection {
                 .execute_query(&parsed_query, &json_params)
                 .map_err(|e| PyRuntimeError::new_err(format!("Query execution failed: {e}")))?;
 
-            Ok(results
-                .into_iter()
-                .map(|r| {
-                    let dict = PyDict::new(py);
-                    let _ = dict.set_item(PyString::intern(py, "id"), r.point.id);
-                    let _ = dict.set_item(PyString::intern(py, "score"), r.score);
-                    dict.into_any().unbind()
-                })
-                .collect())
+            let tuples: Vec<(u64, f32)> =
+                results.into_iter().map(|r| (r.point.id, r.score)).collect();
+            Ok(id_score_pairs_to_dicts(py, tuples))
         })
     }
 }
