@@ -262,3 +262,111 @@ fn test_native_remove_cleans_up_vector_storage() {
         after.len(),
     );
 }
+
+// =========================================================================
+// Issue #396: parallel_insert ignores expected idx — mapping reconciliation
+// =========================================================================
+
+/// Regression test: batch insert after single inserts must reconcile mappings.
+#[test]
+fn test_native_batch_after_single_insert_mapping_consistency() {
+    let index = NativeHnswIndex::new(4, DistanceMetric::Euclidean).expect("test");
+
+    // Single-insert 2 vectors: consumes graph node 0 and 1
+    index.insert(100, &[1.0, 0.0, 0.0, 0.0]).expect("test");
+    index.insert(101, &[0.0, 1.0, 0.0, 0.0]).expect("test");
+    assert_eq!(index.len(), 2);
+
+    // Batch-insert 4 vectors
+    let batch: Vec<(u64, Vec<f32>)> = vec![
+        (200, vec![0.0, 0.0, 1.0, 0.0]),
+        (201, vec![0.0, 0.0, 0.0, 1.0]),
+        (202, vec![0.5, 0.5, 0.0, 0.0]),
+        (203, vec![0.0, 0.5, 0.5, 0.0]),
+    ];
+    index.insert_batch(&batch).expect("test");
+    assert_eq!(index.len(), 6);
+
+    // Every external ID must have a consistent bidirectional mapping
+    for &ext_id in &[100u64, 101, 200, 201, 202, 203] {
+        let idx = index.mappings.get_idx(ext_id);
+        assert!(idx.is_some(), "get_idx({ext_id}) must return Some");
+        let reverse = index.mappings.get_id(idx.unwrap());
+        assert_eq!(
+            reverse,
+            Some(ext_id),
+            "Reverse mapping for idx {} must be {ext_id}, got {reverse:?}",
+            idx.unwrap()
+        );
+    }
+
+    // Search must find the correct nearest neighbor
+    let results = index.search(&[1.0, 0.0, 0.0, 0.0], 1);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 100);
+}
+
+/// Regression test: sidecar vectors stored at graph-assigned IDs for NativeHnswIndex.
+#[test]
+fn test_native_batch_insert_vector_storage_uses_assigned_ids() {
+    let index = NativeHnswIndex::new(4, DistanceMetric::Euclidean).expect("test");
+
+    // Pre-populate to create a gap
+    for i in 0..3u64 {
+        index.insert(i, &[i as f32, 0.0, 0.0, 0.0]).expect("test");
+    }
+
+    // Batch-insert
+    let batch: Vec<(u64, Vec<f32>)> = vec![
+        (10, vec![10.0, 0.0, 0.0, 0.0]),
+        (11, vec![11.0, 0.0, 0.0, 0.0]),
+        (12, vec![12.0, 0.0, 0.0, 0.0]),
+    ];
+    index.insert_batch(&batch).expect("test");
+
+    // Brute-force search uses ShardedVectors — if storage indices are wrong,
+    // brute-force results will disagree with HNSW search results.
+    let hnsw_results = index.search(&[10.0, 0.0, 0.0, 0.0], 1);
+    let brute_results = index.brute_force_search_parallel(&[10.0, 0.0, 0.0, 0.0], 1);
+
+    assert_eq!(hnsw_results.len(), 1);
+    assert_eq!(brute_results.len(), 1);
+    assert_eq!(
+        hnsw_results[0].id, brute_results[0].id,
+        "HNSW and brute-force must agree on nearest neighbor"
+    );
+    assert_eq!(hnsw_results[0].id, 10);
+}
+
+/// Regression test: batch upsert maintains mapping consistency for NativeHnswIndex.
+#[test]
+fn test_native_batch_upsert_mapping_consistency() {
+    let index = NativeHnswIndex::new(4, DistanceMetric::Euclidean).expect("test");
+
+    // Insert 5 vectors
+    for i in 0..5u64 {
+        index.insert(i, &[i as f32, 0.0, 0.0, 0.0]).expect("test");
+    }
+    assert_eq!(index.len(), 5);
+
+    // Batch-upsert: update IDs 1 and 2
+    let batch: Vec<(u64, Vec<f32>)> = vec![
+        (1, vec![100.0, 0.0, 0.0, 0.0]),
+        (2, vec![200.0, 0.0, 0.0, 0.0]),
+    ];
+    index.insert_batch(&batch).expect("test");
+    assert_eq!(index.len(), 5); // Still 5 (replaced, not added)
+
+    // All IDs must have consistent bidirectional mappings
+    for ext_id in 0..5u64 {
+        let idx = index.mappings.get_idx(ext_id);
+        assert!(idx.is_some(), "get_idx({ext_id}) must return Some");
+        let reverse = index.mappings.get_id(idx.unwrap());
+        assert_eq!(
+            reverse,
+            Some(ext_id),
+            "Reverse mapping for idx {} must be {ext_id}",
+            idx.unwrap()
+        );
+    }
+}

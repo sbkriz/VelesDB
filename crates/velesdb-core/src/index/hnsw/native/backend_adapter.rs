@@ -86,10 +86,14 @@ pub trait NativeHnswBackend: Send + Sync {
 
     /// Batch parallel insert into the HNSW graph.
     ///
+    /// Returns a vector of graph-assigned node IDs, one per input vector,
+    /// in the same order as `data`. Callers must reconcile these against
+    /// their pre-registered mapping indices.
+    ///
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
-    fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()>;
+    fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>>;
 
     /// Sets the index to searching mode after bulk insertions.
     fn set_searching_mode(&mut self, mode: bool);
@@ -140,6 +144,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Parallel batch insert using rayon.
     ///
     /// Inserts multiple vectors in parallel for better throughput on multi-core systems.
+    /// Returns a vector of graph-assigned node IDs, one per input vector in order.
     ///
     /// # Arguments
     ///
@@ -153,20 +158,21 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     ///
     /// Graph structure may differ from sequential insertion due to concurrent
     /// neighbor selection. This does not affect search correctness.
-    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()> {
+    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
         // For small batches, sequential is faster due to parallelization overhead
         if data.len() < 100 {
+            let mut assigned_ids = Vec::with_capacity(data.len());
             for (vec, _idx) in data {
-                self.insert(vec)?;
+                assigned_ids.push(self.insert(vec)?);
             }
-            return Ok(());
+            return Ok(assigned_ids);
         }
 
         // Phase A: Batch allocate — stores vectors, assigns layers (single lock scopes)
         let vectors: Vec<&[f32]> = data.iter().map(|(v, _)| *v).collect();
         let (assignments, processed) = self.allocate_batch(&vectors)?;
         if assignments.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let first_node = assignments[0].0;
@@ -175,7 +181,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         self.connect_batch_chunked(&assignments[connect_start..], &processed, first_node)?;
         self.finalize_batch(&assignments, connect_start);
 
-        Ok(())
+        // Return the graph-assigned node IDs in input order
+        let assigned_ids: Vec<usize> = assignments.iter().map(|(node_id, _)| *node_id).collect();
+        Ok(assigned_ids)
     }
 
     /// Establishes the first node as entry point if the index is empty.
@@ -653,7 +661,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
         Ok(())
     }
 
-    fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<()> {
+    fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
         NativeHnsw::parallel_insert(self, data)
     }
 

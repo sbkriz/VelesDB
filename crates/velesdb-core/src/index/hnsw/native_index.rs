@@ -38,7 +38,7 @@ pub struct NativeHnswIndex {
     dimension: usize,
     metric: DistanceMetric,
     inner: RwLock<NativeHnswInner>,
-    mappings: ShardedMappings,
+    pub(crate) mappings: ShardedMappings,
     vectors: ShardedVectors,
     enable_vector_storage: bool,
     #[allow(dead_code)] // Retained for future vacuum/rebuild operations
@@ -351,21 +351,51 @@ impl NativeHnswIndex {
             rollback_info.push((*id, result));
         }
 
-        if let Err(e) = self.inner.read().parallel_insert(&data) {
-            // Reverse order: undo last upsert first so duplicate-ID chains
-            // restore correctly (each rollback depends on the previous state).
-            for (id, result) in rollback_info.iter().rev() {
-                self.rollback_upsert(*id, result);
+        let assigned_ids = match self.inner.read().parallel_insert(&data) {
+            Ok(ids) => ids,
+            Err(e) => {
+                // Reverse order: undo last upsert first so duplicate-ID chains
+                // restore correctly (each rollback depends on the previous state).
+                for (id, result) in rollback_info.iter().rev() {
+                    self.rollback_upsert(*id, result);
+                }
+                return Err(e);
             }
-            return Err(e);
-        }
+        };
+
+        // Reconcile mappings: the graph may assign different node IDs than
+        // upsert_mapping_batch pre-registered. Fix mismatches.
+        let storage_ids = self.reconcile_batch_mappings(&rollback_info, &assigned_ids);
 
         if self.enable_vector_storage {
-            for (vec, idx) in data {
-                self.vectors.insert(idx, vec);
+            for (vec_slice, idx) in data.iter().map(|(v, _)| *v).zip(storage_ids) {
+                self.vectors.insert(idx, vec_slice);
             }
         }
         Ok(())
+    }
+
+    /// Reconciles pre-registered mapping indices with graph-assigned node IDs.
+    ///
+    /// For each item, if the graph-assigned ID differs from the pre-registered
+    /// index, removes the stale reverse mapping and restores the correct one.
+    /// Returns the authoritative storage index for each item.
+    fn reconcile_batch_mappings(
+        &self,
+        rollback_info: &[(u64, UpsertResult)],
+        assigned_ids: &[usize],
+    ) -> Vec<usize> {
+        let mut storage_ids = Vec::with_capacity(assigned_ids.len());
+        for (assigned_id, (ext_id, result)) in assigned_ids.iter().zip(rollback_info) {
+            if *assigned_id == result.idx {
+                storage_ids.push(result.idx);
+            } else {
+                self.mappings.remove_reverse(result.idx);
+                self.mappings.restore(*ext_id, *assigned_id);
+                storage_ids.push(*assigned_id);
+            }
+        }
+        storage_ids
     }
 
     /// Removes a vector by ID (soft delete).

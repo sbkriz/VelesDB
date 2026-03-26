@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 No API changes. All three optimizations are internal and apply automatically.
 
+**Note on HNSW graph construction order**: `insert_batch_parallel` and
+`bulk_index_or_defer` now use rayon-based parallel graph insertion. Because
+thread scheduling is non-deterministic, the resulting HNSW graph structure
+may differ between runs for the same input data. This does not affect
+correctness or recall — only the internal graph topology varies. If you
+depend on byte-identical index files across builds (e.g., for reproducible
+snapshots), use `insert_batch_sequential` (deprecated but deterministic).
+
 ## [1.7.1] - 2026-03-25
 
 ### Fixed

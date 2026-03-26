@@ -127,35 +127,32 @@ impl ShardedMappings {
         idx
     }
 
-    /// Batch version of `register_or_replace` with fast-path for new IDs.
+    /// Batch version of `register_or_replace` using a single `entry()` per ID.
     ///
-    /// For each ID, checks existence with `contains_key()` (read lock) first.
-    /// New IDs use the cheaper `register()` path. Existing IDs fall back to
-    /// `register_or_replace()`.
+    /// For each ID, acquires one shard-level write lock via `DashMap::entry()`:
+    /// - **Vacant**: allocates a new index and inserts bidirectional mappings.
+    /// - **Occupied**: replaces the forward mapping, removes the stale reverse
+    ///   mapping, and inserts the new reverse mapping.
     ///
-    /// # TOCTOU Safety
-    ///
-    /// If a concurrent insert adds an ID between `contains_key()` and
-    /// `register()`, `register()` returns `None` and we fall back to
-    /// `register_or_replace()`. This is safe because `register_or_replace`
-    /// handles the existing-ID case atomically via `DashMap::entry()`.
+    /// This eliminates the triple-lock pattern (`contains_key` + `register` +
+    /// `register_or_replace` fallback) from the previous implementation.
     pub fn register_or_replace_batch(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        use dashmap::mapref::entry::Entry;
+
         let mut results = Vec::with_capacity(ids.len());
         for &id in ids {
-            if self.id_to_idx.contains_key(&id) {
-                // Existing ID: full replace path
-                results.push(self.register_or_replace(id));
-            } else {
-                // New ID: try fast register path (avoids entry() write lock)
-                match self.register(id) {
-                    Some(idx) => results.push((idx, None)),
-                    None => {
-                        // Race: another thread inserted this ID between
-                        // contains_key() and register(). Fall back to replace.
-                        results.push(self.register_or_replace(id));
-                    }
+            let result = match self.id_to_idx.entry(id) {
+                Entry::Vacant(entry) => (self.allocate_and_map(entry, id), None),
+                Entry::Occupied(mut entry) => {
+                    let old_idx = *entry.get();
+                    let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+                    entry.insert(new_idx);
+                    self.idx_to_id.remove(&old_idx);
+                    self.idx_to_id.insert(new_idx, id);
+                    (new_idx, Some(old_idx))
                 }
-            }
+            };
+            results.push(result);
         }
         results
     }

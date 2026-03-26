@@ -322,6 +322,68 @@ fn test_restore_after_register_or_replace_rollback() {
 }
 
 // -------------------------------------------------------------------------
+// remove_reverse tests (BUG-0002: concurrent insert mapping correction)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_remove_reverse_cleans_stale_idx_to_id() {
+    let mappings = ShardedMappings::new();
+    let idx = mappings.register(42).expect("register");
+
+    // Forward mapping intact before remove_reverse
+    assert_eq!(mappings.get_idx(42), Some(idx));
+    assert_eq!(mappings.get_id(idx), Some(42));
+
+    // remove_reverse only removes the reverse mapping (idx -> id)
+    mappings.remove_reverse(idx);
+
+    // Forward mapping (id -> idx) must survive
+    assert_eq!(mappings.get_idx(42), Some(idx));
+    // Reverse mapping (idx -> id) must be gone
+    assert_eq!(mappings.get_id(idx), None);
+    // Length is based on id_to_idx, so unchanged
+    assert_eq!(mappings.len(), 1);
+}
+
+#[test]
+fn test_remove_reverse_nonexistent_idx_is_noop() {
+    let mappings = ShardedMappings::new();
+    mappings.register(42).expect("register");
+
+    // Removing a reverse mapping for an idx that doesn't exist is a no-op
+    mappings.remove_reverse(999);
+
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(mappings.get_idx(42), Some(0));
+    assert_eq!(mappings.get_id(0), Some(42));
+}
+
+#[test]
+fn test_remove_reverse_then_restore_fixes_divergence() {
+    // Simulates the insert_and_correct_mapping pattern:
+    // 1. upsert_mapping allocates idx=0 for id=42 (id->0, 0->42)
+    // 2. HNSW graph assigns node_id=5 instead of 0 (divergence)
+    // 3. remove_reverse(0) cleans stale 0->42
+    // 4. restore(42, 5) sets id->5 and 5->42
+    let mappings = ShardedMappings::new();
+    let stale_idx = mappings.register(42).expect("register");
+    assert_eq!(stale_idx, 0);
+
+    let correct_idx: usize = 5;
+
+    // Step 3: remove stale reverse mapping
+    mappings.remove_reverse(stale_idx);
+    assert_eq!(mappings.get_id(stale_idx), None);
+
+    // Step 4: restore with correct idx
+    mappings.restore(42, correct_idx);
+    assert_eq!(mappings.get_idx(42), Some(correct_idx));
+    assert_eq!(mappings.get_id(correct_idx), Some(42));
+    // Stale reverse mapping still gone
+    assert_eq!(mappings.get_id(stale_idx), None);
+}
+
+// -------------------------------------------------------------------------
 // register_or_replace_batch tests (issue #375)
 // -------------------------------------------------------------------------
 

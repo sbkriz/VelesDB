@@ -292,6 +292,39 @@ assert!(current == self.epoch_at_creation, "Mmap was remapped");
 - Guard panics if epoch mismatches (fail-safe)
 - No data race: old pointers are never dereferenced after epoch change
 
+### HNSW Batch Insertion Ordering
+
+**Module**: `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`
+
+The batch insertion pipeline enforces a strict phase ordering to prevent
+partial state corruption:
+
+1. **Validate dimensions** — All vectors are checked before any state mutation.
+   A dimension mismatch panics before `upsert_mapping_batch` runs, so no
+   orphaned mappings are created.
+2. **Register mappings** (`upsert_mapping_batch`) — Allocates internal indices
+   and removes stale sidecar vectors for replaced IDs. This is a point of no
+   return: if the subsequent graph insert fails, rollback must undo mappings
+   in reverse order.
+3. **Graph insert** (`parallel_insert`) — Inserts nodes into the HNSW graph
+   using rayon. On failure, rollback iterates `rollback_info` in reverse to
+   correctly restore duplicate-ID chains.
+4. **Sidecar storage** — Vectors are stored in `ShardedVectors` only after
+   graph insertion succeeds, preventing orphaned sidecar data.
+
+**Invariant**: Dimension validation (step 1) always precedes destructive
+mapping mutations (step 2). This is enforced by the structure of
+`prepare_batch_insert()`.
+
+**Invariant**: Rollback iterates in reverse order so that within-batch
+duplicate IDs restore correctly (each rollback depends on the state left
+by the previous entry).
+
+**Cross-reference**: The `Collection`-level 3-phase pipeline (`crud.rs`:
+`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) calls
+`insert_batch_parallel` in Phase 3. The crash recovery implications are
+documented in [CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
+
 ### Lock Ordering (MobileGraphStore)
 
 **Rule**: `edges → outgoing → incoming → nodes`

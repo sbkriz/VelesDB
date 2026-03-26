@@ -110,6 +110,12 @@ Get collection details.
 }
 ```
 
+**Field notes:**
+
+| Field | Description |
+|-------|-------------|
+| `point_count` | Number of points in storage. During batch upsert or deferred indexing, this may temporarily exceed the HNSW-indexed count. All stored points are searchable once indexing completes. |
+
 ### DELETE /collections/:name
 
 Delete a collection and all its data.

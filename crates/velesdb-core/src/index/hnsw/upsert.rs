@@ -47,6 +47,13 @@ pub(crate) fn upsert_mapping(
 ///
 /// Uses `register_or_replace_batch` which skips the expensive `entry()`
 /// path for IDs that don't exist yet (common in pure-insert workloads).
+///
+/// # Phase Ordering
+///
+/// Callers must validate vector dimensions **before** calling this function.
+/// Once mapping registration begins, the mutations cannot be cheaply undone
+/// without explicit rollback. See `prepare_batch_insert()` in `batch.rs`
+/// for the canonical call sequence.
 #[must_use]
 pub(crate) fn upsert_mapping_batch(
     mappings: &ShardedMappings,
