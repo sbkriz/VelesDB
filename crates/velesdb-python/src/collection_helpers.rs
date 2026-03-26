@@ -4,19 +4,20 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::utils::{json_to_python, to_pyobject};
+use crate::utils::json_to_python;
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
 /// Parse a Python filter object into a VelesDB Filter.
+///
+/// Converts the Python dict directly to `serde_json::Value` via [`python_to_json`],
+/// then deserializes into [`Filter`]. This avoids the Python `json.dumps` round-trip.
 pub fn parse_filter(py: Python<'_>, filter: &PyObject) -> PyResult<Filter> {
-    let json_str = py
-        .import("json")?
-        .call_method1("dumps", (filter,))?
-        .extract::<String>()?;
-    serde_json::from_str(&json_str)
+    let json_value = crate::utils::python_to_json(py, filter)?;
+    serde_json::from_value(json_value)
         .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))
 }
 
@@ -28,100 +29,94 @@ pub fn parse_optional_filter(py: Python<'_>, filter: Option<PyObject>) -> PyResu
     }
 }
 
-/// Convert a SearchResult to a Python dictionary.
-pub fn search_result_to_dict(py: Python<'_>, result: &SearchResult) -> HashMap<String, PyObject> {
-    let mut dict = HashMap::new();
-    dict.insert("id".to_string(), to_pyobject(py, result.point.id));
-    dict.insert("score".to_string(), to_pyobject(py, result.score));
-
-    let payload_py = match &result.point.payload {
+/// Convert payload to Python object (shared helper to avoid duplication).
+#[inline]
+fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> PyObject {
+    match payload {
         Some(p) => json_to_python(py, p),
         None => py.None(),
-    };
-    dict.insert("payload".to_string(), payload_py);
-
-    dict
+    }
 }
 
-/// Convert a SearchResult to a multi-model Python dictionary (EPIC-031).
-pub fn search_result_to_multimodel_dict(
-    py: Python<'_>,
-    result: &SearchResult,
-) -> HashMap<String, PyObject> {
-    let mut dict = HashMap::new();
+/// Convert a `SearchResult` to a Python dict, bypassing `HashMap` intermediary.
+///
+/// Uses `PyDict::new()` + `set_item()` directly and `PyString::intern()` for
+/// static keys to avoid repeated string allocation.
+pub fn search_result_to_dict(py: Python<'_>, result: &SearchResult) -> PyObject {
+    let dict = PyDict::new(py);
+    // PyString::intern reuses the same Python string object across calls
+    let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
+    let _ = dict.set_item(PyString::intern(py, "score"), result.score);
+    let _ = dict.set_item(
+        PyString::intern(py, "payload"),
+        payload_to_python(py, &result.point.payload),
+    );
+    dict.into_any().unbind()
+}
+
+/// Convert a `SearchResult` to a multi-model Python dict (EPIC-031).
+pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -> PyObject {
+    let dict = PyDict::new(py);
+    let none = py.None();
+    let payload_py = payload_to_python(py, &result.point.payload);
 
     // Multi-model fields
-    dict.insert("node_id".to_string(), to_pyobject(py, result.point.id));
-    dict.insert("vector_score".to_string(), to_pyobject(py, result.score));
-    dict.insert("graph_score".to_string(), py.None());
-    dict.insert("fused_score".to_string(), to_pyobject(py, result.score));
-
-    // Payload as bindings — convert once, then clone the reference for the legacy field.
-    let bindings_py = match &result.point.payload {
-        Some(p) => json_to_python(py, p),
-        None => py.None(),
-    };
-    let payload_py = bindings_py.clone_ref(py);
-    dict.insert("bindings".to_string(), bindings_py);
-    dict.insert("column_data".to_string(), py.None());
+    let _ = dict.set_item(PyString::intern(py, "node_id"), result.point.id);
+    let _ = dict.set_item(PyString::intern(py, "vector_score"), result.score);
+    let _ = dict.set_item(PyString::intern(py, "graph_score"), &none);
+    let _ = dict.set_item(PyString::intern(py, "fused_score"), result.score);
+    let _ = dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py));
+    let _ = dict.set_item(PyString::intern(py, "column_data"), &none);
 
     // Legacy fields for compatibility
-    dict.insert("id".to_string(), to_pyobject(py, result.point.id));
-    dict.insert("score".to_string(), to_pyobject(py, result.score));
-    dict.insert("payload".to_string(), payload_py);
+    let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
+    let _ = dict.set_item(PyString::intern(py, "score"), result.score);
+    let _ = dict.set_item(PyString::intern(py, "payload"), payload_py);
 
-    dict
+    dict.into_any().unbind()
 }
 
-/// Convert a Point to a Python dictionary.
-pub fn point_to_dict(py: Python<'_>, point: &Point) -> HashMap<String, PyObject> {
-    let mut dict = HashMap::new();
-    dict.insert("id".to_string(), to_pyobject(py, point.id));
-    dict.insert("vector".to_string(), to_pyobject(py, point.vector.clone()));
-
-    let payload_py = match &point.payload {
-        Some(p) => json_to_python(py, p),
-        None => py.None(),
-    };
-    dict.insert("payload".to_string(), payload_py);
-
-    dict
+/// Convert a `Point` to a Python dict.
+pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "id"), point.id);
+    let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
+    let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+    let _ = dict.set_item(
+        PyString::intern(py, "payload"),
+        payload_to_python(py, &point.payload),
+    );
+    dict.into_any().unbind()
 }
 
-/// Convert a list of SearchResults to Python dictionaries.
-pub fn search_results_to_dicts(
-    py: Python<'_>,
-    results: Vec<SearchResult>,
-) -> Vec<HashMap<String, PyObject>> {
+/// Convert a list of `SearchResult`s to Python dicts.
+pub fn search_results_to_dicts(py: Python<'_>, results: Vec<SearchResult>) -> Vec<PyObject> {
     results
         .into_iter()
         .map(|r| search_result_to_dict(py, &r))
         .collect()
 }
 
-/// Convert a list of SearchResults to multi-model Python dictionaries.
+/// Convert a list of `SearchResult`s to multi-model Python dicts.
 pub fn search_results_to_multimodel_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
-) -> Vec<HashMap<String, PyObject>> {
+) -> Vec<PyObject> {
     results
         .into_iter()
         .map(|r| search_result_to_multimodel_dict(py, &r))
         .collect()
 }
 
-/// Convert a list of (id, score) pairs to Python dictionaries.
-pub fn id_score_pairs_to_dicts(
-    py: Python<'_>,
-    results: Vec<(u64, f32)>,
-) -> Vec<HashMap<String, PyObject>> {
+/// Convert a list of (id, score) pairs to Python dicts.
+pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<PyObject> {
     results
         .into_iter()
         .map(|(id, score)| {
-            let mut dict = HashMap::new();
-            dict.insert("id".to_string(), to_pyobject(py, id));
-            dict.insert("score".to_string(), to_pyobject(py, score));
-            dict
+            let dict = PyDict::new(py);
+            let _ = dict.set_item(PyString::intern(py, "id"), id);
+            let _ = dict.set_item(PyString::intern(py, "score"), score);
+            dict.into_any().unbind()
         })
         .collect()
 }

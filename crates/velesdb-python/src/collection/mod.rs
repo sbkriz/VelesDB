@@ -16,7 +16,7 @@ mod query;
 mod search;
 
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use pyo3::types::{PyDict, PyString};
 use std::sync::Arc;
 #[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 use velesdb_core::{
@@ -107,35 +107,23 @@ impl Collection {
     ///
     /// Returns:
     ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
-    fn info(&self) -> PyResult<HashMap<String, PyObject>> {
+    fn info(&self) -> PyResult<PyObject> {
         Python::with_gil(|py| {
             let config = self.inner.config();
-            let mut info = HashMap::new();
-            info.insert(
-                "name".to_string(),
-                crate::utils::to_pyobject(py, config.name.as_str()),
+            let dict = PyDict::new(py);
+            let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
+            let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
+            let _ = dict.set_item(
+                PyString::intern(py, "metric"),
+                format!("{:?}", config.metric).to_lowercase(),
             );
-            info.insert(
-                "dimension".to_string(),
-                crate::utils::to_pyobject(py, config.dimension),
+            let _ = dict.set_item(
+                PyString::intern(py, "storage_mode"),
+                format!("{:?}", config.storage_mode).to_lowercase(),
             );
-            info.insert(
-                "metric".to_string(),
-                crate::utils::to_pyobject(py, format!("{:?}", config.metric).to_lowercase()),
-            );
-            info.insert(
-                "storage_mode".to_string(),
-                crate::utils::to_pyobject(py, format!("{:?}", config.storage_mode).to_lowercase()),
-            );
-            info.insert(
-                "point_count".to_string(),
-                crate::utils::to_pyobject(py, config.point_count),
-            );
-            info.insert(
-                "metadata_only".to_string(),
-                crate::utils::to_pyobject(py, config.metadata_only),
-            );
-            Ok(info)
+            let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
+            let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
+            Ok(dict.into_any().unbind())
         })
     }
 

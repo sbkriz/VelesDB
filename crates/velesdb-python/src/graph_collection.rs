@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::collection_helpers::search_result_to_dict;
-use crate::graph::{edge_to_dict, traversal_to_dict};
+use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::{GraphCollection, GraphSchema};
@@ -156,7 +156,7 @@ impl PyGraphCollection {
     #[pyo3(signature = (edge))]
     fn add_edge(&self, edge: HashMap<String, PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
-            let graph_edge = crate::graph::dict_to_edge(py, &edge)?;
+            let graph_edge = dict_to_edge(py, &edge)?;
             self.inner
                 .add_edge(graph_edge)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to add edge: {e}")))
@@ -175,7 +175,7 @@ impl PyGraphCollection {
     ///     >>> all_edges = graph.get_edges()
     ///     >>> knows_edges = graph.get_edges(label="KNOWS")
     #[pyo3(signature = (label=None))]
-    fn get_edges(&self, label: Option<&str>) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_edges(&self, label: Option<&str>) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let edges = self.inner.get_edges(label);
             Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
@@ -190,7 +190,7 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
-    fn get_outgoing(&self, node_id: u64) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_outgoing(&self, node_id: u64) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let edges = self.inner.get_outgoing(node_id);
             Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
@@ -205,7 +205,7 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
-    fn get_incoming(&self, node_id: u64) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_incoming(&self, node_id: u64) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let edges = self.inner.get_incoming(node_id);
             Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
@@ -234,9 +234,7 @@ impl PyGraphCollection {
     ///     >>> graph.store_node_payload(10, {"name": "Alice", "age": 30})
     #[pyo3(signature = (node_id, payload))]
     fn store_node_payload(&self, py: Python<'_>, node_id: u64, payload: PyObject) -> PyResult<()> {
-        let value = python_to_json(py, &payload).ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("Failed to convert payload to JSON")
-        })?;
+        let value = python_to_json(py, &payload)?;
         self.inner
             .upsert_node_payload(node_id, &value)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to store payload: {e}")))
@@ -283,7 +281,7 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         let config = build_traversal_config(max_depth, limit, rel_types);
         Python::with_gil(|py| {
             let results = self.inner.traverse_bfs(source_id, &config);
@@ -308,7 +306,7 @@ impl PyGraphCollection {
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         let config = build_traversal_config(max_depth, limit, rel_types);
         Python::with_gil(|py| {
             let results = self.inner.traverse_dfs(source_id, &config);
@@ -336,7 +334,7 @@ impl PyGraphCollection {
         py: Python<'_>,
         query: PyObject,
         k: Option<usize>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         let vec = extract_vector(py, &query)?;
         let top_k = k.unwrap_or(10);
         let results = self

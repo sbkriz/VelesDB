@@ -4,34 +4,18 @@ Agent Memory SDK - comprehensive Python binding tests.
 Covers all three memory subsystems (semantic, episodic, procedural)
 with functional and performance tests.
 
+VELESDB_AVAILABLE / pytestmark / temp_db fixture are provided by conftest.py.
+
 Run with: pytest tests/test_agent_memory.py -v
 """
 
-import tempfile
-import shutil
 import time
 
 import pytest
 
-try:
-    from velesdb import Database
+from conftest import _SKIP_NO_BINDINGS
 
-    VELESDB_AVAILABLE = True
-except ImportError:
-    VELESDB_AVAILABLE = False
-
-pytestmark = pytest.mark.skipif(
-    not VELESDB_AVAILABLE, reason="velesdb not installed"
-)
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    temp_dir = tempfile.mkdtemp()
-    db = Database(temp_dir)
-    yield db
-    shutil.rmtree(temp_dir, ignore_errors=True)
+pytestmark = _SKIP_NO_BINDINGS
 
 
 @pytest.fixture

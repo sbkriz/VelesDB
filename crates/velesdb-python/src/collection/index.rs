@@ -2,9 +2,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
-
-use crate::utils::to_pyobject;
+use pyo3::types::{PyDict, PyString};
 
 use super::Collection;
 
@@ -42,22 +40,19 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with keys: label, property, index_type, cardinality, memory_bytes
-    fn list_indexes(&self) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn list_indexes(&self) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let indexes = self.inner.list_indexes();
-            let py_indexes: Vec<HashMap<String, PyObject>> = indexes
+            let py_indexes: Vec<PyObject> = indexes
                 .into_iter()
                 .map(|idx| {
-                    let mut result = HashMap::new();
-                    result.insert("label".to_string(), to_pyobject(py, idx.label));
-                    result.insert("property".to_string(), to_pyobject(py, idx.property));
-                    result.insert("index_type".to_string(), to_pyobject(py, idx.index_type));
-                    result.insert("cardinality".to_string(), to_pyobject(py, idx.cardinality));
-                    result.insert(
-                        "memory_bytes".to_string(),
-                        to_pyobject(py, idx.memory_bytes),
-                    );
-                    result
+                    let dict = PyDict::new(py);
+                    let _ = dict.set_item(PyString::intern(py, "label"), idx.label);
+                    let _ = dict.set_item(PyString::intern(py, "property"), idx.property);
+                    let _ = dict.set_item(PyString::intern(py, "index_type"), idx.index_type);
+                    let _ = dict.set_item(PyString::intern(py, "cardinality"), idx.cardinality);
+                    let _ = dict.set_item(PyString::intern(py, "memory_bytes"), idx.memory_bytes);
+                    dict.into_any().unbind()
                 })
                 .collect();
             Ok(py_indexes)

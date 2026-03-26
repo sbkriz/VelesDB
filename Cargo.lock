@@ -6930,6 +6930,7 @@ name = "velesdb-python"
 version = "1.7.2"
 dependencies = [
  "numpy",
+ "parking_lot",
  "pyo3",
  "pyo3-build-config",
  "serde_json",

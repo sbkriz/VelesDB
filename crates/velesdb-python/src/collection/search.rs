@@ -42,7 +42,7 @@ impl Collection {
         top_k: usize,
         filter: Option<PyObject>,
         sparse_index_name: Option<String>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
             let sparse = sparse_vector
@@ -69,7 +69,7 @@ impl Collection {
         vector: PyObject,
         top_k: usize,
         ef_search: usize,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
             let results = self
@@ -82,11 +82,7 @@ impl Collection {
 
     /// Search returning only IDs and scores.
     #[pyo3(signature = (vector, top_k = 10))]
-    fn search_ids(
-        &self,
-        vector: PyObject,
-        top_k: usize,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn search_ids(&self, vector: PyObject, top_k: usize) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
             let results = self
@@ -105,7 +101,7 @@ impl Collection {
         vector: PyObject,
         top_k: usize,
         filter: Option<PyObject>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
             let filter_obj = filter
@@ -129,7 +125,7 @@ impl Collection {
         query: &str,
         top_k: usize,
         filter: Option<PyObject>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let filter_obj = parse_optional_filter(py, filter)?;
             let results = if let Some(f) = filter_obj {
@@ -154,7 +150,7 @@ impl Collection {
         top_k: usize,
         vector_weight: f32,
         filter: Option<PyObject>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
             let filter_obj = parse_optional_filter(py, filter)?;
@@ -180,7 +176,7 @@ impl Collection {
     fn batch_search(
         &self,
         searches: Vec<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<Vec<HashMap<String, PyObject>>>> {
+    ) -> PyResult<Vec<Vec<PyObject>>> {
         Python::with_gil(|py| {
             let mut queries = Vec::with_capacity(searches.len());
             let mut filters = Vec::with_capacity(searches.len());
@@ -233,7 +229,7 @@ impl Collection {
         top_k: usize,
         fusion: Option<FusionStrategy>,
         filter: Option<PyObject>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let query_vectors: Vec<Vec<f32>> = vectors
                 .iter()
@@ -259,7 +255,7 @@ impl Collection {
         vectors: Vec<PyObject>,
         top_k: usize,
         fusion: Option<FusionStrategy>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    ) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
             let query_vectors: Vec<Vec<f32>> = vectors
                 .iter()

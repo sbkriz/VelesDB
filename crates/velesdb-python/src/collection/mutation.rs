@@ -126,7 +126,6 @@ impl Collection {
         Python::with_gil(|py| {
             let array = vectors.as_array();
             let n = array.nrows();
-            let _dim = array.ncols();
 
             if ids.len() != n {
                 return Err(PyValueError::new_err(format!(
@@ -157,10 +156,8 @@ impl Collection {
                         Some(dict) => {
                             let json_map: serde_json::Map<String, serde_json::Value> = dict
                                 .iter()
-                                .filter_map(|(k, v)| {
-                                    python_to_json(py, v).map(|jv| (k.clone(), jv))
-                                })
-                                .collect();
+                                .map(|(k, v)| python_to_json(py, v).map(|jv| (k.clone(), jv)))
+                                .collect::<PyResult<_>>()?;
                             Some(serde_json::Value::Object(json_map))
                         }
                         None => None,
@@ -180,7 +177,7 @@ impl Collection {
 
     /// Get points by their IDs.
     #[pyo3(signature = (ids))]
-    fn get(&self, ids: Vec<u64>) -> PyResult<Vec<Option<HashMap<String, PyObject>>>> {
+    fn get(&self, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
         Python::with_gil(|py| {
             let points = self.inner.get(&ids);
             let py_points = points
@@ -230,9 +227,9 @@ impl Collection {
     #[pyo3(signature = (points))]
     fn stream_insert(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
         Python::with_gil(|py| {
-            let mut count = 0usize;
-
-            for point_dict in points {
+            // Phase 1: Parse all points while holding the GIL (required for PyObject access)
+            let mut parsed = Vec::with_capacity(points.len());
+            for point_dict in &points {
                 let id: u64 = point_dict
                     .get("id")
                     .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
@@ -244,15 +241,18 @@ impl Collection {
                 let vector = extract_vector(py, vector_obj)?;
 
                 let payload = parse_payload(py, point_dict.get("payload"))?;
-                let sparse_vectors = parse_sparse_vectors_from_point(py, &point_dict)?;
-                let point = Point::with_sparse(id, vector, payload, sparse_vectors);
+                let sparse_vectors = parse_sparse_vectors_from_point(py, point_dict)?;
+                parsed.push(Point::with_sparse(id, vector, payload, sparse_vectors));
+            }
 
+            // Phase 2: Send all parsed points to the channel in a tight loop
+            let mut count = 0usize;
+            for point in parsed {
                 self.inner.stream_insert(point).map_err(|e| {
                     PyRuntimeError::new_err(format!(
-                        "Stream insert failed (buffer full or not configured): {e}"
+                        "Stream insert failed at point {count} (buffer full or not configured): {e}"
                     ))
                 })?;
-
                 count += 1;
             }
 
@@ -273,8 +273,8 @@ fn parse_payload(
                 .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
             let json_map: serde_json::Map<String, serde_json::Value> = dict
                 .into_iter()
-                .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
-                .collect();
+                .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+                .collect::<PyResult<_>>()?;
             Ok(Some(serde_json::Value::Object(json_map)))
         }
         None => Ok(None),

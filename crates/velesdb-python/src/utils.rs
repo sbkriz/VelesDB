@@ -69,38 +69,59 @@ pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
     }
 }
 
-/// Convert a Python object to a serde_json::Value.
-pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> Option<serde_json::Value> {
+/// Convert a Python object to a `serde_json::Value`.
+///
+/// Returns `Err` for unsupported Python types (datetime, UUID, bytes, custom objects)
+/// instead of silently dropping them.
+///
+/// # Errors
+///
+/// Returns `PyValueError` if the Python object type is not JSON-serializable.
+pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> PyResult<serde_json::Value> {
     if let Ok(s) = obj.extract::<String>(py) {
-        return Some(serde_json::Value::String(s));
+        return Ok(serde_json::Value::String(s));
+    }
+    // Note: bool MUST be checked before i64 — Python bool is a subclass of int,
+    // so extract::<i64>() succeeds on True/False, silently converting them to 1/0.
+    if let Ok(b) = obj.extract::<bool>(py) {
+        return Ok(serde_json::Value::Bool(b));
     }
     if let Ok(i) = obj.extract::<i64>(py) {
-        return Some(serde_json::Value::Number(i.into()));
+        return Ok(serde_json::Value::Number(i.into()));
     }
     if let Ok(f) = obj.extract::<f64>(py) {
-        return serde_json::Number::from_f64(f).map(serde_json::Value::Number);
-    }
-    if let Ok(b) = obj.extract::<bool>(py) {
-        return Some(serde_json::Value::Bool(b));
+        return serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| {
+                PyValueError::new_err("Float value is not JSON-serializable (NaN/Inf)")
+            });
     }
     if obj.is_none(py) {
-        return Some(serde_json::Value::Null);
+        return Ok(serde_json::Value::Null);
     }
     if let Ok(list) = obj.extract::<Vec<PyObject>>(py) {
         let arr: Vec<serde_json::Value> = list
             .iter()
-            .filter_map(|item| python_to_json(py, item))
-            .collect();
-        return Some(serde_json::Value::Array(arr));
+            .map(|item| python_to_json(py, item))
+            .collect::<PyResult<_>>()?;
+        return Ok(serde_json::Value::Array(arr));
     }
     if let Ok(dict) = obj.extract::<HashMap<String, PyObject>>(py) {
         let map: serde_json::Map<String, serde_json::Value> = dict
             .into_iter()
-            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
-            .collect();
-        return Some(serde_json::Value::Object(map));
+            .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+            .collect::<PyResult<_>>()?;
+        return Ok(serde_json::Value::Object(map));
     }
-    None
+    let type_name = obj
+        .bind(py)
+        .get_type()
+        .name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    Err(PyValueError::new_err(format!(
+        "Unsupported payload type '{type_name}'. Supported: str, int, float, bool, None, list, dict"
+    )))
 }
 
 /// Helper to convert a value to PyObject using IntoPyObject trait.
@@ -116,8 +137,13 @@ where
     }
 }
 
-/// Convert a serde_json::Value to a Python object.
+/// Convert a `serde_json::Value` to a Python object.
+///
+/// Builds `PyDict`/`PyList` directly instead of going through `HashMap`/`Vec`
+/// intermediaries to avoid unnecessary allocations.
 pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
+    use pyo3::types::{PyDict, PyList};
+
     match value {
         serde_json::Value::Null => py.None(),
         serde_json::Value::Bool(b) => to_pyobject(py, *b),
@@ -132,15 +158,16 @@ pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
         }
         serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
         serde_json::Value::Array(arr) => {
-            let list: Vec<PyObject> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            to_pyobject(py, list)
+            let items: Vec<PyObject> = arr.iter().map(|v| json_to_python(py, v)).collect();
+            let list = PyList::new(py, &items).expect("failed to create PyList");
+            list.into_any().unbind()
         }
         serde_json::Value::Object(map) => {
-            let dict: HashMap<String, PyObject> = map
-                .iter()
-                .map(|(k, v)| (k.clone(), json_to_python(py, v)))
-                .collect();
-            to_pyobject(py, dict)
+            let dict = PyDict::new(py);
+            for (k, v) in map {
+                let _ = dict.set_item(k.as_str(), json_to_python(py, v));
+            }
+            dict.into_any().unbind()
         }
     }
 }

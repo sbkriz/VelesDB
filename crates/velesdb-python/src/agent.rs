@@ -7,7 +7,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyString};
 use std::sync::Arc;
 use velesdb_core::agent::{
     AgentMemory as CoreAgentMemory, AgentMemoryError, EpisodicMemory as CoreEpisodicMemory,
@@ -73,28 +73,25 @@ impl AgentMemory {
     /// Returns the semantic memory subsystem.
     #[getter]
     fn semantic(&self) -> PyResult<PySemanticMemory> {
-        Ok(PySemanticMemory {
-            db: Arc::clone(&self.db),
-            dimension: self.dimension,
-        })
+        let inner = CoreSemanticMemory::new_from_db(Arc::clone(&self.db), self.dimension)
+            .map_err(to_py_err)?;
+        Ok(PySemanticMemory { inner })
     }
 
     /// Returns the episodic memory subsystem.
     #[getter]
     fn episodic(&self) -> PyResult<PyEpisodicMemory> {
-        Ok(PyEpisodicMemory {
-            db: Arc::clone(&self.db),
-            dimension: self.dimension,
-        })
+        let inner = CoreEpisodicMemory::new_from_db(Arc::clone(&self.db), self.dimension)
+            .map_err(to_py_err)?;
+        Ok(PyEpisodicMemory { inner })
     }
 
     /// Returns the procedural memory subsystem.
     #[getter]
     fn procedural(&self) -> PyResult<PyProceduralMemory> {
-        Ok(PyProceduralMemory {
-            db: Arc::clone(&self.db),
-            dimension: self.dimension,
-        })
+        let inner = CoreProceduralMemory::new_from_db(Arc::clone(&self.db), self.dimension)
+            .map_err(to_py_err)?;
+        Ok(PyProceduralMemory { inner })
     }
 
     /// Returns the embedding dimension.
@@ -111,14 +108,15 @@ impl AgentMemory {
 /// Python wrapper for SemanticMemory.
 ///
 /// Stores long-term knowledge facts with vector similarity search.
+/// The core memory object is resolved once when this wrapper is created,
+/// avoiding per-method registry lookups.
 ///
 /// Example:
 ///     >>> memory.semantic.store(1, "The sky is blue", [0.1, 0.2, ...])
 ///     >>> results = memory.semantic.query([0.1, 0.2, ...], top_k=5)
 #[pyclass]
 pub struct PySemanticMemory {
-    db: Arc<CoreDatabase>,
-    dimension: usize,
+    inner: CoreSemanticMemory,
 }
 
 #[pymethods]
@@ -134,8 +132,7 @@ impl PySemanticMemory {
     ///     >>> memory.semantic.store(1, "Paris is in France", embedding)
     #[pyo3(signature = (id, content, embedding))]
     fn store(&self, id: u64, content: &str, embedding: Vec<f32>) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
-        memory.store(id, content, &embedding).map_err(to_py_err)
+        self.inner.store(id, content, &embedding).map_err(to_py_err)
     }
 
     /// Query semantic memory by similarity.
@@ -153,15 +150,14 @@ impl PySemanticMemory {
     ///     ...     print(f"{r['content']} (score: {r['score']:.3f})")
     #[pyo3(signature = (embedding, top_k = 10))]
     fn query(&self, py: Python<'_>, embedding: Vec<f32>, top_k: usize) -> PyResult<PyObject> {
-        let memory = self.get_core_memory()?;
-        let results = memory.query(&embedding, top_k).map_err(to_py_err)?;
+        let results = self.inner.query(&embedding, top_k).map_err(to_py_err)?;
 
         let list = pyo3::types::PyList::empty(py);
         for (id, score, content) in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", id)?;
-            dict.set_item("score", score)?;
-            dict.set_item("content", content)?;
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "score"), score)?;
+            dict.set_item(PyString::intern(py, "content"), content)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -176,32 +172,26 @@ impl PySemanticMemory {
     ///     >>> memory.semantic.delete(1)
     #[pyo3(signature = (id,))]
     fn delete(&self, id: u64) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
-        memory.delete(id).map_err(to_py_err)
+        self.inner.delete(id).map_err(to_py_err)
     }
 
     fn __repr__(&self) -> String {
-        format!("SemanticMemory(dimension={})", self.dimension)
-    }
-}
-
-impl PySemanticMemory {
-    fn get_core_memory(&self) -> PyResult<CoreSemanticMemory> {
-        CoreSemanticMemory::new_from_db(Arc::clone(&self.db), self.dimension).map_err(to_py_err)
+        format!("SemanticMemory(dimension={})", self.inner.dimension())
     }
 }
 
 /// Python wrapper for EpisodicMemory.
 ///
 /// Records events with timestamps and provides temporal/similarity queries.
+/// The core memory object is resolved once when this wrapper is created,
+/// avoiding per-method registry lookups.
 ///
 /// Example:
 ///     >>> memory.episodic.record(1, "User asked about weather", timestamp=1234567890)
 ///     >>> events = memory.episodic.recent(limit=10)
 #[pyclass]
 pub struct PyEpisodicMemory {
-    db: Arc<CoreDatabase>,
-    dimension: usize,
+    inner: CoreEpisodicMemory,
 }
 
 #[pymethods]
@@ -225,9 +215,8 @@ impl PyEpisodicMemory {
         timestamp: i64,
         embedding: Option<Vec<f32>>,
     ) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
         let emb_ref = embedding.as_deref();
-        memory
+        self.inner
             .record(event_id, description, timestamp, emb_ref)
             .map_err(to_py_err)
     }
@@ -245,15 +234,14 @@ impl PyEpisodicMemory {
     ///     >>> events = memory.episodic.recent(limit=5)
     #[pyo3(signature = (limit = 10, since = None))]
     fn recent(&self, py: Python<'_>, limit: usize, since: Option<i64>) -> PyResult<PyObject> {
-        let memory = self.get_core_memory()?;
-        let results = memory.recent(limit, since).map_err(to_py_err)?;
+        let results = self.inner.recent(limit, since).map_err(to_py_err)?;
 
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp) in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", id)?;
-            dict.set_item("description", description)?;
-            dict.set_item("timestamp", timestamp)?;
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "description"), description)?;
+            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -274,18 +262,18 @@ impl PyEpisodicMemory {
         embedding: Vec<f32>,
         top_k: usize,
     ) -> PyResult<PyObject> {
-        let memory = self.get_core_memory()?;
-        let results = memory
+        let results = self
+            .inner
             .recall_similar(&embedding, top_k)
             .map_err(to_py_err)?;
 
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp, score) in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", id)?;
-            dict.set_item("description", description)?;
-            dict.set_item("timestamp", timestamp)?;
-            dict.set_item("score", score)?;
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "description"), description)?;
+            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
+            dict.set_item(PyString::intern(py, "score"), score)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -304,15 +292,14 @@ impl PyEpisodicMemory {
     ///     >>> old_events = memory.episodic.older_than(before=yesterday, limit=20)
     #[pyo3(signature = (before, limit = 10))]
     fn older_than(&self, py: Python<'_>, before: i64, limit: usize) -> PyResult<PyObject> {
-        let memory = self.get_core_memory()?;
-        let results = memory.older_than(before, limit).map_err(to_py_err)?;
+        let results = self.inner.older_than(before, limit).map_err(to_py_err)?;
 
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp) in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", id)?;
-            dict.set_item("description", description)?;
-            dict.set_item("timestamp", timestamp)?;
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "description"), description)?;
+            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -327,32 +314,26 @@ impl PyEpisodicMemory {
     ///     >>> memory.episodic.delete(1)
     #[pyo3(signature = (event_id,))]
     fn delete(&self, event_id: u64) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
-        memory.delete(event_id).map_err(to_py_err)
+        self.inner.delete(event_id).map_err(to_py_err)
     }
 
     fn __repr__(&self) -> String {
-        format!("EpisodicMemory(dimension={})", self.dimension)
-    }
-}
-
-impl PyEpisodicMemory {
-    fn get_core_memory(&self) -> PyResult<CoreEpisodicMemory> {
-        CoreEpisodicMemory::new_from_db(Arc::clone(&self.db), self.dimension).map_err(to_py_err)
+        format!("EpisodicMemory(dimension={})", self.inner.dimension())
     }
 }
 
 /// Python wrapper for ProceduralMemory.
 ///
 /// Stores learned patterns with confidence scoring and reinforcement.
+/// The core memory object is resolved once when this wrapper is created,
+/// avoiding per-method registry lookups.
 ///
 /// Example:
 ///     >>> memory.procedural.learn(1, "greet_user", ["say hello", "ask name"], confidence=0.8)
 ///     >>> patterns = memory.procedural.recall(embedding, min_confidence=0.5)
 #[pyclass]
 pub struct PyProceduralMemory {
-    db: Arc<CoreDatabase>,
-    dimension: usize,
+    inner: CoreProceduralMemory,
 }
 
 #[pymethods]
@@ -377,9 +358,8 @@ impl PyProceduralMemory {
         embedding: Option<Vec<f32>>,
         confidence: f32,
     ) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
         let emb_ref = embedding.as_deref();
-        memory
+        self.inner
             .learn(procedure_id, name, &steps, emb_ref, confidence)
             .map_err(to_py_err)
     }
@@ -404,19 +384,19 @@ impl PyProceduralMemory {
         top_k: usize,
         min_confidence: f32,
     ) -> PyResult<PyObject> {
-        let memory = self.get_core_memory()?;
-        let results = memory
+        let results = self
+            .inner
             .recall(&embedding, top_k, min_confidence)
             .map_err(to_py_err)?;
 
         let list = pyo3::types::PyList::empty(py);
         for m in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", m.id)?;
-            dict.set_item("name", &m.name)?;
-            dict.set_item("steps", &m.steps)?;
-            dict.set_item("confidence", m.confidence)?;
-            dict.set_item("score", m.score)?;
+            dict.set_item(PyString::intern(py, "id"), m.id)?;
+            dict.set_item(PyString::intern(py, "name"), &m.name)?;
+            dict.set_item(PyString::intern(py, "steps"), &m.steps)?;
+            dict.set_item(PyString::intern(py, "confidence"), m.confidence)?;
+            dict.set_item(PyString::intern(py, "score"), m.score)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -434,8 +414,9 @@ impl PyProceduralMemory {
     ///     >>> memory.procedural.reinforce(1, success=True)
     #[pyo3(signature = (procedure_id, success))]
     fn reinforce(&self, procedure_id: u64, success: bool) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
-        memory.reinforce(procedure_id, success).map_err(to_py_err)
+        self.inner
+            .reinforce(procedure_id, success)
+            .map_err(to_py_err)
     }
 
     /// List all stored procedures.
@@ -446,17 +427,16 @@ impl PyProceduralMemory {
     /// Example:
     ///     >>> all_procs = memory.procedural.list_all()
     fn list_all(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let memory = self.get_core_memory()?;
-        let results = memory.list_all().map_err(to_py_err)?;
+        let results = self.inner.list_all().map_err(to_py_err)?;
 
         let list = pyo3::types::PyList::empty(py);
         for m in results {
             let dict = PyDict::new(py);
-            dict.set_item("id", m.id)?;
-            dict.set_item("name", &m.name)?;
-            dict.set_item("steps", &m.steps)?;
-            dict.set_item("confidence", m.confidence)?;
-            dict.set_item("score", m.score)?;
+            dict.set_item(PyString::intern(py, "id"), m.id)?;
+            dict.set_item(PyString::intern(py, "name"), &m.name)?;
+            dict.set_item(PyString::intern(py, "steps"), &m.steps)?;
+            dict.set_item(PyString::intern(py, "confidence"), m.confidence)?;
+            dict.set_item(PyString::intern(py, "score"), m.score)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -471,17 +451,10 @@ impl PyProceduralMemory {
     ///     >>> memory.procedural.delete(1)
     #[pyo3(signature = (procedure_id,))]
     fn delete(&self, procedure_id: u64) -> PyResult<()> {
-        let memory = self.get_core_memory()?;
-        memory.delete(procedure_id).map_err(to_py_err)
+        self.inner.delete(procedure_id).map_err(to_py_err)
     }
 
     fn __repr__(&self) -> String {
-        format!("ProceduralMemory(dimension={})", self.dimension)
-    }
-}
-
-impl PyProceduralMemory {
-    fn get_core_memory(&self) -> PyResult<CoreProceduralMemory> {
-        CoreProceduralMemory::new_from_db(Arc::clone(&self.db), self.dimension).map_err(to_py_err)
+        format!("ProceduralMemory(dimension={})", self.inner.dimension())
     }
 }

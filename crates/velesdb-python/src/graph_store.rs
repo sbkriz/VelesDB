@@ -7,6 +7,7 @@
 //!
 //! [EPIC-016/US-030, US-032]
 
+use parking_lot::RwLock;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 
 use crate::graph::{dict_to_edge, edge_to_dict};
 use velesdb_core::collection::graph::EdgeStore;
+
 // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
 use velesdb_core::collection::graph::{bfs_stream, StreamingConfig as CoreStreamingConfig};
 
@@ -90,7 +92,7 @@ impl TraversalResult {
 ///     ...     print(f"Depth {result.depth}: {result.source} -> {result.target}")
 #[pyclass]
 pub struct GraphStore {
-    inner: Arc<std::sync::RwLock<EdgeStore>>,
+    inner: Arc<RwLock<EdgeStore>>,
 }
 
 #[pymethods]
@@ -99,7 +101,7 @@ impl GraphStore {
     #[new]
     fn new() -> Self {
         Self {
-            inner: Arc::new(std::sync::RwLock::new(EdgeStore::new())),
+            inner: Arc::new(RwLock::new(EdgeStore::new())),
         }
     }
 
@@ -112,10 +114,7 @@ impl GraphStore {
     fn add_edge(&self, edge: HashMap<String, PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
             let graph_edge = dict_to_edge(py, &edge)?;
-            let mut store = self
-                .inner
-                .write()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+            let mut store = self.inner.write();
             store
                 .add_edge(graph_edge)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to add edge: {e}")))
@@ -133,12 +132,9 @@ impl GraphStore {
     /// Note:
     ///     Uses internal label index for O(1) lookup per label.
     #[pyo3(signature = (label))]
-    fn get_edges_by_label(&self, label: &str) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_edges_by_label(&self, label: &str) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+            let store = self.inner.read();
             let edges = store.get_edges_by_label(label);
             Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
         })
@@ -146,12 +142,9 @@ impl GraphStore {
 
     /// Gets outgoing edges from a node.
     #[pyo3(signature = (node_id))]
-    fn get_outgoing(&self, node_id: u64) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_outgoing(&self, node_id: u64) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+            let store = self.inner.read();
             let edges = store.get_outgoing(node_id);
             Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
         })
@@ -159,12 +152,9 @@ impl GraphStore {
 
     /// Gets incoming edges to a node.
     #[pyo3(signature = (node_id))]
-    fn get_incoming(&self, node_id: u64) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_incoming(&self, node_id: u64) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+            let store = self.inner.read();
             let edges = store.get_incoming(node_id);
             Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
         })
@@ -172,16 +162,9 @@ impl GraphStore {
 
     /// Gets outgoing edges filtered by label.
     #[pyo3(signature = (node_id, label))]
-    fn get_outgoing_by_label(
-        &self,
-        node_id: u64,
-        label: &str,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> PyResult<Vec<PyObject>> {
         Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+            let store = self.inner.read();
             let edges = store.get_outgoing_by_label(node_id, label);
             Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
         })
@@ -212,10 +195,7 @@ impl GraphStore {
         start_node: u64,
         config: StreamingConfig,
     ) -> PyResult<Vec<TraversalResult>> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let store = self.inner.read();
 
         // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
         // Convert Python config to core config
@@ -232,13 +212,13 @@ impl GraphStore {
         // Use core's bfs_stream iterator
         let iterator = bfs_stream(&store, start_node, core_config);
 
-        // Collect results, converting from core TraversalResult to Python TraversalResult
+        // Collect results, converting from core TraversalResult to Python TraversalResult.
         // FLAG-2 FIX: Handle empty path correctly instead of using unwrap_or(0)
-        // which could collide with a real edge_id=0
+        // which could collide with a real edge_id=0.
+        // Note: core's bfs_stream already respects config.limit, so no `.take()` needed.
         let results: Vec<TraversalResult> = iterator
-            .take(config.max_visited)
             .filter_map(|r| {
-                // Get edge info from the path - skip results with empty path
+                // Get edge info from the path — skip results with empty path
                 let edge_id = r.path.last().copied()?;
                 let edge = store.get_edge(edge_id);
                 let (source, label) = edge
@@ -261,20 +241,14 @@ impl GraphStore {
     /// Removes an edge by ID.
     #[pyo3(signature = (edge_id))]
     fn remove_edge(&self, edge_id: u64) -> PyResult<()> {
-        let mut store = self
-            .inner
-            .write()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let mut store = self.inner.write();
         store.remove_edge(edge_id);
         Ok(())
     }
 
     /// Returns the number of edges in the store.
     fn edge_count(&self) -> PyResult<usize> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let store = self.inner.read();
         Ok(store.edge_count())
     }
 
@@ -287,10 +261,7 @@ impl GraphStore {
     ///     True if the edge exists, False otherwise.
     #[pyo3(signature = (edge_id))]
     fn has_edge(&self, edge_id: u64) -> PyResult<bool> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let store = self.inner.read();
         Ok(store.get_edge(edge_id).is_some())
     }
 
@@ -303,10 +274,7 @@ impl GraphStore {
     ///     Number of outgoing edges from this node.
     #[pyo3(signature = (node_id))]
     fn out_degree(&self, node_id: u64) -> PyResult<usize> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let store = self.inner.read();
         Ok(store.get_outgoing(node_id).len())
     }
 
@@ -319,10 +287,7 @@ impl GraphStore {
     ///     Number of incoming edges to this node.
     #[pyo3(signature = (node_id))]
     fn in_degree(&self, node_id: u64) -> PyResult<usize> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let store = self.inner.read();
         Ok(store.get_incoming(node_id).len())
     }
 
@@ -347,10 +312,7 @@ impl GraphStore {
     ) -> PyResult<Vec<TraversalResult>> {
         use std::collections::HashSet;
 
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        let store = self.inner.read();
 
         let mut results = Vec::new();
         let mut visited: HashSet<u64> = HashSet::new();

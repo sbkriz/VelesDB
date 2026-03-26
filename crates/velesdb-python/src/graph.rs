@@ -4,9 +4,10 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyString};
 use std::collections::HashMap;
 
-use crate::utils::{json_to_python, to_pyobject};
+use crate::utils::{json_to_python, python_to_json};
 use velesdb_core::collection::graph::{GraphEdge, GraphNode, TraversalResult};
 
 /// Convert a Python dict to a GraphNode.
@@ -26,19 +27,10 @@ pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
 
     let node = if let Some(props) = dict.get("properties") {
         let props_dict: HashMap<String, PyObject> = props.extract(py)?;
-        let mut properties = std::collections::HashMap::new();
+        let mut properties = HashMap::new();
         for (key, value) in props_dict {
-            if let Ok(s) = value.extract::<String>(py) {
-                properties.insert(key, serde_json::Value::String(s));
-            } else if let Ok(i) = value.extract::<i64>(py) {
-                properties.insert(key, serde_json::Value::Number(i.into()));
-            } else if let Ok(f) = value.extract::<f64>(py) {
-                if let Some(n) = serde_json::Number::from_f64(f) {
-                    properties.insert(key, serde_json::Value::Number(n));
-                }
-            } else if let Ok(b) = value.extract::<bool>(py) {
-                properties.insert(key, serde_json::Value::Bool(b));
-            }
+            let json_val = python_to_json(py, &value)?;
+            properties.insert(key, json_val);
         }
         node.with_properties(properties)
     } else {
@@ -83,19 +75,10 @@ pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
 
     let edge = if let Some(props) = dict.get("properties") {
         let props_dict: HashMap<String, PyObject> = props.extract(py)?;
-        let mut properties = std::collections::HashMap::new();
+        let mut properties = HashMap::new();
         for (key, value) in props_dict {
-            if let Ok(s) = value.extract::<String>(py) {
-                properties.insert(key, serde_json::Value::String(s));
-            } else if let Ok(i) = value.extract::<i64>(py) {
-                properties.insert(key, serde_json::Value::Number(i.into()));
-            } else if let Ok(f) = value.extract::<f64>(py) {
-                if let Some(n) = serde_json::Number::from_f64(f) {
-                    properties.insert(key, serde_json::Value::Number(n));
-                }
-            } else if let Ok(b) = value.extract::<bool>(py) {
-                properties.insert(key, serde_json::Value::Bool(b));
-            }
+            let json_val = python_to_json(py, &value)?;
+            properties.insert(key, json_val);
         }
         edge.with_properties(properties)
     } else {
@@ -105,62 +88,66 @@ pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
     Ok(edge)
 }
 
-/// Convert a GraphNode to a Python dict.
-pub fn node_to_dict(py: Python<'_>, node: &GraphNode) -> HashMap<String, PyObject> {
-    let mut result = HashMap::new();
-    result.insert("id".to_string(), to_pyobject(py, node.id()));
-    result.insert("label".to_string(), to_pyobject(py, node.label()));
+/// Convert a `GraphNode` to a Python dict, bypassing `HashMap` intermediary.
+///
+/// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
+/// repeated string allocation.
+pub fn node_to_dict(py: Python<'_>, node: &GraphNode) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "id"), node.id());
+    let _ = dict.set_item(PyString::intern(py, "label"), node.label());
 
     let props = node.properties();
     if !props.is_empty() {
         let props_dict = PyDict::new(py);
         for (k, v) in props {
-            props_dict
-                .set_item(k, json_to_python(py, v))
-                .unwrap_or_default();
+            let _ = props_dict.set_item(k.as_str(), json_to_python(py, v));
         }
-        result.insert("properties".to_string(), props_dict.into());
+        let _ = dict.set_item(PyString::intern(py, "properties"), props_dict);
     }
 
     if let Some(vec) = node.vector() {
-        result.insert("vector".to_string(), to_pyobject(py, vec.to_vec()));
+        let np_vector = numpy::PyArray1::from_slice(py, vec);
+        let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
     }
 
-    result
+    dict.into_any().unbind()
 }
 
-/// Convert a GraphEdge to a Python dict.
-pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> HashMap<String, PyObject> {
-    let mut result = HashMap::new();
-    result.insert("id".to_string(), to_pyobject(py, edge.id()));
-    result.insert("source".to_string(), to_pyobject(py, edge.source()));
-    result.insert("target".to_string(), to_pyobject(py, edge.target()));
-    result.insert("label".to_string(), to_pyobject(py, edge.label()));
+/// Convert a `GraphEdge` to a Python dict, bypassing `HashMap` intermediary.
+///
+/// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
+/// repeated string allocation.
+pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "id"), edge.id());
+    let _ = dict.set_item(PyString::intern(py, "source"), edge.source());
+    let _ = dict.set_item(PyString::intern(py, "target"), edge.target());
+    let _ = dict.set_item(PyString::intern(py, "label"), edge.label());
 
     let props = edge.properties();
     if !props.is_empty() {
         let props_dict = PyDict::new(py);
         for (k, v) in props {
-            props_dict
-                .set_item(k, json_to_python(py, v))
-                .unwrap_or_default();
+            let _ = props_dict.set_item(k.as_str(), json_to_python(py, v));
         }
-        result.insert("properties".to_string(), props_dict.into());
+        let _ = dict.set_item(PyString::intern(py, "properties"), props_dict);
     }
 
-    result
+    dict.into_any().unbind()
 }
 
-/// Convert a TraversalResult to a Python dict.
-pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> HashMap<String, PyObject> {
-    let mut dict = HashMap::new();
-    dict.insert("target_id".to_string(), to_pyobject(py, result.target_id));
-    dict.insert("path".to_string(), to_pyobject(py, result.path.clone()));
-    dict.insert("depth".to_string(), to_pyobject(py, result.depth));
-    dict
+/// Convert a `TraversalResult` to a Python dict, bypassing `HashMap` intermediary.
+///
+/// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
+/// repeated string allocation.
+pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "target_id"), result.target_id);
+    let _ = dict.set_item(PyString::intern(py, "path"), result.path.clone());
+    let _ = dict.set_item(PyString::intern(py, "depth"), result.depth);
+    dict.into_any().unbind()
 }
-
-use pyo3::types::PyDict;
 
 #[cfg(test)]
 mod tests {
@@ -215,9 +202,10 @@ mod tests {
             );
             let node = GraphNode::new(1, "Person").with_properties(props);
 
-            let dict = node_to_dict(py, &node);
-            assert!(dict.contains_key("id"));
-            assert!(dict.contains_key("label"));
+            let obj = node_to_dict(py, &node);
+            let dict = obj.bind(py).downcast::<PyDict>().unwrap();
+            assert!(dict.contains("id").unwrap());
+            assert!(dict.contains("label").unwrap());
         });
     }
 }

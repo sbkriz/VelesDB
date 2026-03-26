@@ -5,36 +5,24 @@ Complete E2E Test Suite for VelesDB Python SDK
 EPIC-060: Comprehensive E2E tests for all SDK components.
 Tests the complete workflow from database creation to VelesQL queries.
 
+VELESDB_AVAILABLE / pytestmark / temp_db fixture are provided by conftest.py.
+
 Run with: pytest tests/test_e2e_complete.py -v
 """
 
-import pytest
-import tempfile
-import shutil
 import numpy as np
-# Import will fail if maturin develop hasn't been run
+import pytest
+
+from conftest import _SKIP_NO_BINDINGS
+
+pytestmark = _SKIP_NO_BINDINGS
+
 try:
-    from velesdb import Database, FusionStrategy
-    VELESDB_AVAILABLE = True
-except ImportError:
-    VELESDB_AVAILABLE = False
-    Database = None
-    FusionStrategy = None
-
-
-pytestmark = pytest.mark.skipif(
-    not VELESDB_AVAILABLE,
-    reason="VelesDB Python bindings not installed. Run: maturin develop"
-)
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    temp_dir = tempfile.mkdtemp()
-    db = Database(temp_dir)
-    yield db
-    shutil.rmtree(temp_dir, ignore_errors=True)
+    from velesdb import FusionStrategy
+    _FUSION_AVAILABLE = True
+except (ImportError, AttributeError):
+    _FUSION_AVAILABLE = False
+    FusionStrategy = None  # type: ignore[assignment,misc]
 
 
 @pytest.fixture
