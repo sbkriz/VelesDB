@@ -1,11 +1,12 @@
 """
-Regression tests for GitHub issues #356, #357, #412, and #413.
+Regression tests for GitHub issues #356, #357, #412, #413, and #419.
 
 - #357: __init__.py imports PyGraphCollection/PyGraphSchema but native
         module exports GraphCollection/GraphSchema
 - #356: agent_memory() fails with VELES-031 on same-process re-entrant open
 - #412: bool→int silent conversion in python_to_json (True stored as 1)
 - #413: unsupported payload types silently dropped instead of raising
+- #419: batch_search per-query top_k — mixed k values should return correct counts
 
 Run with: pytest tests/test_issue_fixes.py -v
 """
@@ -232,3 +233,119 @@ class TestIssue413SilentDataLoss:
         assert p["nested"] == {"a": 1, "b": [2, 3]}
         assert p["empty_list"] == []
         assert p["empty_dict"] == {}
+
+
+class TestIssue419BatchSearchPerQueryTopK:
+    """Regression tests for #419: batch_search per-query top_k.
+
+    When queries in a batch request different top_k values, each query
+    must return at most its own top_k results — not max(top_k) for all.
+    """
+
+    @staticmethod
+    def _build_collection(temp_db):
+        """Create a 4-dim collection with 20 points for top_k testing."""
+        col = temp_db.create_collection("batch_topk_test", dimension=4)
+        points = [
+            {
+                "id": i,
+                "vector": [
+                    float(i % 5) / 5.0,
+                    float(i % 3) / 3.0,
+                    float(i % 7) / 7.0,
+                    float(i % 11) / 11.0,
+                ],
+                "payload": {"idx": i},
+            }
+            for i in range(1, 21)
+        ]
+        col.upsert(points)
+        return col
+
+    def test_mixed_topk_returns_correct_counts(self, temp_db):
+        """batch_search([k=2, k=10]) must return 2 and 10 results."""
+        col = self._build_collection(temp_db)
+        results = col.batch_search([
+            {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2},
+            {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 10},
+        ])
+        if len(results) != 2:
+            raise AssertionError(f"Expected 2 result sets, got {len(results)}")
+        if len(results[0]) != 2:
+            raise AssertionError(
+                f"Query with top_k=2 returned {len(results[0])} results, expected 2"
+            )
+        if len(results[1]) != 10:
+            raise AssertionError(
+                f"Query with top_k=10 returned {len(results[1])} results, expected 10"
+            )
+
+    def test_uniform_topk_still_works(self, temp_db):
+        """batch_search where all queries share the same top_k (fast path)."""
+        col = self._build_collection(temp_db)
+        results = col.batch_search([
+            {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 3},
+            {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 3},
+            {"vector": [0.0, 0.0, 1.0, 0.0], "top_k": 3},
+        ])
+        if len(results) != 3:
+            raise AssertionError(f"Expected 3 result sets, got {len(results)}")
+        for i, r in enumerate(results):
+            if len(r) != 3:
+                raise AssertionError(
+                    f"Query {i} with top_k=3 returned {len(r)} results, expected 3"
+                )
+
+    def test_default_topk_is_10(self, temp_db):
+        """Queries without explicit top_k default to 10."""
+        col = self._build_collection(temp_db)
+        results = col.batch_search([
+            {"vector": [1.0, 0.0, 0.0, 0.0]},
+        ])
+        if len(results) != 1:
+            raise AssertionError(f"Expected 1 result set, got {len(results)}")
+        if len(results[0]) != 10:
+            raise AssertionError(
+                f"Default top_k query returned {len(results[0])} results, expected 10"
+            )
+
+    def test_topk_alias_topK_works(self, temp_db):
+        """The 'topK' alias (camelCase) must work identically to 'top_k'."""
+        col = self._build_collection(temp_db)
+        results = col.batch_search([
+            {"vector": [1.0, 0.0, 0.0, 0.0], "topK": 5},
+        ])
+        if len(results[0]) != 5:
+            raise AssertionError(
+                f"topK=5 returned {len(results[0])} results, expected 5"
+            )
+
+    def test_three_distinct_topk_values(self, temp_db):
+        """Three queries with k=1, k=5, k=15 — each gets its own count."""
+        col = self._build_collection(temp_db)
+        results = col.batch_search([
+            {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1},
+            {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 5},
+            {"vector": [0.0, 0.0, 1.0, 0.0], "top_k": 15},
+        ])
+        if len(results[0]) != 1:
+            raise AssertionError(
+                f"top_k=1 returned {len(results[0])} results, expected 1"
+            )
+        if len(results[1]) != 5:
+            raise AssertionError(
+                f"top_k=5 returned {len(results[1])} results, expected 5"
+            )
+        if len(results[2]) != 15:
+            raise AssertionError(
+                f"top_k=15 returned {len(results[2])} results, expected 15"
+            )
+
+    def test_empty_batch_returns_empty(self, temp_db):
+        """An empty batch should return an empty list, not error."""
+        col = self._build_collection(temp_db)
+        results = col.batch_search([])
+        if len(results) != 0:
+            raise AssertionError(
+                f"Empty batch returned {len(results)} results, expected 0"
+            )

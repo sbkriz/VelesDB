@@ -1,9 +1,11 @@
 //! Search methods for Collection (dense, sparse, hybrid, batch, multi-query).
 
+use std::collections::HashMap;
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
+use velesdb_core::SearchResult;
 
 use crate::collection_helpers::{
     id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vector,
@@ -13,6 +15,13 @@ use crate::utils::extract_vector;
 use crate::FusionStrategy;
 
 use super::Collection;
+
+/// A parsed batch search query ready for dispatch.
+struct ParsedSearch {
+    vector: Vec<f32>,
+    top_k: usize,
+    filter: Option<velesdb_core::Filter>,
+}
 
 #[pymethods]
 impl Collection {
@@ -172,52 +181,22 @@ impl Collection {
     }
 
     /// Batch search for multiple query vectors in parallel.
+    ///
+    /// Each search dict must contain a `"vector"` key and may optionally include
+    /// `"top_k"` (or `"topK"`, default 10) and `"filter"`.
+    ///
+    /// Queries are partitioned by `top_k` so each group searches with the
+    /// correct candidate count, avoiding wasted HNSW traversal when queries
+    /// request different result sizes (issue #419).
     #[pyo3(signature = (searches))]
     fn batch_search(
         &self,
         searches: Vec<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<Vec<PyObject>>> {
         Python::with_gil(|py| {
-            let mut queries = Vec::with_capacity(searches.len());
-            let mut filters = Vec::with_capacity(searches.len());
-            let mut top_ks = Vec::with_capacity(searches.len());
-            for search_dict in searches {
-                let vector_obj = search_dict
-                    .get("vector")
-                    .ok_or_else(|| PyValueError::new_err("Search missing 'vector' field"))?;
-                queries.push(extract_vector(py, vector_obj)?);
-                top_ks.push(
-                    search_dict
-                        .get("top_k")
-                        .or_else(|| search_dict.get("topK"))
-                        .map(|v| v.extract(py))
-                        .transpose()?
-                        .unwrap_or(10),
-                );
-                filters.push(
-                    search_dict
-                        .get("filter")
-                        .map(|f| parse_filter(py, f))
-                        .transpose()?,
-                );
-            }
-            let max_top_k = top_ks.iter().max().copied().unwrap_or(10);
-            let query_refs: Vec<&[f32]> = queries.iter().map(|v| v.as_slice()).collect();
-            let batch_results = self
-                .inner
-                .search_batch_with_filters(&query_refs, max_top_k, &filters)
-                .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))?;
-            Ok(batch_results
-                .into_iter()
-                .zip(top_ks)
-                .map(|(results, k)| {
-                    results
-                        .into_iter()
-                        .take(k)
-                        .map(|r| search_result_to_dict(py, &r))
-                        .collect()
-                })
-                .collect())
+            let parsed = Self::parse_batch_searches(py, &searches)?;
+            let results = self.dispatch_batch_by_top_k(&parsed)?;
+            Ok(Self::convert_batch_results(py, results))
         })
     }
 
@@ -274,5 +253,124 @@ impl Collection {
             let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
             Ok(id_score_pairs_to_dicts(py, tuples))
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers for batch_search (issue #419: per-query top_k).
+// ---------------------------------------------------------------------------
+
+impl Collection {
+    /// Extracts vector, top_k, and filter from each search dict.
+    fn parse_batch_searches(
+        py: Python<'_>,
+        searches: &[HashMap<String, PyObject>],
+    ) -> PyResult<Vec<ParsedSearch>> {
+        let mut parsed = Vec::with_capacity(searches.len());
+        for search_dict in searches {
+            let vector_obj = search_dict
+                .get("vector")
+                .ok_or_else(|| PyValueError::new_err("Search missing 'vector' field"))?;
+            let vector = extract_vector(py, vector_obj)?;
+            let top_k = search_dict
+                .get("top_k")
+                .or_else(|| search_dict.get("topK"))
+                .map(|v| v.extract(py))
+                .transpose()?
+                .unwrap_or(10);
+            let filter = search_dict
+                .get("filter")
+                .map(|f| parse_filter(py, f))
+                .transpose()?;
+            parsed.push(ParsedSearch {
+                vector,
+                top_k,
+                filter,
+            });
+        }
+        Ok(parsed)
+    }
+
+    /// Partitions queries by `top_k` and dispatches each group to the core
+    /// batch search API, then reassembles results in original order.
+    ///
+    /// When all queries share the same `top_k` (common case), this collapses
+    /// to a single core call with zero grouping overhead.
+    fn dispatch_batch_by_top_k(&self, parsed: &[ParsedSearch]) -> PyResult<Vec<Vec<SearchResult>>> {
+        if parsed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path: all queries share the same top_k (common case).
+        let first_k = parsed[0].top_k;
+        let all_same_k = parsed.iter().all(|p| p.top_k == first_k);
+        if all_same_k {
+            return self.dispatch_single_group(parsed, first_k);
+        }
+
+        self.dispatch_multi_group(parsed)
+    }
+
+    /// Dispatches all queries as a single batch (uniform top_k).
+    fn dispatch_single_group(
+        &self,
+        parsed: &[ParsedSearch],
+        k: usize,
+    ) -> PyResult<Vec<Vec<SearchResult>>> {
+        let query_refs: Vec<&[f32]> = parsed.iter().map(|p| p.vector.as_slice()).collect();
+        let filters: Vec<Option<velesdb_core::Filter>> =
+            parsed.iter().map(|p| p.filter.clone()).collect();
+        self.inner
+            .search_batch_with_filters(&query_refs, k, &filters)
+            .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))
+    }
+
+    /// Groups queries by `top_k`, dispatches one batch per group, and
+    /// reassembles results in the original input order.
+    fn dispatch_multi_group(&self, parsed: &[ParsedSearch]) -> PyResult<Vec<Vec<SearchResult>>> {
+        // Build groups: map top_k -> list of (original_index, query, filter).
+        let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, p) in parsed.iter().enumerate() {
+            groups.entry(p.top_k).or_default().push(i);
+        }
+
+        let mut output: Vec<Option<Vec<SearchResult>>> = vec![None; parsed.len()];
+
+        for (k, indices) in &groups {
+            let query_refs: Vec<&[f32]> = indices
+                .iter()
+                .map(|&i| parsed[i].vector.as_slice())
+                .collect();
+            let filters: Vec<Option<velesdb_core::Filter>> =
+                indices.iter().map(|&i| parsed[i].filter.clone()).collect();
+
+            let batch_results = self
+                .inner
+                .search_batch_with_filters(&query_refs, *k, &filters)
+                .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))?;
+
+            for (result, &orig_idx) in batch_results.into_iter().zip(indices) {
+                output[orig_idx] = Some(result);
+            }
+        }
+
+        // All slots must be filled; every index was assigned to exactly one group.
+        Ok(output.into_iter().map(|o| o.unwrap_or_default()).collect())
+    }
+
+    /// Converts core `SearchResult` vectors to Python dicts.
+    fn convert_batch_results(
+        py: Python<'_>,
+        results: Vec<Vec<SearchResult>>,
+    ) -> Vec<Vec<PyObject>> {
+        results
+            .iter()
+            .map(|query_results| {
+                query_results
+                    .iter()
+                    .map(|r| search_result_to_dict(py, r))
+                    .collect()
+            })
+            .collect()
     }
 }

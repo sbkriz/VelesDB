@@ -203,15 +203,14 @@ class Collection:
         top_k: int = 10,
     ) -> List[List[Dict[str, Any]]]:
         if queries and isinstance(queries[0], dict):
+            # Pass dicts through to Rust, injecting the default top_k only
+            # when the caller omitted both "top_k" and "topK".
             searches = []
             for q in queries:
-                vector = q.get("vector", [])
-                searches.append(
-                    {
-                        "vector": list(vector),
-                        "top_k": int(q.get("top_k", top_k)),
-                    }
-                )
+                entry = dict(q)  # shallow copy to avoid mutating caller's dict
+                if "top_k" not in entry and "topK" not in entry:
+                    entry["top_k"] = top_k
+                searches.append(entry)
         else:
             searches = [{"vector": list(v), "top_k": int(top_k)} for v in queries]
         return self._inner.batch_search(searches)
