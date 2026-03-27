@@ -41,24 +41,7 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         let sparse_batch = Self::collect_sparse_batch(points);
 
-        // Issue #424: Parallel I/O — vector and payload writes use independent
-        // locks (vector_storage at position 2, payload_storage at position 3).
-        // Neither closure acquires both, so no lock-order violation.
-        #[cfg(feature = "persistence")]
-        {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(&vector_refs),
-                || self.bulk_store_payloads(points),
-            );
-            vec_result?;
-            pay_result?;
-        }
-
-        #[cfg(not(feature = "persistence"))]
-        {
-            self.bulk_store_vectors(&vector_refs)?;
-            self.bulk_store_payloads(points)?;
-        }
+        self.store_vectors_and_payloads(&vector_refs, points)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
@@ -67,6 +50,31 @@ impl Collection {
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
+    }
+
+    /// Writes vectors and payloads to storage (parallel with rayon when available).
+    fn store_vectors_and_payloads(
+        &self,
+        vector_refs: &[(u64, &[f32])],
+        points: &[Point],
+    ) -> Result<()> {
+        #[cfg(feature = "persistence")]
+        {
+            let (vec_result, pay_result) = rayon::join(
+                || self.bulk_store_vectors(vector_refs),
+                || self.bulk_store_payloads(points),
+            );
+            vec_result?;
+            pay_result?;
+        }
+
+        #[cfg(not(feature = "persistence"))]
+        {
+            self.bulk_store_vectors(vector_refs)?;
+            self.bulk_store_payloads(points)?;
+        }
+
+        Ok(())
     }
 
     /// Bulk insert from contiguous flat slices (zero-copy from numpy / FFI).
@@ -117,23 +125,8 @@ impl Collection {
             })
             .collect();
 
-        #[cfg(feature = "persistence")]
-        {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(&vector_refs),
-                || self.bulk_store_payload_entries(&payload_entries),
-            );
-            vec_result?;
-            pay_result?;
-        }
+        self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
-        #[cfg(not(feature = "persistence"))]
-        {
-            self.bulk_store_vectors(&vector_refs)?;
-            self.bulk_store_payload_entries(&payload_entries)?;
-        }
-
-        // BM25 text indexing for payloads.
         self.update_text_index_from_raw(ids, payloads);
 
         let inserted = self.bulk_index_or_defer(vector_refs);
@@ -185,6 +178,31 @@ impl Collection {
             return Ok(());
         }
         self.payload_storage.write().store_batch(entries)?;
+        Ok(())
+    }
+
+    /// Writes vectors and raw payload entries to storage (parallel when available).
+    fn store_vectors_and_payload_entries(
+        &self,
+        vector_refs: &[(u64, &[f32])],
+        payload_entries: &[(u64, &serde_json::Value)],
+    ) -> Result<()> {
+        #[cfg(feature = "persistence")]
+        {
+            let (vec_result, pay_result) = rayon::join(
+                || self.bulk_store_vectors(vector_refs),
+                || self.bulk_store_payload_entries(payload_entries),
+            );
+            vec_result?;
+            pay_result?;
+        }
+
+        #[cfg(not(feature = "persistence"))]
+        {
+            self.bulk_store_vectors(vector_refs)?;
+            self.bulk_store_payload_entries(payload_entries)?;
+        }
+
         Ok(())
     }
 
