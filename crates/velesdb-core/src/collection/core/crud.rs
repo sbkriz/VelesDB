@@ -1,5 +1,6 @@
 //! CRUD operations for Collection (upsert, get, delete).
 //!
+//! Bulk-specific methods (`upsert_bulk`, `upsert_bulk_from_raw`) are in `crud_bulk.rs`.
 //! Quantization caching helpers and secondary-index update helpers are in `crud_helpers.rs`.
 
 use crate::collection::types::Collection;
@@ -12,6 +13,12 @@ use crate::validation::validate_dimension_match;
 
 use parking_lot::RwLockWriteGuard;
 use std::collections::{BTreeMap, HashMap};
+
+/// Pre-computed last-writer-wins dedup map: `point_id -> index_of_last_occurrence`.
+///
+/// Built once in `batch_store_all` and shared by both `write_deduped_payloads`
+/// and `write_deduped_vectors` to avoid redundant map construction (Issue #425).
+type DedupMap = HashMap<u64, usize>;
 
 struct QuantizationGuards<'a> {
     sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
@@ -143,14 +150,18 @@ impl Collection {
             result
         };
 
+        // Issue #425: Build the dedup map once and share it across both
+        // write paths, avoiding redundant HashMap construction.
+        let dedup_map = Self::build_dedup_map(points);
+
         // Issue #424: Parallel I/O — payload and vector writes are independent
         // after old_payloads collection. Run them concurrently via rayon::join.
         // rayon is gated on the persistence feature.
         #[cfg(feature = "persistence")]
         {
             let (payload_result, vector_result) = rayon::join(
-                || self.write_and_flush_payloads(points),
-                || self.write_deduped_vectors(points),
+                || self.write_and_flush_payloads(points, &dedup_map),
+                || self.write_deduped_vectors(points, &dedup_map),
             );
             payload_result?;
             vector_result?;
@@ -158,8 +169,8 @@ impl Collection {
 
         #[cfg(not(feature = "persistence"))]
         {
-            self.write_and_flush_payloads(points)?;
-            self.write_deduped_vectors(points)?;
+            self.write_and_flush_payloads(points, &dedup_map)?;
+            self.write_deduped_vectors(points, &dedup_map)?;
         }
 
         Ok(old_payloads)
@@ -169,9 +180,12 @@ impl Collection {
     ///
     /// Issue #424: Extracted so it can be called from `rayon::join` in the
     /// parallel I/O path. Acquires the `payload_storage` write lock internally.
-    fn write_and_flush_payloads(&self, points: &[Point]) -> Result<()> {
+    ///
+    /// Issue #425: Accepts a pre-computed `dedup_map` to avoid rebuilding
+    /// the last-writer-wins map redundantly.
+    fn write_and_flush_payloads(&self, points: &[Point], dedup_map: &DedupMap) -> Result<()> {
         let mut payload_storage = self.payload_storage.write();
-        Self::write_deduped_payloads(points, &mut payload_storage)?;
+        Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)?;
         payload_storage.flush()?;
         Ok(())
     }
@@ -198,27 +212,41 @@ impl Collection {
             .collect()
     }
 
+    /// Builds a last-writer-wins dedup map: `point_id -> index_of_last_occurrence`.
+    ///
+    /// Issue #425: Computed once in `batch_store_all` and shared by both
+    /// `write_deduped_payloads` and `write_deduped_vectors` to avoid
+    /// redundant `HashMap` construction.
+    fn build_dedup_map(points: &[Point]) -> DedupMap {
+        let mut map = HashMap::with_capacity(points.len());
+        for (i, p) in points.iter().enumerate() {
+            map.insert(p.id, i);
+        }
+        map
+    }
+
     /// Writes only the last payload per ID to the WAL, then deletes IDs whose
     /// final occurrence has `payload=None`.
-    fn write_deduped_payloads(points: &[Point], storage: &mut LogPayloadStorage) -> Result<()> {
-        // Build last-writer-wins map: id -> (has_payload, index_of_last_occurrence)
-        let mut last_idx: HashMap<u64, usize> = HashMap::new();
-        for (i, p) in points.iter().enumerate() {
-            last_idx.insert(p.id, i);
-        }
-
+    ///
+    /// Issue #425: Accepts a pre-computed `dedup_map` instead of building
+    /// its own, consolidating the two redundant maps into one.
+    fn write_deduped_payloads(
+        points: &[Point],
+        storage: &mut LogPayloadStorage,
+        dedup_map: &DedupMap,
+    ) -> Result<()> {
         // Only write the final payload per ID (skip intermediate duplicates)
         let deduped: Vec<(u64, &serde_json::Value)> = points
             .iter()
             .enumerate()
-            .filter(|&(i, p)| last_idx.get(&p.id) == Some(&i) && p.payload.is_some())
+            .filter(|&(i, p)| dedup_map.get(&p.id) == Some(&i) && p.payload.is_some())
             .filter_map(|(_, p)| p.payload.as_ref().map(|pl| (p.id, pl)))
             .collect();
         storage.store_batch(&deduped)?;
 
         // Delete IDs whose final occurrence has payload=None
         for (i, p) in points.iter().enumerate() {
-            if last_idx.get(&p.id) == Some(&i) && p.payload.is_none() {
+            if dedup_map.get(&p.id) == Some(&i) && p.payload.is_none() {
                 let _ = storage.delete(p.id);
             }
         }
@@ -226,16 +254,14 @@ impl Collection {
     }
 
     /// Writes only the last vector per ID to vector storage.
-    fn write_deduped_vectors(&self, points: &[Point]) -> Result<()> {
-        let mut last_idx: HashMap<u64, usize> = HashMap::new();
-        for (i, p) in points.iter().enumerate() {
-            last_idx.insert(p.id, i);
-        }
-
+    ///
+    /// Issue #425: Accepts a pre-computed `dedup_map` instead of building
+    /// its own, consolidating the two redundant maps into one.
+    fn write_deduped_vectors(&self, points: &[Point], dedup_map: &DedupMap) -> Result<()> {
         let deduped: Vec<(u64, &[f32])> = points
             .iter()
             .enumerate()
-            .filter(|&(i, p)| last_idx.get(&p.id) == Some(&i))
+            .filter(|&(i, p)| dedup_map.get(&p.id) == Some(&i))
             .map(|(_, p)| (p.id, p.vector.as_slice()))
             .collect();
 
@@ -249,18 +275,60 @@ impl Collection {
         Ok(())
     }
 
+    /// Returns `true` when Phase 2 processing can be skipped entirely.
+    ///
+    /// Issue #425: For the common case (`StorageMode::Full`, no secondary
+    /// indexes, empty BM25 index, no sparse vectors in the batch), Phase 2
+    /// does zero useful work. Skipping avoids `QuantizationGuards` acquisition,
+    /// `seen_payloads` HashMap allocation, and the per-point loop.
+    fn can_skip_phase2(&self, points: &[Point], storage_mode: StorageMode) -> bool {
+        // Quantization caching is a no-op only for Full and RaBitQ modes
+        let no_quantization = matches!(storage_mode, StorageMode::Full | StorageMode::RaBitQ);
+        if !no_quantization {
+            return false;
+        }
+
+        // Secondary indexes require per-point old/new payload diffing
+        let no_secondary = self.secondary_indexes.read().is_empty();
+        if !no_secondary {
+            return false;
+        }
+
+        // BM25 text index: skip only when the index is empty AND no point
+        // carries a payload (nothing to add, nothing to remove)
+        let bm25_empty = self.text_index.is_empty();
+        let any_payload = points.iter().any(|p| p.payload.is_some());
+        if !bm25_empty || any_payload {
+            return false;
+        }
+
+        // Sparse vectors require collection into the sparse batch buffer
+        let any_sparse = points.iter().any(Point::has_sparse_vectors);
+        !any_sparse
+    }
+
     /// Phase 2: Per-point updates that don't need storage write locks.
     ///
     /// Tracks the effective "old payload" per ID to handle within-batch
     /// duplicates correctly: when id=5 appears twice, the second occurrence
     /// sees the first occurrence's payload as its "old" (not the pre-batch
     /// original), ensuring secondary indexes stay consistent.
+    ///
+    /// Issue #425: Fast-path skips the entire loop when no secondary
+    /// processing is needed (see `can_skip_phase2`).
     fn per_point_updates(
         &self,
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         storage_mode: StorageMode,
     ) -> Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> {
+        // Issue #425: Fast-path — skip Phase 2 entirely when no secondary
+        // processing is needed. Avoids lock acquisition, HashMap allocation,
+        // and the per-point loop for the common StorageMode::Full case.
+        if self.can_skip_phase2(points, storage_mode) {
+            return Vec::new();
+        }
+
         let mut quant_guards = QuantizationGuards::acquire(self, storage_mode);
         let mut sparse_batch = Vec::new();
         // Track effective old payload per ID for within-batch duplicate handling.
@@ -271,6 +339,12 @@ impl Collection {
         // inner Option = "had a payload?". This distinguishes "seen with None"
         // from "not seen" — `.flatten()` would collapse both to None.
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
+
+        // Issue #425: BM25 skip — pre-check whether any point carries a payload
+        // or the BM25 index has existing documents. When both are false, the
+        // text index loop body is a no-op (add_document never called, remove_document
+        // on non-existent docs is free). Skip to avoid per-point function call overhead.
+        let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
 
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
             let effective_old: Option<&serde_json::Value> =
@@ -294,7 +368,9 @@ impl Collection {
                 effective_old,
                 point.payload.as_ref(),
             );
-            Self::update_text_index(&self.text_index, point);
+            if !skip_bm25 {
+                Self::update_text_index(&self.text_index, point);
+            }
             Self::collect_sparse_vectors(point, &mut sparse_batch);
 
             // Record this point's payload ref — zero-cost for the common case (no clone)
@@ -316,7 +392,7 @@ impl Collection {
     }
 
     /// Updates the BM25 text index for a single point.
-    fn update_text_index(text_index: &crate::index::Bm25Index, point: &Point) {
+    pub(super) fn update_text_index(text_index: &crate::index::Bm25Index, point: &Point) {
         if let Some(payload) = &point.payload {
             let text = Self::extract_text_from_payload(payload);
             if !text.is_empty() {
@@ -356,7 +432,7 @@ impl Collection {
     }
 
     /// Invalidates stats cache and bumps write generation.
-    fn invalidate_caches_and_bump_generation(&self) {
+    pub(super) fn invalidate_caches_and_bump_generation(&self) {
         *self.cached_stats.lock() = None;
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -397,6 +473,44 @@ impl Collection {
         }
     }
 
+    /// Batch-inserts into HNSW or defers into the deferred indexer.
+    ///
+    /// Returns the number of vectors processed (whether indexed directly
+    /// or deferred for later merge).
+    ///
+    /// Since v1.7.2, both `upsert()` and `upsert_bulk()` route through this
+    /// method. The direct path calls `insert_batch_parallel` (rayon), which
+    /// yields non-deterministic HNSW graph topology across runs. Search
+    /// correctness and recall are unaffected.
+    ///
+    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
+    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
+    /// redundant `is_enabled()` check is needed here.
+    pub(super) fn bulk_index_or_defer(&self, vector_refs: Vec<(u64, &[f32])>) -> usize {
+        let count = vector_refs.len();
+        #[cfg(feature = "persistence")]
+        if let Some(ref di) = self.deferred_indexer {
+            di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
+            if di.should_merge() {
+                self.merge_deferred_batch(di);
+            }
+            // Issue #423 Component 3: Track inserts for periodic HNSW save.
+            // Reason: count fits in u64 (vector batch size bounded by memory).
+            #[allow(clippy::cast_possible_truncation)]
+            self.inserts_since_last_hnsw_save
+                .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
+            return count;
+        }
+        let inserted = self.index.insert_batch_parallel(vector_refs);
+        self.index.set_searching_mode();
+        // Issue #423 Component 3: Track inserts for periodic HNSW save.
+        // Reason: count fits in u64 (vector batch size bounded by memory).
+        #[allow(clippy::cast_possible_truncation)]
+        self.inserts_since_last_hnsw_save
+            .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
+        inserted
+    }
+
     /// Inserts or updates metadata-only points (no vectors).
     ///
     /// This method is for metadata-only collections. Points should have
@@ -433,173 +547,6 @@ impl Collection {
         // config(1) only — all higher-numbered locks released above.
         self.config.write().point_count = point_count;
         self.invalidate_caches_and_bump_generation();
-        Ok(())
-    }
-
-    /// Bulk insert optimized for high-throughput import.
-    ///
-    /// # Performance
-    ///
-    /// This method is optimized for bulk loading:
-    /// - Uses parallel HNSW insertion (rayon)
-    /// - Parallel payload + vector I/O via `rayon::join` (Issue #424)
-    /// - Single flush at the end (not per-point)
-    /// - No HNSW index save (deferred for performance)
-    /// - ~15x faster than previous sequential approach on large batches (5000+)
-    /// - Benchmark: 25-30 Kvec/s on 768D vectors
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension.
-    pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
-        if points.is_empty() {
-            return Ok(0);
-        }
-
-        let dimension = self.config.read().dimension;
-        for point in points {
-            validate_dimension_match(dimension, point.dimension())?;
-        }
-
-        let vector_refs: Vec<(u64, &[f32])> =
-            points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
-        let sparse_batch = Self::collect_sparse_batch(points);
-
-        // Issue #424: Parallel I/O — vector and payload writes use independent
-        // locks (vector_storage at position 2, payload_storage at position 3).
-        // Neither closure acquires both, so no lock-order violation.
-        #[cfg(feature = "persistence")]
-        {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(&vector_refs),
-                || self.bulk_store_payloads(points),
-            );
-            vec_result?;
-            pay_result?;
-        }
-
-        #[cfg(not(feature = "persistence"))]
-        {
-            self.bulk_store_vectors(&vector_refs)?;
-            self.bulk_store_payloads(points)?;
-        }
-
-        let inserted = self.bulk_index_or_defer(vector_refs);
-        self.config.write().point_count = self.vector_storage.read().len();
-
-        self.apply_sparse_batch_bulk(&sparse_batch)?;
-        self.invalidate_caches_and_bump_generation();
-
-        Ok(inserted)
-    }
-
-    /// Batch-inserts into HNSW or defers into the deferred indexer.
-    ///
-    /// Returns the number of vectors processed (whether indexed directly
-    /// or deferred for later merge).
-    ///
-    /// Since v1.7.2, both `upsert()` and `upsert_bulk()` route through this
-    /// method. The direct path calls `insert_batch_parallel` (rayon), which
-    /// yields non-deterministic HNSW graph topology across runs. Search
-    /// correctness and recall are unaffected.
-    ///
-    /// Invariant: `self.deferred_indexer` is `Some` only when enabled
-    /// (`build_deferred_indexer` filters on `cfg.enabled`), so no
-    /// redundant `is_enabled()` check is needed here.
-    fn bulk_index_or_defer(&self, vector_refs: Vec<(u64, &[f32])>) -> usize {
-        let count = vector_refs.len();
-        #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
-            di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
-            if di.should_merge() {
-                self.merge_deferred_batch(di);
-            }
-            // Issue #423 Component 3: Track inserts for periodic HNSW save.
-            // Reason: count fits in u64 (vector batch size bounded by memory).
-            #[allow(clippy::cast_possible_truncation)]
-            self.inserts_since_last_hnsw_save
-                .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
-            return count;
-        }
-        let inserted = self.index.insert_batch_parallel(vector_refs);
-        self.index.set_searching_mode();
-        // Issue #423 Component 3: Track inserts for periodic HNSW save.
-        // Reason: count fits in u64 (vector batch size bounded by memory).
-        #[allow(clippy::cast_possible_truncation)]
-        self.inserts_since_last_hnsw_save
-            .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
-        inserted
-    }
-
-    /// Collects sparse vectors grouped by index name for batch insert.
-    fn collect_sparse_batch(
-        points: &[Point],
-    ) -> BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>> {
-        let mut batch: BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>> =
-            BTreeMap::new();
-        for point in points {
-            if let Some(sv_map) = &point.sparse_vectors {
-                for (name, sv) in sv_map {
-                    batch
-                        .entry(name.clone())
-                        .or_default()
-                        .push((point.id, sv.clone()));
-                }
-            }
-        }
-        batch
-    }
-
-    /// Stores vectors in bulk via batch WAL + mmap write.
-    fn bulk_store_vectors(&self, vectors: &[(u64, &[f32])]) -> Result<()> {
-        let mut storage = self.vector_storage.write();
-        storage.store_batch(vectors)?;
-        storage.flush()?;
-        Ok(())
-    }
-
-    /// Stores payloads and updates BM25 text index in bulk.
-    ///
-    /// Uses `LogPayloadStorage::store_batch()` for a single WAL sync instead
-    /// of per-point fsync, improving bulk insert throughput by 10-50x.
-    fn bulk_store_payloads(&self, points: &[Point]) -> Result<()> {
-        let entries: Vec<(u64, &serde_json::Value)> = points
-            .iter()
-            .filter_map(|p| p.payload.as_ref().map(|pl| (p.id, pl)))
-            .collect();
-
-        self.payload_storage.write().store_batch(&entries)?;
-
-        for point in points {
-            Self::update_text_index(&self.text_index, point);
-        }
-
-        Ok(())
-    }
-
-    /// Applies sparse batch with WAL-before-apply for bulk insert.
-    fn apply_sparse_batch_bulk(
-        &self,
-        sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
-    ) -> Result<()> {
-        if sparse_batch.is_empty() {
-            return Ok(());
-        }
-        #[cfg(feature = "persistence")]
-        {
-            for (name, docs) in sparse_batch {
-                let wal_path =
-                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
-                for (point_id, sv) in docs {
-                    crate::index::sparse::persistence::wal_append_upsert(&wal_path, *point_id, sv)?;
-                }
-            }
-        }
-        let mut indexes = self.sparse_indexes.write();
-        for (name, docs) in sparse_batch {
-            let idx = indexes.entry(name.clone()).or_default();
-            idx.insert_batch_chunk(docs);
-        }
         Ok(())
     }
 

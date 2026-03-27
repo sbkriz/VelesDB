@@ -693,3 +693,446 @@ fn test_batch_store_all_parallel_io_with_duplicates() {
     let p2 = results[1].as_ref().expect("id=2 should exist");
     assert_eq!(p2.payload, Some(serde_json::json!({"v": "C"})));
 }
+
+// === upsert_bulk_from_raw tests (Issue #430) ===
+
+/// Validates that `upsert_bulk_from_raw` stores vectors and payloads correctly,
+/// producing identical results to the `Point`-based `upsert_bulk` path.
+#[test]
+fn test_upsert_bulk_from_raw_basic() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // 3 vectors of dimension 4, flat row-major layout
+    let vectors: Vec<f32> = vec![
+        1.0, 0.0, 0.0, 0.0, // id=10
+        0.0, 1.0, 0.0, 0.0, // id=20
+        0.0, 0.0, 1.0, 0.0, // id=30
+    ];
+    let ids: Vec<u64> = vec![10, 20, 30];
+    let payloads = vec![
+        Some(serde_json::json!({"tag": "a"})),
+        None,
+        Some(serde_json::json!({"tag": "c"})),
+    ];
+
+    let inserted = coll
+        .upsert_bulk_from_raw(&vectors, &ids, 4, Some(&payloads))
+        .expect("upsert_bulk_from_raw should succeed");
+    assert_eq!(inserted, 3);
+    assert_eq!(coll.len(), 3);
+
+    let results = coll.get(&[10, 20, 30]);
+    let p10 = results[0].as_ref().expect("id=10 should exist");
+    assert_eq!(p10.vector, vec![1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(p10.payload, Some(serde_json::json!({"tag": "a"})));
+
+    let p20 = results[1].as_ref().expect("id=20 should exist");
+    assert_eq!(p20.vector, vec![0.0, 1.0, 0.0, 0.0]);
+    assert!(p20.payload.is_none());
+
+    let p30 = results[2].as_ref().expect("id=30 should exist");
+    assert_eq!(p30.vector, vec![0.0, 0.0, 1.0, 0.0]);
+    assert_eq!(p30.payload, Some(serde_json::json!({"tag": "c"})));
+}
+
+/// Validates that `upsert_bulk_from_raw` works without payloads.
+#[test]
+fn test_upsert_bulk_from_raw_no_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let vectors: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+    let ids: Vec<u64> = vec![1, 2];
+
+    let inserted = coll
+        .upsert_bulk_from_raw(&vectors, &ids, 4, None)
+        .expect("upsert_bulk_from_raw without payloads should succeed");
+    assert_eq!(inserted, 2);
+    assert_eq!(coll.len(), 2);
+
+    let results = coll.get(&[1, 2]);
+    let p1 = results[0].as_ref().expect("id=1 should exist");
+    assert_eq!(p1.vector, vec![0.1, 0.2, 0.3, 0.4]);
+    assert!(p1.payload.is_none());
+}
+
+/// Validates that `upsert_bulk_from_raw` returns an error on dimension mismatch.
+#[test]
+fn test_upsert_bulk_from_raw_dimension_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // Collection dimension is 4, but we pass dimension=3
+    let vectors: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
+    let ids: Vec<u64> = vec![1, 2];
+
+    let result = coll.upsert_bulk_from_raw(&vectors, &ids, 3, None);
+    assert!(result.is_err(), "should fail on dimension mismatch");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("VELES-004"),
+        "should be DimensionMismatch error: {err_msg}"
+    );
+}
+
+/// Validates that `upsert_bulk_from_raw` returns an error on length mismatch.
+#[test]
+fn test_upsert_bulk_from_raw_vector_length_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // 5 floats but 2 ids * 4 dim = 8 expected
+    let vectors: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4, 0.5];
+    let ids: Vec<u64> = vec![1, 2];
+
+    let result = coll.upsert_bulk_from_raw(&vectors, &ids, 4, None);
+    assert!(result.is_err(), "should fail on vector length mismatch");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("VELES-005"),
+        "should be InvalidVector error: {err_msg}"
+    );
+}
+
+/// Validates that `upsert_bulk_from_raw` returns an error on payload length mismatch.
+#[test]
+fn test_upsert_bulk_from_raw_payload_length_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let vectors: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+    let ids: Vec<u64> = vec![1, 2];
+    let payloads = vec![Some(serde_json::json!({"x": 1}))]; // length 1, not 2
+
+    let result = coll.upsert_bulk_from_raw(&vectors, &ids, 4, Some(&payloads));
+    assert!(result.is_err(), "should fail on payload length mismatch");
+}
+
+/// Validates that `upsert_bulk_from_raw` with empty inputs returns 0.
+#[test]
+fn test_upsert_bulk_from_raw_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let inserted = coll
+        .upsert_bulk_from_raw(&[], &[], 4, None)
+        .expect("empty call should succeed");
+    assert_eq!(inserted, 0);
+    assert_eq!(coll.len(), 0);
+}
+
+/// Validates that vectors inserted via `upsert_bulk_from_raw` are searchable.
+#[test]
+fn test_upsert_bulk_from_raw_searchable() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // Insert 50 vectors so HNSW has enough data to exercise search
+    #[allow(clippy::cast_precision_loss)] // Reason: i in [0,50); u64->f32 exact
+    let vectors: Vec<f32> = (0u64..50)
+        .flat_map(|i| {
+            let base = i as f32 * 0.02;
+            vec![base, base + 0.01, base + 0.02, base + 0.03]
+        })
+        .collect();
+    let ids: Vec<u64> = (0..50).collect();
+
+    coll.upsert_bulk_from_raw(&vectors, &ids, 4, None)
+        .expect("bulk insert should succeed");
+    assert_eq!(coll.len(), 50);
+
+    let query = vec![0.0_f32, 0.01, 0.02, 0.03];
+    let results = coll.search(&query, 5).expect("search should succeed");
+    assert_eq!(results.len(), 5, "search should return k=5 results");
+    // The nearest neighbor for the query [0.0, 0.01, 0.02, 0.03] should be id=0
+    assert_eq!(results[0].point.id, 0, "nearest neighbor should be point 0");
+}
+
+/// Validates that `upsert_bulk_from_raw` survives flush + reopen.
+#[test]
+fn test_upsert_bulk_from_raw_persistence_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    {
+        let coll = Collection::create(path.clone(), 4, DistanceMetric::Cosine).unwrap();
+        let vectors: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let ids: Vec<u64> = vec![100, 200];
+        let payloads = vec![
+            Some(serde_json::json!({"key": "first"})),
+            Some(serde_json::json!({"key": "second"})),
+        ];
+
+        coll.upsert_bulk_from_raw(&vectors, &ids, 4, Some(&payloads))
+            .expect("insert should succeed");
+        coll.flush().expect("flush should succeed");
+    }
+
+    // Reopen from disk
+    let coll2 = Collection::open(path).unwrap();
+    assert_eq!(coll2.len(), 2);
+
+    let results = coll2.get(&[100, 200]);
+    let p100 = results[0].as_ref().expect("id=100 should survive reopen");
+    assert_eq!(p100.vector, vec![1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(p100.payload, Some(serde_json::json!({"key": "first"})));
+
+    let p200 = results[1].as_ref().expect("id=200 should survive reopen");
+    assert_eq!(p200.vector, vec![0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(p200.payload, Some(serde_json::json!({"key": "second"})));
+}
+
+/// Validates that `upsert_bulk_from_raw` produces identical results to
+/// `upsert_bulk` for the same input data (parity test).
+#[test]
+fn test_upsert_bulk_from_raw_parity_with_upsert_bulk() {
+    let dim = 8;
+    let n = 100;
+
+    // Build test data
+    #[allow(clippy::cast_precision_loss)] // Reason: i in [0,100); u64->f32 exact
+    let flat_vectors: Vec<f32> = (0u64..n)
+        .flat_map(|i| (0..dim).map(move |d| (i as f32 + d as f32) * 0.01))
+        .collect();
+    let id_list: Vec<u64> = (0..n).collect();
+    let payloads: Vec<Option<serde_json::Value>> = (0u64..n)
+        .map(|i| Some(serde_json::json!({"idx": i})))
+        .collect();
+
+    // Path A: upsert_bulk_from_raw
+    let dir_a = tempfile::tempdir().unwrap();
+    let coll_a =
+        Collection::create(dir_a.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
+    coll_a
+        .upsert_bulk_from_raw(&flat_vectors, &id_list, dim, Some(&payloads))
+        .expect("raw path should succeed");
+
+    // Path B: upsert_bulk (Point-based)
+    let dir_b = tempfile::tempdir().unwrap();
+    let coll_b =
+        Collection::create(dir_b.path().to_path_buf(), dim, DistanceMetric::Cosine).unwrap();
+    #[allow(clippy::cast_precision_loss)]
+    let points: Vec<Point> = (0u64..n)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|d| (i as f32 + d as f32) * 0.01).collect();
+            Point::new(i, v, Some(serde_json::json!({"idx": i})))
+        })
+        .collect();
+    coll_b
+        .upsert_bulk(&points)
+        .expect("point path should succeed");
+
+    // Compare stored data
+    assert_eq!(coll_a.len(), coll_b.len());
+    let all_ids: Vec<u64> = (0..n).collect();
+    let results_a = coll_a.get(&all_ids);
+    let results_b = coll_b.get(&all_ids);
+
+    for i in 0..usize::try_from(n).expect("n fits in usize") {
+        let pa = results_a[i]
+            .as_ref()
+            .unwrap_or_else(|| panic!("raw: point {i} missing"));
+        let pb = results_b[i]
+            .as_ref()
+            .unwrap_or_else(|| panic!("bulk: point {i} missing"));
+        assert_eq!(pa.vector, pb.vector, "vector mismatch at point {i}");
+        assert_eq!(pa.payload, pb.payload, "payload mismatch at point {i}");
+    }
+}
+
+// === Issue #425: Phase 2 fast-path + BM25 skip + dedup map consolidation ===
+
+/// Issue #425: Phase 2 fast-path should not skip when secondary indexes exist.
+///
+/// Regression: ensures that adding a secondary index forces Phase 2 to run,
+/// so payload-based indexes are correctly updated on upsert.
+#[test]
+fn test_phase2_runs_when_secondary_indexes_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // Add a secondary index on the "category" field
+    coll.create_index("category").unwrap();
+
+    // Upsert points WITH payloads — Phase 2 must run to populate the index
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"category": "books"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(serde_json::json!({"category": "movies"})),
+        ),
+    ];
+    coll.upsert(points).unwrap();
+
+    // Verify the secondary index was populated
+    let indexes = coll.secondary_indexes.read();
+    let cat_index = indexes.get("category").expect("index should exist");
+    match cat_index {
+        crate::index::SecondaryIndex::BTree(tree) => {
+            let tree = tree.read();
+            assert!(
+                !tree.is_empty(),
+                "secondary index should contain entries after upsert"
+            );
+        }
+    }
+}
+
+/// Issue #425: Phase 2 fast-path correctly skips for StorageMode::Full +
+/// no secondary indexes + no payloads + no sparse vectors.
+///
+/// Regression: confirms that the fast path produces identical results to
+/// the full Phase 2 path for plain vector-only inserts.
+#[test]
+fn test_phase2_fast_path_correctness_no_secondaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // Insert vector-only points (no payload, no sparse, no secondary indexes)
+    // This should trigger the fast path in Phase 2
+    #[allow(clippy::cast_precision_loss)]
+    let points: Vec<Point> = (0u64..100)
+        .map(|i| {
+            let v: Vec<f32> = (0..4).map(|d| (i as f32 + d as f32) * 0.01).collect();
+            Point::without_payload(i, v)
+        })
+        .collect();
+
+    coll.upsert(points).unwrap();
+
+    // All 100 points should be stored and searchable
+    assert_eq!(coll.len(), 100, "all points should be stored");
+    let results = coll.search(&[0.5, 0.5, 0.5, 0.5], 10).unwrap();
+    assert_eq!(results.len(), 10, "search should return k results");
+}
+
+/// Issue #425: Phase 2 must NOT skip when points carry sparse vectors.
+///
+/// Regression: sparse vectors must be collected in Phase 2 and written
+/// to sparse indexes even when no other secondary processing is needed.
+#[test]
+fn test_phase2_does_not_skip_with_sparse_vectors() {
+    use crate::index::sparse::SparseVector;
+
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let mut sv_map = BTreeMap::new();
+    sv_map.insert(String::new(), SparseVector::new(vec![(1, 1.0), (2, 0.5)]));
+
+    let point = Point::with_sparse(1, vec![0.1, 0.2, 0.3, 0.4], None, Some(sv_map));
+    coll.upsert(vec![point]).unwrap();
+
+    // Sparse index must be populated (Phase 2 ran)
+    let indexes = coll.sparse_indexes().read();
+    assert!(
+        indexes.contains_key(""),
+        "sparse index should be populated despite no payloads"
+    );
+    assert_eq!(indexes.get("").unwrap().doc_count(), 1);
+}
+
+/// Issue #425: BM25 skip in bulk path must still index text when payloads exist.
+///
+/// Regression: the BM25 skip optimization in `bulk_store_payloads` must
+/// NOT skip when at least one point has a payload containing text.
+#[test]
+fn test_bulk_bm25_skip_does_not_lose_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"text": "hello world"})),
+        ),
+        Point::without_payload(2, vec![0.0, 1.0, 0.0, 0.0]),
+    ];
+
+    coll.upsert_bulk(&points).unwrap();
+
+    // BM25 should have indexed the text from point 1
+    assert!(
+        !coll.text_index.is_empty(),
+        "BM25 index should contain the document from bulk insert"
+    );
+}
+
+/// Issue #425: Dedup map consolidation produces same results as separate maps.
+///
+/// Regression: the shared dedup map path must produce identical WAL behavior
+/// to the previous per-storage dedup map. Tests both payload and vector dedup.
+#[test]
+fn test_dedup_map_consolidation_correctness() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // Batch with duplicate IDs — last writer wins for both payload and vector
+    let batch = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"v": "first"})),
+        ),
+        Point::new(
+            1,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(serde_json::json!({"v": "second"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 0.0, 1.0, 0.0],
+            Some(serde_json::json!({"v": "only"})),
+        ),
+    ];
+
+    coll.upsert(batch).unwrap();
+
+    let results = coll.get(&[1, 2]);
+    let p1 = results[0].as_ref().expect("id=1 should exist");
+    assert_eq!(
+        p1.payload,
+        Some(serde_json::json!({"v": "second"})),
+        "shared dedup map should preserve last-writer-wins for payload"
+    );
+    assert_eq!(
+        p1.vector,
+        vec![0.0, 1.0, 0.0, 0.0],
+        "shared dedup map should preserve last-writer-wins for vector"
+    );
+
+    let p2 = results[1].as_ref().expect("id=2 should exist");
+    assert_eq!(p2.payload, Some(serde_json::json!({"v": "only"})));
+    assert_eq!(coll.len(), 2, "should have 2 unique points");
+}
+
+/// Issue #425: Phase 2 must NOT skip when StorageMode is SQ8.
+///
+/// Regression: quantization caching requires per-point processing in Phase 2.
+#[test]
+fn test_phase2_runs_for_sq8_storage_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create_with_options(
+        dir.path().to_path_buf(),
+        4,
+        DistanceMetric::Cosine,
+        StorageMode::SQ8,
+    )
+    .unwrap();
+
+    let points = vec![Point::without_payload(1, vec![1.0, 0.0, 0.0, 0.0])];
+    coll.upsert(points).unwrap();
+
+    // SQ8 cache should have been populated by Phase 2
+    assert_eq!(
+        coll.sq8_cache.read().len(),
+        1,
+        "SQ8 cache should be populated — Phase 2 must not skip"
+    );
+}
