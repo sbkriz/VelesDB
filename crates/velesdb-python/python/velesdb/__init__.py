@@ -214,6 +214,24 @@ class Collection:
             searches = [{"vector": list(v), "top_k": int(top_k)} for v in queries]
         return self._inner.batch_search(searches)
 
+    def search_with_quality(
+        self,
+        vector: Any,
+        quality: str,
+        top_k: int = 10,
+    ) -> list[dict]:
+        """Search with a named quality mode.
+
+        Args:
+            vector: Query vector (list or numpy array).
+            quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune'.
+            top_k: Number of results (default: 10).
+
+        Returns:
+            List of dicts with id, score, and payload.
+        """
+        return self._inner.search_with_quality(vector, quality, top_k)
+
     def count(self) -> int:
         info = self._inner.info()
         return int(info.get("point_count", 0))

@@ -43,6 +43,9 @@ VelesDB utilise un modèle de concurrence basé sur:
 | PropertyIndex | `parking_lot::RwLock` | Low | Per-property |
 | Metrics counters | `AtomicU64` | None | Lock-free |
 | Edge ID registry | `RwLock<HashMap>` | Low | Global, for existence checks |
+| RaBitQ index | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
+| RaBitQ store | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
+| RaBitQ training buffer | `parking_lot::Mutex` | Low | Pre-training only |
 
 ## Thread Safety Guarantees
 
@@ -96,6 +99,25 @@ When multiple locks are needed, acquire them in this order:
 5. shards[N-1]
 ```
 
+### Global Lock Order (HNSW + Storage)
+
+For HNSW index operations that touch vector storage, columnar metadata,
+graph layers, and neighbor lists, the global lock acquisition order is:
+
+```
+vectors (rank 10) → columnar (rank 15) → layers (rank 20) → neighbors (rank 30)
+```
+
+| Lock | Rank | Component | Notes |
+|------|------|-----------|-------|
+| `vectors` | 10 | `ShardedVectors` / `ContiguousVectors` | Acquired first in upsert and search paths |
+| `columnar` | 15 | `ColumnStore` / typed columns | Metadata columns, acquired after vectors |
+| `layers` | 20 | HNSW layer structure (`RwLock`) | Global graph topology |
+| `neighbors` | 30 | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
+
+**Rule**: Never acquire a lower-rank lock while holding a higher-rank lock.
+For example, acquiring `vectors` while holding `neighbors` is forbidden.
+
 ### Cross-Shard Operations
 
 When an edge spans two shards (source in shard A, target in shard B):
@@ -128,6 +150,66 @@ for &idx in &shards_to_clean {
     guards.push(shards[idx].write());
 }
 ```
+
+## RaBitQ Interior Mutability
+
+### Lock Layout
+
+`RaBitQPrecisionHnsw` uses interior mutability for its quantization index,
+encoded vector store, and pre-training buffer:
+
+| Field | Type | Access Pattern |
+|-------|------|---------------|
+| `rabitq_index` | `RwLock<Option<Arc<RaBitQIndex>>>` | Write-locked once during training, then read-only |
+| `rabitq_store` | `RwLock<Option<RaBitQVectorStore>>` | Write during insert (push encoded vector) |
+| `training_buffer` | `Mutex<Vec<Vec<f32>>>` | Write during pre-training inserts |
+
+### Training Lock Order
+
+During `train_rabitq()`, locks are acquired and released in this order:
+
+```
+rabitq_index.write() → rabitq_store.write() → training_buffer.lock()
+```
+
+Locks are released between acquisitions (not held simultaneously). The
+training function uses a **double-check locking** pattern: it first checks
+`rabitq_index` under a read lock, and if training is needed, re-checks
+under a write lock to prevent duplicate training from concurrent threads.
+
+### Store-Before-Index Ordering
+
+When training completes, the store is set BEFORE the index:
+
+```
+rabitq_store.write() ← set encoded vectors
+rabitq_index.write() ← set trained index
+```
+
+This ordering prevents an inconsistent snapshot where a search thread sees
+a trained index but an empty store. A search thread that acquires
+`rabitq_index.read()` and sees `Some(...)` is guaranteed that
+`rabitq_store.read()` also contains `Some(...)` with all pre-training
+vectors already encoded.
+
+## RaBitQ Contention Analysis
+
+### Known Contention Patterns
+
+| Pattern | Impact | Acceptable? |
+|---------|--------|-------------|
+| `rabitq_store.write()` serializes post-training inserts | ~10ns per push (single encoded vector append) | Yes: store push is a trivial `Vec::push` operation |
+| Training blocks all inserts for ~60ms | One-time event per index lifetime | Yes: training runs once when the buffer threshold is reached |
+| `reorder_for_locality()` is offline-only | Takes `&self` but must not run during concurrent search | Yes: only called during explicit maintenance, not on the hot path |
+
+### Mitigation
+
+- Post-training inserts hold `rabitq_store.write()` for the minimum
+  duration needed to push a single encoded vector (~10ns).
+- Training is amortized: it runs once when the training buffer reaches its
+  threshold, then never again for the lifetime of the index.
+- `reorder_for_locality()` is documented as offline-only and is not exposed
+  through any concurrent API path.
 
 ## Performance vs Safety Tradeoffs
 
@@ -272,4 +354,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-03-20 (EPIC-023)*
+*Last updated: 2026-03-27 (EPIC-023 + RaBitQ concurrency)*
