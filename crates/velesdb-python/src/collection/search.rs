@@ -99,6 +99,34 @@ impl Collection {
         Ok(search_results_to_dicts(py, results))
     }
 
+    /// Search with a named quality mode (fast, balanced, accurate, perfect, autotune).
+    ///
+    /// AutoTune adapts ef_search automatically based on collection size and dimension.
+    ///
+    /// Args:
+    ///     vector: Dense query vector (list or numpy array).
+    ///     quality: Search quality mode string.
+    ///     top_k: Number of results (default: 10).
+    #[pyo3(signature = (vector, quality, top_k = 10))]
+    fn search_with_quality(
+        &self,
+        py: Python<'_>,
+        vector: PyObject,
+        quality: &str,
+        top_k: usize,
+    ) -> PyResult<Vec<PyObject>> {
+        let query_vector = extract_vector(py, &vector)?;
+        let sq = parse_search_quality(quality)?;
+
+        let results = py.allow_threads(|| {
+            self.inner
+                .search_with_quality(&query_vector, top_k, sq)
+                .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_dicts(py, results))
+    }
+
     /// Search returning only IDs and scores.
     #[pyo3(signature = (vector, top_k = 10))]
     fn search_ids(
@@ -399,5 +427,19 @@ impl Collection {
                     .collect()
             })
             .collect()
+    }
+}
+
+/// Parse a Python quality mode string into [`SearchQuality`].
+fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
+    match mode.to_lowercase().as_str() {
+        "fast" => Ok(velesdb_core::SearchQuality::Fast),
+        "balanced" => Ok(velesdb_core::SearchQuality::Balanced),
+        "accurate" => Ok(velesdb_core::SearchQuality::Accurate),
+        "perfect" => Ok(velesdb_core::SearchQuality::Perfect),
+        "autotune" | "auto_tune" | "auto" => Ok(velesdb_core::SearchQuality::AutoTune),
+        other => Err(PyValueError::new_err(format!(
+            "Unknown search quality: '{other}'. Valid: fast, balanced, accurate, perfect, autotune"
+        ))),
     }
 }

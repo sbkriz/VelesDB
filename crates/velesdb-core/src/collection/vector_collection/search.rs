@@ -68,6 +68,23 @@ impl VectorCollection {
         self.inner.search_with_ef(query, k, ef_search)
     }
 
+    /// Performs kNN search with a specific [`SearchQuality`] profile.
+    ///
+    /// Use this instead of [`search_with_ef`] when you want named quality
+    /// modes like [`SearchQuality::AutoTune`] that compute ef dynamically.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    pub fn search_with_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.search_with_quality(query, k, quality)
+    }
+
     /// Performs kNN search with a metadata filter applied post-retrieval.
     ///
     /// # Errors
