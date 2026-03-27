@@ -114,22 +114,66 @@ impl Collection {
     /// A crash before Phase 3 (HNSW insertion) is recovered by gap detection
     /// on the next `Collection::open()`.
     ///
+    /// # Parallel I/O (Issue #424)
+    ///
+    /// With the `persistence` feature (which enables `rayon`), payload and
+    /// vector writes run concurrently via `rayon::join` after old-payload
+    /// collection completes. This is safe because:
+    ///
+    /// - Payload and vector storage use independent `RwLock`s (positions 3
+    ///   and 2 in the lock order). Neither closure acquires both locks.
+    /// - Crash recovery only requires that both are durable before Phase 3
+    ///   (HNSW insertion). There is no ordering dependency between payload
+    ///   and vector WAL writes — gap detection on `Collection::open()` handles
+    ///   any partial write scenario.
+    /// - `old_payloads` collection is completed and the payload lock is
+    ///   released before the fork, so both closures start from clean state.
+    /// - The TOCTOU gap between old-payload collection and the parallel
+    ///   write is acceptable: `old_payloads` feeds Phase 2 secondary-index
+    ///   updates, and each concurrent batch tracks its own `seen_payloads`.
+    ///
     /// Returns the old payloads for Phase 2.
     fn batch_store_all(&self, points: &[Point]) -> Result<Vec<Option<serde_json::Value>>> {
-        let mut payload_storage = self.payload_storage.write();
+        // Collect old payloads under the payload write lock, then release.
+        // The write lock prevents concurrent payload mutations during the read.
+        let old_payloads = {
+            let payload_storage = self.payload_storage.write();
+            let result = Self::collect_old_payloads(points, &payload_storage);
+            drop(payload_storage);
+            result
+        };
 
-        // Pre-collect old payloads, retrieving from storage only on the first
-        // occurrence of each ID. Subsequent occurrences get None because Phase 2
-        // (`per_point_updates`) uses `seen_payloads` to track intra-batch state.
-        let old_payloads = Self::collect_old_payloads(points, &payload_storage);
+        // Issue #424: Parallel I/O — payload and vector writes are independent
+        // after old_payloads collection. Run them concurrently via rayon::join.
+        // rayon is gated on the persistence feature.
+        #[cfg(feature = "persistence")]
+        {
+            let (payload_result, vector_result) = rayon::join(
+                || self.write_and_flush_payloads(points),
+                || self.write_deduped_vectors(points),
+            );
+            payload_result?;
+            vector_result?;
+        }
 
-        Self::write_deduped_payloads(points, &mut payload_storage)?;
-        payload_storage.flush()?;
-        drop(payload_storage);
-
-        self.write_deduped_vectors(points)?;
+        #[cfg(not(feature = "persistence"))]
+        {
+            self.write_and_flush_payloads(points)?;
+            self.write_deduped_vectors(points)?;
+        }
 
         Ok(old_payloads)
+    }
+
+    /// Writes deduped payloads and flushes the storage.
+    ///
+    /// Issue #424: Extracted so it can be called from `rayon::join` in the
+    /// parallel I/O path. Acquires the `payload_storage` write lock internally.
+    fn write_and_flush_payloads(&self, points: &[Point]) -> Result<()> {
+        let mut payload_storage = self.payload_storage.write();
+        Self::write_deduped_payloads(points, &mut payload_storage)?;
+        payload_storage.flush()?;
+        Ok(())
     }
 
     /// Retrieves pre-batch payloads, querying storage only once per unique ID.
@@ -398,6 +442,7 @@ impl Collection {
     ///
     /// This method is optimized for bulk loading:
     /// - Uses parallel HNSW insertion (rayon)
+    /// - Parallel payload + vector I/O via `rayon::join` (Issue #424)
     /// - Single flush at the end (not per-point)
     /// - No HNSW index save (deferred for performance)
     /// - ~15x faster than previous sequential approach on large batches (5000+)
@@ -420,8 +465,24 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         let sparse_batch = Self::collect_sparse_batch(points);
 
-        self.bulk_store_vectors(&vector_refs)?;
-        self.bulk_store_payloads(points)?;
+        // Issue #424: Parallel I/O — vector and payload writes use independent
+        // locks (vector_storage at position 2, payload_storage at position 3).
+        // Neither closure acquires both, so no lock-order violation.
+        #[cfg(feature = "persistence")]
+        {
+            let (vec_result, pay_result) = rayon::join(
+                || self.bulk_store_vectors(&vector_refs),
+                || self.bulk_store_payloads(points),
+            );
+            vec_result?;
+            pay_result?;
+        }
+
+        #[cfg(not(feature = "persistence"))]
+        {
+            self.bulk_store_vectors(&vector_refs)?;
+            self.bulk_store_payloads(points)?;
+        }
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();

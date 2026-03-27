@@ -515,3 +515,181 @@ fn test_upsert_intra_batch_wal_dedup_reduces_entries() {
     let payload = coll.payload_storage.read().retrieve(1).unwrap();
     assert_eq!(payload, Some(serde_json::json!({"v": "C"})));
 }
+
+/// Issue #424: Parallel I/O in `batch_store_all` must produce the same results
+/// as the sequential implementation for large batches.
+///
+/// Verifies that both vectors and payloads are correctly stored when
+/// payload and vector writes execute concurrently via `rayon::join`.
+#[test]
+fn test_batch_store_all_parallel_io_correctness() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 128, DistanceMetric::Cosine).unwrap();
+
+    // Build a batch large enough to exercise the parallel path meaningfully
+    #[allow(clippy::cast_precision_loss)] // Reason: i in [0,500); u64->f32 exact for small values
+    let points: Vec<Point> = (0u64..500)
+        .map(|i| {
+            let v: Vec<f32> = (0..128).map(|d| (i as f32 + d as f32) * 0.001).collect();
+            let payload = serde_json::json!({"idx": i, "label": format!("point_{i}")});
+            Point::new(i, v, Some(payload))
+        })
+        .collect();
+
+    coll.upsert(points.clone()).expect("upsert should succeed");
+
+    // Verify all points were stored correctly
+    assert_eq!(coll.len(), 500, "all 500 points should be stored");
+
+    let ids: Vec<u64> = (0..500).collect();
+    let results = coll.get(&ids);
+    for (i, result) in results.iter().enumerate() {
+        let p = result
+            .as_ref()
+            .unwrap_or_else(|| panic!("point {i} should exist"));
+        assert_eq!(p.vector.len(), 128, "point {i} should have 128 dimensions");
+        // Reason: i in [0, 500) — fits in u16
+        #[allow(clippy::cast_precision_loss)]
+        let expected_first = i as f32 * 0.001;
+        assert!(
+            (p.vector[0] - expected_first).abs() < 1e-6,
+            "point {i} first element mismatch"
+        );
+        let payload = p
+            .payload
+            .as_ref()
+            .unwrap_or_else(|| panic!("point {i} should have payload"));
+        assert_eq!(payload["idx"], i as u64, "point {i} payload.idx mismatch");
+    }
+
+    // Verify search still works (HNSW was populated correctly)
+    #[allow(clippy::cast_precision_loss)] // Reason: d in [0,128); i32->f32 exact for small values
+    let query: Vec<f32> = (0..128).map(|d| d as f32 * 0.001).collect();
+    let search_results = coll.search(&query, 10).expect("search should succeed");
+    assert_eq!(search_results.len(), 10, "search should return k results");
+}
+
+/// Issue #424: Parallel I/O preserves crash recovery semantics.
+///
+/// After flush + reopen, all vectors and payloads written via the parallel
+/// path must survive WAL replay.
+#[test]
+fn test_batch_store_all_parallel_io_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    {
+        let coll = Collection::create(path.clone(), 32, DistanceMetric::Cosine).unwrap();
+
+        #[allow(clippy::cast_precision_loss)]
+        let points: Vec<Point> = (0u64..100)
+            .map(|i| {
+                let v: Vec<f32> = (0..32).map(|d| (i as f32 + d as f32) * 0.01).collect();
+                Point::new(i, v, Some(serde_json::json!({"id": i})))
+            })
+            .collect();
+
+        coll.upsert(points).expect("upsert should succeed");
+        coll.flush().expect("flush should succeed");
+    }
+
+    // Reopen from WAL
+    let coll2 = Collection::open(path).unwrap();
+    assert_eq!(coll2.len(), 100, "all points should survive reopen");
+
+    // Spot-check a few points
+    let results = coll2.get(&[0, 50, 99]);
+    for (i, &id) in [0u64, 50, 99].iter().enumerate() {
+        let p = results[i]
+            .as_ref()
+            .unwrap_or_else(|| panic!("point {id} should exist after reopen"));
+        assert_eq!(p.vector.len(), 32);
+        let payload = p
+            .payload
+            .as_ref()
+            .unwrap_or_else(|| panic!("point {id} should have payload after reopen"));
+        assert_eq!(payload["id"], id);
+    }
+}
+
+/// Issue #424: Parallel I/O handles empty-payload batches correctly.
+///
+/// When all points have `payload=None`, the payload write is a no-op
+/// but must not panic or corrupt the vector write that runs in parallel.
+#[test]
+fn test_batch_store_all_parallel_io_no_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 16, DistanceMetric::Cosine).unwrap();
+
+    #[allow(clippy::cast_precision_loss)]
+    let points: Vec<Point> = (0u64..200)
+        .map(|i| {
+            let v: Vec<f32> = (0..16).map(|d| (i as f32 + d as f32) * 0.01).collect();
+            Point::without_payload(i, v)
+        })
+        .collect();
+
+    coll.upsert(points).expect("upsert should succeed");
+    assert_eq!(coll.len(), 200, "all points should be stored");
+
+    // Verify vectors are correct despite parallel path
+    let results = coll.get(&[0]);
+    let p0 = results[0].as_ref().expect("point 0 should exist");
+    assert_eq!(p0.vector.len(), 16);
+    assert!(p0.payload.is_none(), "no payload should be stored");
+}
+
+/// Issue #424: Parallel I/O handles intra-batch duplicates with mixed payloads.
+///
+/// The parallel path must not break the old_payloads collection that happens
+/// BEFORE the parallel fork (while payload lock is still held).
+#[test]
+fn test_batch_store_all_parallel_io_with_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    // Pre-seed id=1 so the batch tests overwrite behavior
+    coll.upsert(vec![Point::new(
+        1,
+        vec![0.1, 0.2, 0.3, 0.4],
+        Some(serde_json::json!({"pre": "existing"})),
+    )])
+    .unwrap();
+
+    // Batch with duplicates: id=1 appears twice, id=2 is unique
+    let batch = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"v": "A"})),
+        ),
+        Point::new(
+            1,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(serde_json::json!({"v": "B"})),
+        ),
+        Point::new(
+            2,
+            vec![0.5, 0.5, 0.0, 0.0],
+            Some(serde_json::json!({"v": "C"})),
+        ),
+    ];
+
+    coll.upsert(batch)
+        .expect("batch with duplicates should succeed via parallel I/O");
+
+    let results = coll.get(&[1, 2]);
+    let p1 = results[0].as_ref().expect("id=1 should exist");
+    assert_eq!(
+        p1.payload,
+        Some(serde_json::json!({"v": "B"})),
+        "last writer wins for payload"
+    );
+    assert_eq!(
+        p1.vector,
+        vec![0.0, 1.0, 0.0, 0.0],
+        "last writer wins for vector"
+    );
+
+    let p2 = results[1].as_ref().expect("id=2 should exist");
+    assert_eq!(p2.payload, Some(serde_json::json!({"v": "C"})));
+}
