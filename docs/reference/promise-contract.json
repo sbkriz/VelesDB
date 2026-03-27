@@ -4,13 +4,13 @@
     {
       "id": "root_readme_hnsw_latency_microseconds",
       "file": "README.md",
-      "must_contain": "**HNSW Search** (10K/768D, k=10)",
+      "must_contain": "HNSW Search (5K/768D, k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark"
     },
     {
       "id": "root_readme_simd_dot",
       "file": "README.md",
-      "must_contain": "**SIMD Dot Product** (768D)",
+      "must_contain": "SIMD Dot Product (768D, AVX2)",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark"
     },
     {
@@ -34,25 +34,25 @@
     {
       "id": "readme_simd_dot_product_latency",
       "file": "README.md",
-      "must_contain": "**19.8 ns**",
+      "must_contain": "**21.7 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
       "note": "Re-run benchmark and update if value changes",
       "last_updated": "2026-03-27"
     },
     {
-      "id": "readme_simd_euclidean_latency",
+      "id": "readme_production_search_latency",
       "file": "README.md",
-      "must_contain": "**47.0 us**",
-      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "note": "HNSW search latency in Vector Engine table",
+      "must_contain": "**450 us**",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "note": "Full production path p50 search latency (10K/384D, WAL ON)",
       "last_updated": "2026-03-27"
     },
     {
-      "id": "readme_hnsw_search_latency",
+      "id": "readme_hnsw_core_search_latency",
       "file": "README.md",
-      "must_contain": "47.0us",
+      "must_contain": "**55 us**",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "note": "Appears in intro table and comparison",
+      "note": "Core engine index-only search latency",
       "last_updated": "2026-03-27"
     },
     {
