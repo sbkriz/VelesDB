@@ -42,7 +42,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
-| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **571us** p50 end-to-end (384D, WAL ON, recall>=95%) |
+| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **450us** p50 end-to-end (384D, WAL ON, recall>=96%) |
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
 
@@ -198,7 +198,7 @@ memory.procedural.delete(1)
 | **Metadata filtering** | **ColumnStore (130x vs JSON)** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
-| **Search latency** | **571us** p50 (10K/384D, WAL+recall>=95%) | ~1-5ms | ~1-5ms (in-memory) | ~5-20ms |
+| **Search latency** | **450us** p50 (10K/384D, WAL ON, recall>=96%) | ~1-5ms | ~1-5ms (in-memory) | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM)** | Yes | No | No | No |
@@ -289,12 +289,12 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 
 End-to-end numbers on the **complete production path**: WAL durability, payload storage, HNSW search, result resolution. No shortcuts.
 
-#### Full production path (Python SDK, WAL ON, recall@10 >= 95%)
+#### Full production path (Python SDK, WAL ON, recall@10 >= 96%)
 
 | Dataset | Bulk insert | Search p50 | Search p99 | Recall@10 | DB size |
 |---------|-------------|-----------|------------|-----------|---------|
-| 10K x 384D | **15K vec/s** | **571 us** | **1.3 ms** | >= 95% | 31 MB |
-| 50K x 384D | **5.8K vec/s** | **1.1 ms** | **2.8 ms** | >= 95% | 162 MB |
+| 10K x 384D | **18.5K vec/s** | **450 us** | **670 us** | >= 96% | 31 MB |
+| 50K x 384D | **5.9K vec/s** | **1.1 ms** | **1.4 ms** | >= 96% | 162 MB |
 
 #### Core engine (Rust, index-only, no WAL/payload overhead)
 
@@ -310,14 +310,15 @@ End-to-end numbers on the **complete production path**: WAL durability, payload 
 <details>
 <summary>What these numbers mean</summary>
 
-- **Full production path**: measures the real user experience — Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees.
+- **Full production path**: measures the real user experience — Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees. Measured with `benchmarks/velesdb_benchmark.py --recall`.
 - **Core engine**: measures the Rust index layer in isolation (Criterion.rs, sequential runs). Useful for architecture comparisons but not representative of end-to-end latency.
-- **Recall@10 >= 95%**: we do NOT sacrifice recall for speed. All production benchmarks use `Balanced` mode (ef_search=128) which guarantees >= 95% recall.
+- **Recall@10 >= 96%**: we do NOT sacrifice recall for speed. All production benchmarks use `Balanced` mode (ef_search=128) which guarantees high recall on clustered data.
 - **WAL ON**: every insert is durable. A crash at any point recovers all committed data.
+- **Reproduce these numbers**: `pip install velesdb numpy && python benchmarks/velesdb_benchmark.py --recall`
 
 </details>
 
-*Measured 2026-03-27 on i9-14900KF, 64 GB DDR5, Windows 11, Rust 1.92.0, AVX2. [Benchmark script](benchmarks/).*
+*Measured 2026-03-27 on i9-14900KF, 64 GB DDR5, Windows 11, Rust 1.92.0, AVX2. [Benchmark script](benchmarks/velesdb_benchmark.py).*
 
 ### Search quality modes
 
