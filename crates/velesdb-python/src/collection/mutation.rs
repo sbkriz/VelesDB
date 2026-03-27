@@ -1,12 +1,13 @@
 //! Mutation methods for Collection (upsert, delete, flush, stream_insert).
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use velesdb_core::Point;
 
 use crate::collection_helpers::{
-    dict_to_json_map, extract_point_id, extract_point_vector, parse_payload, parse_point_dicts,
+    core_err, dict_to_json_map, extract_point_id, extract_point_vector, parse_payload,
+    parse_point_dicts,
 };
 
 use super::Collection;
@@ -15,56 +16,57 @@ use super::Collection;
 impl Collection {
     /// Insert or update vectors in the collection.
     #[pyo3(signature = (points))]
-    fn upsert(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
-        Python::with_gil(|py| {
-            let core_points = parse_point_dicts(py, &points)?;
-            let count = core_points.len();
-            self.inner
-                .upsert(core_points)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert: {e}")))?;
-            Ok(count)
-        })
+    fn upsert(&self, py: Python<'_>, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
+        // Phase 1: Parse all Python dicts (GIL held)
+        let core_points = parse_point_dicts(py, &points)?;
+        let count = core_points.len();
+
+        // Phase 2: Release GIL during core engine work
+        py.allow_threads(|| self.inner.upsert(core_points).map_err(core_err))?;
+
+        Ok(count)
     }
 
     /// Insert or update metadata-only points (no vectors).
     #[pyo3(signature = (points))]
-    fn upsert_metadata(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
-        Python::with_gil(|py| {
-            let mut core_points = Vec::with_capacity(points.len());
+    fn upsert_metadata(
+        &self,
+        py: Python<'_>,
+        points: Vec<HashMap<String, PyObject>>,
+    ) -> PyResult<usize> {
+        let mut core_points = Vec::with_capacity(points.len());
 
-            for point_dict in &points {
-                let id = extract_point_id(py, point_dict)?;
-                let payload = parse_payload(py, point_dict.get("payload"))?.ok_or_else(|| {
-                    PyValueError::new_err("Metadata-only point must have 'payload' field")
-                })?;
-                core_points.push(Point::metadata_only(id, payload));
-            }
+        for point_dict in &points {
+            let id = extract_point_id(py, point_dict)?;
+            let payload = parse_payload(py, point_dict.get("payload"))?.ok_or_else(|| {
+                PyValueError::new_err("Metadata-only point must have 'payload' field")
+            })?;
+            core_points.push(Point::metadata_only(id, payload));
+        }
 
-            let count = core_points.len();
-            self.inner
-                .upsert_metadata(core_points)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_metadata: {e}")))?;
-            Ok(count)
-        })
+        let count = core_points.len();
+        py.allow_threads(|| self.inner.upsert_metadata(core_points).map_err(core_err))?;
+
+        Ok(count)
     }
 
     /// Bulk insert optimized for high-throughput import.
     #[pyo3(signature = (points))]
-    fn upsert_bulk(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
-        Python::with_gil(|py| {
-            let mut core_points = Vec::with_capacity(points.len());
+    fn upsert_bulk(
+        &self,
+        py: Python<'_>,
+        points: Vec<HashMap<String, PyObject>>,
+    ) -> PyResult<usize> {
+        let mut core_points = Vec::with_capacity(points.len());
 
-            for point_dict in &points {
-                let id = extract_point_id(py, point_dict)?;
-                let vector = extract_point_vector(py, point_dict)?;
-                let payload = parse_payload(py, point_dict.get("payload"))?;
-                core_points.push(Point::new(id, vector, payload));
-            }
+        for point_dict in &points {
+            let id = extract_point_id(py, point_dict)?;
+            let vector = extract_point_vector(py, point_dict)?;
+            let payload = parse_payload(py, point_dict.get("payload"))?;
+            core_points.push(Point::new(id, vector, payload));
+        }
 
-            self.inner
-                .upsert_bulk(&core_points)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_bulk: {e}")))
-        })
+        py.allow_threads(|| self.inner.upsert_bulk(&core_points).map_err(core_err))
     }
 
     /// Bulk insert from numpy arrays for maximum throughput.
@@ -89,59 +91,58 @@ impl Collection {
     #[pyo3(signature = (vectors, ids, payloads=None))]
     fn upsert_bulk_numpy(
         &self,
+        py: Python<'_>,
         vectors: numpy::PyReadonlyArray2<f32>,
         ids: Vec<u64>,
         payloads: Option<Vec<Option<HashMap<String, PyObject>>>>,
     ) -> PyResult<usize> {
-        Python::with_gil(|py| {
-            let array = vectors.as_array();
-            let n = array.nrows();
-            let dimension = array.ncols();
-            validate_numpy_lengths(n, &ids, &payloads)?;
+        let array = vectors.as_array();
+        let n = array.nrows();
+        let dimension = array.ncols();
+        validate_numpy_lengths(n, &ids, &payloads)?;
 
-            // Zero-copy: get flat &[f32] directly from the numpy buffer.
-            let flat = array
-                .as_slice()
-                .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
+        // Zero-copy: get flat &[f32] directly from the numpy buffer.
+        let flat = array
+            .as_slice()
+            .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
 
-            // Convert Python payload dicts to serde_json::Value (GIL required).
-            let json_payloads = convert_payloads(py, &payloads)?;
-            let payloads_ref = json_payloads.as_deref();
+        // Convert Python payload dicts to serde_json::Value (GIL required).
+        let json_payloads = convert_payloads(py, &payloads)?;
 
+        // Copy the flat data so we can release the GIL (numpy buffer is PyObject-backed).
+        let flat_owned: Vec<f32> = flat.to_vec();
+        let payloads_ref = json_payloads.as_deref();
+
+        py.allow_threads(|| {
             self.inner
-                .upsert_bulk_from_raw(flat, &ids, dimension, payloads_ref)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_bulk: {e}")))
+                .upsert_bulk_from_raw(&flat_owned, &ids, dimension, payloads_ref)
+                .map_err(core_err)
         })
     }
 
     /// Get points by their IDs.
     #[pyo3(signature = (ids))]
-    fn get(&self, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
-        Python::with_gil(|py| {
-            let points = self.inner.get(&ids);
-            let py_points = points
-                .into_iter()
-                .map(|opt_point| {
-                    opt_point.map(|p| crate::collection_helpers::point_to_dict(py, &p))
-                })
-                .collect();
-            Ok(py_points)
-        })
+    fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
+        // Phase 2: Release GIL during core retrieval
+        let points = py.allow_threads(|| self.inner.get(&ids));
+
+        // Phase 3: Convert to Python (GIL held)
+        let py_points = points
+            .into_iter()
+            .map(|opt_point| opt_point.map(|p| crate::collection_helpers::point_to_dict(py, &p)))
+            .collect();
+        Ok(py_points)
     }
 
     /// Delete points by their IDs.
     #[pyo3(signature = (ids))]
-    fn delete(&self, ids: Vec<u64>) -> PyResult<()> {
-        self.inner
-            .delete(&ids)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete: {e}")))
+    fn delete(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.delete(&ids).map_err(core_err))
     }
 
     /// Flush all pending changes to disk.
-    fn flush(&self) -> PyResult<()> {
-        self.inner
-            .flush()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to flush: {e}")))
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.flush().map_err(core_err))
     }
 
     /// Insert points via the streaming ingestion channel.
@@ -164,14 +165,18 @@ impl Collection {
     ///     ...     {"id": 1, "vector": [...], "payload": {"key": "value"}}
     ///     ... ])
     #[pyo3(signature = (points))]
-    fn stream_insert(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
-        Python::with_gil(|py| {
-            // Phase 1: Parse all points while holding the GIL (required for PyObject access)
-            let parsed = parse_point_dicts(py, &points)?;
+    fn stream_insert(
+        &self,
+        py: Python<'_>,
+        points: Vec<HashMap<String, PyObject>>,
+    ) -> PyResult<usize> {
+        // Phase 1: Parse all points while holding the GIL (required for PyObject access)
+        let parsed = parse_point_dicts(py, &points)?;
 
-            // Phase 2: Send entire batch in one call (single lock acquisition)
+        // Phase 2: Send entire batch in one call (single lock acquisition), GIL released
+        py.allow_threads(|| {
             self.inner.stream_insert_batch(parsed).map_err(|e| {
-                PyRuntimeError::new_err(format!(
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
                     "Stream insert failed (buffer full or not configured): {e}"
                 ))
             })

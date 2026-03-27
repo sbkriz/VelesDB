@@ -7,7 +7,7 @@
 //! - `index` — index CRUD (property, range)
 //!
 //! Note: Multiple `#[pymethods]` impl blocks across sub-modules are intentional.
-//! PyO3 ≥ 0.21 supports this natively via inventory-based method registration.
+//! PyO3 >= 0.21 supports this natively via inventory-based method registration.
 //! rust-analyzer may incorrectly flag `PyMethods` trait conflicts — verify with `cargo build`.
 
 mod index;
@@ -56,7 +56,8 @@ impl Collection {
         filter: Option<&Filter>,
         sparse_index_name: Option<&str>,
     ) -> PyResult<Vec<SearchResult>> {
-        use pyo3::exceptions::{PyRuntimeError, PyValueError};
+        use crate::collection_helpers::core_err;
+        use pyo3::exceptions::PyValueError;
 
         let index_name =
             sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
@@ -67,26 +68,23 @@ impl Collection {
                 .hybrid_sparse_search_named_with_filter(
                     &d, &s, top_k, &DEFAULT_FUSION, index_name, f,
                 )
-                .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}"))),
+                .map_err(core_err),
             (Some(d), Some(s), None) => self
                 .inner
                 .hybrid_sparse_search_named(&d, &s, top_k, &DEFAULT_FUSION, index_name)
-                .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}"))),
+                .map_err(core_err),
             (Some(d), None, Some(f)) => self
                 .inner
                 .search_with_filter(&d, top_k, f)
-                .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}"))),
-            (Some(d), None, None) => self
-                .inner
-                .search(&d, top_k)
-                .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}"))),
+                .map_err(core_err),
+            (Some(d), None, None) => self.inner.search(&d, top_k).map_err(core_err),
             (None, Some(_), Some(_)) => Err(PyValueError::new_err(
                 "Filter is not supported with sparse-only search; provide 'vector' for hybrid search",
             )),
             (None, Some(s), None) => self
                 .inner
                 .sparse_search_named(&s, top_k, index_name)
-                .map_err(|e| PyRuntimeError::new_err(format!("Sparse search failed: {e}"))),
+                .map_err(core_err),
             (None, None, _) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",
             )),
@@ -106,24 +104,22 @@ impl Collection {
     ///
     /// Returns:
     ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
-    fn info(&self) -> PyResult<PyObject> {
-        Python::with_gil(|py| {
-            let config = self.inner.config();
-            let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
-            let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
-            let _ = dict.set_item(
-                PyString::intern(py, "metric"),
-                format!("{:?}", config.metric).to_lowercase(),
-            );
-            let _ = dict.set_item(
-                PyString::intern(py, "storage_mode"),
-                format!("{:?}", config.storage_mode).to_lowercase(),
-            );
-            let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
-            let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
-            Ok(dict.into_any().unbind())
-        })
+    fn info(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let config = self.inner.config();
+        let dict = PyDict::new(py);
+        let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
+        let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
+        let _ = dict.set_item(
+            PyString::intern(py, "metric"),
+            format!("{:?}", config.metric).to_lowercase(),
+        );
+        let _ = dict.set_item(
+            PyString::intern(py, "storage_mode"),
+            format!("{:?}", config.storage_mode).to_lowercase(),
+        );
+        let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
+        let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
+        Ok(dict.into_any().unbind())
     }
 
     /// Check if this is a metadata-only collection.

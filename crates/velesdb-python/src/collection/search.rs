@@ -2,13 +2,13 @@
 
 use std::collections::HashMap;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::SearchResult;
 
 use crate::collection_helpers::{
-    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vector,
+    core_err, id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vector,
     search_result_to_dict, search_results_to_dicts,
 };
 use crate::utils::extract_vector;
@@ -49,138 +49,159 @@ impl Collection {
     #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None))]
     fn search(
         &self,
+        py: Python<'_>,
         vector: Option<PyObject>,
         sparse_vector: Option<PyObject>,
         top_k: usize,
         filter: Option<PyObject>,
         sparse_index_name: Option<String>,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
-            let sparse = sparse_vector
-                .as_ref()
-                .map(|sv| parse_sparse_vector(py, sv))
-                .transpose()?;
-            let filter_obj = parse_optional_filter(py, filter)?;
+        // Phase 1: Parse Python args (GIL held — required for PyObject access)
+        let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
+        let sparse = sparse_vector
+            .as_ref()
+            .map(|sv| parse_sparse_vector(py, sv))
+            .transpose()?;
+        let filter_obj = parse_optional_filter(py, filter)?;
 
-            let results = self.dispatch_search(
+        // Phase 2: Release GIL during Rust computation
+        let results = py.allow_threads(|| {
+            self.dispatch_search(
                 dense,
                 sparse,
                 top_k,
                 filter_obj.as_ref(),
                 sparse_index_name.as_deref(),
-            )?;
-            Ok(search_results_to_dicts(py, results))
-        })
+            )
+        })?;
+
+        // Phase 3: Convert results (GIL held — required for PyObject creation)
+        Ok(search_results_to_dicts(py, results))
     }
 
     /// Search for similar vectors with custom HNSW ef_search parameter.
     #[pyo3(signature = (vector, top_k = 10, ef_search = 128))]
     fn search_with_ef(
         &self,
+        py: Python<'_>,
         vector: PyObject,
         top_k: usize,
         ef_search: usize,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let query_vector = extract_vector(py, &vector)?;
-            let results = self
-                .inner
+        let query_vector = extract_vector(py, &vector)?;
+
+        let results = py.allow_threads(|| {
+            self.inner
                 .search_with_ef(&query_vector, top_k, ef_search)
-                .map_err(|e| PyRuntimeError::new_err(format!("Search with ef failed: {e}")))?;
-            Ok(search_results_to_dicts(py, results))
-        })
+                .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_dicts(py, results))
     }
 
     /// Search returning only IDs and scores.
     #[pyo3(signature = (vector, top_k = 10))]
-    fn search_ids(&self, vector: PyObject, top_k: usize) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let query_vector = extract_vector(py, &vector)?;
-            let results = self
-                .inner
+    fn search_ids(
+        &self,
+        py: Python<'_>,
+        vector: PyObject,
+        top_k: usize,
+    ) -> PyResult<Vec<PyObject>> {
+        let query_vector = extract_vector(py, &vector)?;
+
+        let results = py.allow_threads(|| {
+            self.inner
                 .search_ids(&query_vector, top_k)
-                .map_err(|e| PyRuntimeError::new_err(format!("Search IDs failed: {e}")))?;
-            let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-            Ok(id_score_pairs_to_dicts(py, tuples))
-        })
+                .map_err(core_err)
+        })?;
+
+        let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
+        Ok(id_score_pairs_to_dicts(py, tuples))
     }
 
     /// Search with metadata filtering.
     #[pyo3(signature = (vector, top_k = 10, filter = None))]
     fn search_with_filter(
         &self,
+        py: Python<'_>,
         vector: PyObject,
         top_k: usize,
         filter: Option<PyObject>,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let query_vector = extract_vector(py, &vector)?;
-            let filter_obj = filter
-                .map(|f| parse_filter(py, &f))
-                .transpose()?
-                .ok_or_else(|| {
-                    PyValueError::new_err("Filter is required for search_with_filter")
-                })?;
-            let results = self
-                .inner
+        let query_vector = extract_vector(py, &vector)?;
+        let filter_obj = filter
+            .map(|f| parse_filter(py, &f))
+            .transpose()?
+            .ok_or_else(|| PyValueError::new_err("Filter is required for search_with_filter"))?;
+
+        let results = py.allow_threads(|| {
+            self.inner
                 .search_with_filter(&query_vector, top_k, &filter_obj)
-                .map_err(|e| PyRuntimeError::new_err(format!("Search with filter failed: {e}")))?;
-            Ok(search_results_to_dicts(py, results))
-        })
+                .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_dicts(py, results))
     }
 
     /// Full-text search using BM25 ranking.
     #[pyo3(signature = (query, top_k = 10, filter = None))]
     fn text_search(
         &self,
+        py: Python<'_>,
         query: &str,
         top_k: usize,
         filter: Option<PyObject>,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let filter_obj = parse_optional_filter(py, filter)?;
-            let results = if let Some(f) = filter_obj {
+        let filter_obj = parse_optional_filter(py, filter)?;
+        let query_owned = query.to_string();
+
+        let results = py.allow_threads(|| {
+            if let Some(f) = filter_obj {
                 self.inner
-                    .text_search_with_filter(query, top_k, &f)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Text search failed: {e}")))?
+                    .text_search_with_filter(&query_owned, top_k, &f)
+                    .map_err(core_err)
             } else {
                 self.inner
-                    .text_search(query, top_k)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Text search failed: {e}")))?
-            };
-            Ok(search_results_to_dicts(py, results))
-        })
+                    .text_search(&query_owned, top_k)
+                    .map_err(core_err)
+            }
+        })?;
+
+        Ok(search_results_to_dicts(py, results))
     }
 
     /// Hybrid search combining vector similarity and text search.
     #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5, filter = None))]
     fn hybrid_search(
         &self,
+        py: Python<'_>,
         vector: PyObject,
         query: &str,
         top_k: usize,
         vector_weight: f32,
         filter: Option<PyObject>,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let query_vector = extract_vector(py, &vector)?;
-            let filter_obj = parse_optional_filter(py, filter)?;
-            let results = if let Some(f) = filter_obj {
+        let query_vector = extract_vector(py, &vector)?;
+        let filter_obj = parse_optional_filter(py, filter)?;
+        let query_owned = query.to_string();
+
+        let results = py.allow_threads(|| {
+            if let Some(f) = filter_obj {
                 self.inner.hybrid_search_with_filter(
                     &query_vector,
-                    query,
+                    &query_owned,
                     top_k,
                     Some(vector_weight),
                     &f,
                 )
             } else {
                 self.inner
-                    .hybrid_search(&query_vector, query, top_k, Some(vector_weight))
+                    .hybrid_search(&query_vector, &query_owned, top_k, Some(vector_weight))
             }
-            .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))?;
-            Ok(search_results_to_dicts(py, results))
-        })
+            .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_dicts(py, results))
     }
 
     /// Batch search for multiple query vectors in parallel.
@@ -194,64 +215,67 @@ impl Collection {
     #[pyo3(signature = (searches))]
     fn batch_search(
         &self,
+        py: Python<'_>,
         searches: Vec<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<Vec<PyObject>>> {
-        Python::with_gil(|py| {
-            let parsed = Self::parse_batch_searches(py, &searches)?;
-            let results = self.dispatch_batch_by_top_k(&parsed)?;
-            Ok(Self::convert_batch_results(py, results))
-        })
+        let parsed = Self::parse_batch_searches(py, &searches)?;
+
+        let results = py.allow_threads(|| self.dispatch_batch_by_top_k(&parsed))?;
+
+        Ok(Self::convert_batch_results(py, results))
     }
 
     /// Multi-query search with result fusion.
     #[pyo3(signature = (vectors, top_k = 10, fusion = None, filter = None))]
     fn multi_query_search(
         &self,
+        py: Python<'_>,
         vectors: Vec<PyObject>,
         top_k: usize,
         fusion: Option<FusionStrategy>,
         filter: Option<PyObject>,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let query_vectors: Vec<Vec<f32>> = vectors
-                .iter()
-                .map(|v| extract_vector(py, v))
-                .collect::<PyResult<_>>()?;
-            let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
-            let filter_obj = parse_optional_filter(py, filter)?;
+        let query_vectors: Vec<Vec<f32>> = vectors
+            .iter()
+            .map(|v| extract_vector(py, v))
+            .collect::<PyResult<_>>()?;
+        let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
+        let filter_obj = parse_optional_filter(py, filter)?;
+
+        let results = py.allow_threads(|| {
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-            let results = self
-                .inner
+            self.inner
                 .multi_query_search(&query_refs, top_k, fusion_strategy, filter_obj.as_ref())
-                .map_err(|e| PyRuntimeError::new_err(format!("Multi-query search failed: {e}")))?;
-            Ok(search_results_to_dicts(py, results))
-        })
+                .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_dicts(py, results))
     }
 
     /// Multi-query search returning only IDs and fused scores.
     #[pyo3(signature = (vectors, top_k = 10, fusion = None))]
     fn multi_query_search_ids(
         &self,
+        py: Python<'_>,
         vectors: Vec<PyObject>,
         top_k: usize,
         fusion: Option<FusionStrategy>,
     ) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let query_vectors: Vec<Vec<f32>> = vectors
-                .iter()
-                .map(|v| extract_vector(py, v))
-                .collect::<PyResult<_>>()?;
-            let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
+        let query_vectors: Vec<Vec<f32>> = vectors
+            .iter()
+            .map(|v| extract_vector(py, v))
+            .collect::<PyResult<_>>()?;
+        let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
+
+        let results = py.allow_threads(|| {
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-            let results = self
-                .inner
+            self.inner
                 .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
-                .map_err(|e| {
-                    PyRuntimeError::new_err(format!("Multi-query search IDs failed: {e}"))
-                })?;
-            let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-            Ok(id_score_pairs_to_dicts(py, tuples))
-        })
+                .map_err(core_err)
+        })?;
+
+        let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
+        Ok(id_score_pairs_to_dicts(py, tuples))
     }
 }
 
@@ -321,7 +345,7 @@ impl Collection {
             parsed.iter().map(|p| p.filter.clone()).collect();
         self.inner
             .search_batch_with_filters(&query_refs, k, &filters)
-            .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))
+            .map_err(core_err)
     }
 
     /// Groups queries by `top_k`, dispatches one batch per group, and
@@ -346,7 +370,7 @@ impl Collection {
             let batch_results = self
                 .inner
                 .search_batch_with_filters(&query_refs, *k, &filters)
-                .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))?;
+                .map_err(core_err)?;
 
             for (result, &orig_idx) in batch_results.into_iter().zip(indices) {
                 output[orig_idx] = Some(result);

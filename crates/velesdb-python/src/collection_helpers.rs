@@ -2,7 +2,7 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
@@ -10,6 +10,14 @@ use std::collections::{BTreeMap, HashMap};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
+
+/// Convert a `velesdb_core::Error` into a `PyRuntimeError`.
+///
+/// Shared helper that replaces ~39 inline `map_err(|e| PyRuntimeError::new_err(...))` closures
+/// across the Python binding crate.
+pub fn core_err(e: velesdb_core::Error) -> PyErr {
+    PyRuntimeError::new_err(e.to_string())
+}
 
 /// Parse a Python filter object into a VelesDB Filter.
 ///

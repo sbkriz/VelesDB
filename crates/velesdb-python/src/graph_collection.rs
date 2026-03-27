@@ -4,11 +4,10 @@
 //! as a `PyGraphCollection` pyclass.  Follows the same patterns as
 //! `crate::collection::Collection` (error handling, dict conversion).
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::collection_helpers::search_result_to_dict;
+use crate::collection_helpers::{core_err, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::TraversalConfig;
@@ -154,13 +153,9 @@ impl PyGraphCollection {
     ///     ...     "label": "KNOWS", "properties": {"since": 2020}
     ///     ... })
     #[pyo3(signature = (edge))]
-    fn add_edge(&self, edge: HashMap<String, PyObject>) -> PyResult<()> {
-        Python::with_gil(|py| {
-            let graph_edge = dict_to_edge(py, &edge)?;
-            self.inner
-                .add_edge(graph_edge)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to add edge: {e}")))
-        })
+    fn add_edge(&self, py: Python<'_>, edge: HashMap<String, PyObject>) -> PyResult<()> {
+        let graph_edge = dict_to_edge(py, &edge)?;
+        py.allow_threads(|| self.inner.add_edge(graph_edge).map_err(core_err))
     }
 
     /// Get edges, optionally filtered by label.
@@ -175,11 +170,9 @@ impl PyGraphCollection {
     ///     >>> all_edges = graph.get_edges()
     ///     >>> knows_edges = graph.get_edges(label="KNOWS")
     #[pyo3(signature = (label=None))]
-    fn get_edges(&self, label: Option<&str>) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let edges = self.inner.get_edges(label);
-            Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    fn get_edges(&self, py: Python<'_>, label: Option<String>) -> PyResult<Vec<PyObject>> {
+        let edges = py.allow_threads(|| self.inner.get_edges(label.as_deref()));
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Get outgoing edges from a node.
@@ -190,11 +183,9 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
-    fn get_outgoing(&self, node_id: u64) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let edges = self.inner.get_outgoing(node_id);
-            Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        let edges = py.allow_threads(|| self.inner.get_outgoing(node_id));
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Get incoming edges to a node.
@@ -205,11 +196,9 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
-    fn get_incoming(&self, node_id: u64) -> PyResult<Vec<PyObject>> {
-        Python::with_gil(|py| {
-            let edges = self.inner.get_incoming(node_id);
-            Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        let edges = py.allow_threads(|| self.inner.get_incoming(node_id));
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Get the in-degree and out-degree of a node.
@@ -235,9 +224,11 @@ impl PyGraphCollection {
     #[pyo3(signature = (node_id, payload))]
     fn store_node_payload(&self, py: Python<'_>, node_id: u64, payload: PyObject) -> PyResult<()> {
         let value = python_to_json(py, &payload)?;
-        self.inner
-            .upsert_node_payload(node_id, &value)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to store payload: {e}")))
+        py.allow_threads(|| {
+            self.inner
+                .upsert_node_payload(node_id, &value)
+                .map_err(core_err)
+        })
     }
 
     /// Retrieve payload (properties) for a node.
@@ -249,10 +240,7 @@ impl PyGraphCollection {
     ///     Dict of properties, or None if no payload is stored
     #[pyo3(signature = (node_id))]
     fn get_node_payload(&self, py: Python<'_>, node_id: u64) -> PyResult<Option<PyObject>> {
-        let value = self
-            .inner
-            .get_node_payload(node_id)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to get payload: {e}")))?;
+        let value = py.allow_threads(|| self.inner.get_node_payload(node_id).map_err(core_err))?;
         Ok(value.map(|v| json_to_python(py, &v)))
     }
 
@@ -260,8 +248,8 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     List of node IDs
-    fn all_node_ids(&self) -> Vec<u64> {
-        self.inner.all_node_ids()
+    fn all_node_ids(&self, py: Python<'_>) -> Vec<u64> {
+        py.allow_threads(|| self.inner.all_node_ids())
     }
 
     /// Perform BFS traversal from a source node.
@@ -277,16 +265,15 @@ impl PyGraphCollection {
     #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None))]
     fn traverse_bfs(
         &self,
+        py: Python<'_>,
         source_id: u64,
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
         let config = build_traversal_config(max_depth, limit, rel_types);
-        Python::with_gil(|py| {
-            let results = self.inner.traverse_bfs(source_id, &config);
-            Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
-        })
+        let results = py.allow_threads(|| self.inner.traverse_bfs(source_id, &config));
+        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
     /// Perform DFS traversal from a source node.
@@ -302,16 +289,15 @@ impl PyGraphCollection {
     #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None))]
     fn traverse_dfs(
         &self,
+        py: Python<'_>,
         source_id: u64,
         max_depth: Option<u32>,
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
     ) -> PyResult<Vec<PyObject>> {
         let config = build_traversal_config(max_depth, limit, rel_types);
-        Python::with_gil(|py| {
-            let results = self.inner.traverse_dfs(source_id, &config);
-            Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
-        })
+        let results = py.allow_threads(|| self.inner.traverse_dfs(source_id, &config));
+        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
     /// Search for similar nodes by embedding vector.
@@ -337,10 +323,13 @@ impl PyGraphCollection {
     ) -> PyResult<Vec<PyObject>> {
         let vec = extract_vector(py, &query)?;
         let top_k = k.unwrap_or(10);
-        let results = self
-            .inner
-            .search_by_embedding(&vec, top_k)
-            .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}")))?;
+
+        let results = py.allow_threads(|| {
+            self.inner
+                .search_by_embedding(&vec, top_k)
+                .map_err(core_err)
+        })?;
+
         Ok(results
             .iter()
             .map(|r| search_result_to_dict(py, r))
@@ -350,10 +339,8 @@ impl PyGraphCollection {
     /// Flush all graph state to disk.
     ///
     /// Ensures edges, payloads, and indexes are persisted.
-    fn flush(&self) -> PyResult<()> {
-        self.inner
-            .flush()
-            .map_err(|e| PyRuntimeError::new_err(format!("Flush failed: {e}")))
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.flush().map_err(core_err))
     }
 
     /// Returns the total number of edges in the graph.
