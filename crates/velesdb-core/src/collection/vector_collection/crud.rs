@@ -15,6 +15,27 @@ impl VectorCollection {
         self.inner.upsert_bulk(points)
     }
 
+    /// Bulk insert from contiguous flat slices (zero-copy from numpy / FFI).
+    ///
+    /// Accepts a flat `f32` slice of shape `(n, dimension)` in row-major order
+    /// plus a matching `u64` ID slice of length `n`. Avoids per-row `Vec<f32>`
+    /// allocation, saving ~293 MB for 100K vectors at 768D.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::InvalidVector`] if `vectors.len() != ids.len() * dimension`.
+    /// - Returns [`Error::DimensionMismatch`] if `dimension` mismatches the collection.
+    pub fn upsert_bulk_from_raw(
+        &self,
+        vectors: &[f32],
+        ids: &[u64],
+        dimension: usize,
+        payloads: Option<&[Option<serde_json::Value>]>,
+    ) -> Result<usize> {
+        self.inner
+            .upsert_bulk_from_raw(vectors, ids, dimension, payloads)
+    }
+
     /// Inserts or updates points in the collection.
     ///
     /// # Errors

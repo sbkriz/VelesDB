@@ -69,11 +69,12 @@ impl Collection {
 
     /// Bulk insert from numpy arrays for maximum throughput.
     ///
-    /// Bypasses Python dict parsing overhead by accepting vectors as a 2D
-    /// numpy array and IDs as a 1D array. Payloads are optional.
+    /// Uses a zero-copy path: the flat `f32` buffer from the numpy array is
+    /// passed directly to the core engine, eliminating per-row `Vec<f32>`
+    /// allocations. For 100K vectors at 768D this saves ~293 MB of copies.
     ///
     /// Args:
-    ///     vectors: numpy.ndarray of shape (n, dimension), dtype float32
+    ///     vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
     ///     ids: numpy.ndarray of shape (n,), dtype uint64 (or list of int)
     ///     payloads: Optional list of payload dicts (same length as ids)
     ///
@@ -95,24 +96,20 @@ impl Collection {
         Python::with_gil(|py| {
             let array = vectors.as_array();
             let n = array.nrows();
+            let dimension = array.ncols();
             validate_numpy_lengths(n, &ids, &payloads)?;
 
-            let mut core_points = Vec::with_capacity(n);
-            for i in 0..n {
-                let row = array.row(i);
-                let vec_slice = row
-                    .as_slice()
-                    .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
+            // Zero-copy: get flat &[f32] directly from the numpy buffer.
+            let flat = array
+                .as_slice()
+                .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
 
-                let payload = match payloads.as_ref().and_then(|p| p[i].as_ref()) {
-                    Some(dict) => Some(dict_to_json_map(py, dict)?),
-                    None => None,
-                };
-                core_points.push(Point::new(ids[i], vec_slice.to_vec(), payload));
-            }
+            // Convert Python payload dicts to serde_json::Value (GIL required).
+            let json_payloads = convert_payloads(py, &payloads)?;
+            let payloads_ref = json_payloads.as_deref();
 
             self.inner
-                .upsert_bulk(&core_points)
+                .upsert_bulk_from_raw(flat, &ids, dimension, payloads_ref)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_bulk: {e}")))
         })
     }
@@ -203,4 +200,25 @@ fn validate_numpy_lengths(
         }
     }
     Ok(())
+}
+
+/// Convert Python payload dicts to `serde_json::Value` objects.
+///
+/// Returns `None` if the input is `None` (no payloads). Each element is
+/// `Some(json_map)` when a dict is present, or `None` for that index.
+fn convert_payloads(
+    py: Python<'_>,
+    payloads: &Option<Vec<Option<HashMap<String, PyObject>>>>,
+) -> PyResult<Option<Vec<Option<serde_json::Value>>>> {
+    let Some(ref payload_list) = *payloads else {
+        return Ok(None);
+    };
+    let mut result = Vec::with_capacity(payload_list.len());
+    for opt_dict in payload_list {
+        match opt_dict {
+            Some(dict) => result.push(Some(dict_to_json_map(py, dict)?)),
+            None => result.push(None),
+        }
+    }
+    Ok(Some(result))
 }
