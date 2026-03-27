@@ -8,7 +8,7 @@
 //! - Persistence (file dump/load)
 
 use super::distance::DistanceEngine;
-use super::graph::NativeHnsw;
+use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use super::layer::{Layer, NodeId};
 use crate::distance::DistanceMetric;
 use rayon::prelude::*;
@@ -198,7 +198,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Consumed nodes are excluded from the parallel connect phase because
     /// they have no valid entry point to search from.
     fn bootstrap_entry_point(&self, assignments: &[(NodeId, usize)]) -> usize {
-        if self.entry_point.read().is_none() {
+        if self.entry_point.load(std::sync::atomic::Ordering::Acquire) == NO_ENTRY_POINT {
             let (node_id, layer) = assignments[0];
             self.promote_entry_point(node_id, layer);
             1
@@ -254,7 +254,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let chunk_size = Self::compute_chunk_size(assignments.len());
 
         for chunk in assignments.chunks(chunk_size) {
-            let ep_id = (*self.entry_point.read()).unwrap_or(first_node);
+            let loaded = self.entry_point.load(std::sync::atomic::Ordering::Acquire);
+            let ep_id = if loaded == NO_ENTRY_POINT {
+                first_node
+            } else {
+                loaded
+            };
 
             chunk
                 .par_iter()
@@ -409,7 +414,14 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             max_connections: self.max_connections as u32,
             max_connections_0: self.max_connections_0 as u32,
             ef_construction: self.ef_construction as u32,
-            entry_point: self.entry_point.read().unwrap_or(0) as u64,
+            entry_point: {
+                let ep = self.entry_point.load(std::sync::atomic::Ordering::Acquire);
+                if ep == NO_ENTRY_POINT {
+                    0
+                } else {
+                    ep as u64
+                }
+            },
             max_layer: self.max_layer.load(std::sync::atomic::Ordering::Relaxed) as u32,
         };
 
@@ -479,18 +491,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
         let level_mult = 1.0 / (graph.max_connections as f64).ln();
 
-        // M-2: If no vectors were loaded, entry_point should be None
+        // M-2: If no vectors were loaded, entry_point should be NO_ENTRY_POINT
         let entry_point = if count > 0 {
-            Some(graph.entry_point)
+            graph.entry_point
         } else {
-            None
+            NO_ENTRY_POINT
         };
 
         Ok(Self {
             distance,
             vectors: parking_lot::RwLock::new(vectors),
             layers: parking_lot::RwLock::new(graph.layers),
-            entry_point: parking_lot::RwLock::new(entry_point),
+            entry_point: std::sync::atomic::AtomicUsize::new(entry_point),
+            entry_point_promote_lock: parking_lot::Mutex::new(()),
             max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
             count: std::sync::atomic::AtomicUsize::new(count),
             rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),

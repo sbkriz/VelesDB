@@ -3,7 +3,7 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
 use super::super::ordered_float::OrderedFloat;
-use super::NativeHnsw;
+use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -210,14 +210,24 @@ fn release_result_heap(mut heap: ResultHeap) {
 
 /// Encapsulates the mutable state of a `search_layer` traversal.
 ///
-/// Bundles the candidate/result heaps, visited set, and stagnation
-/// counter into a single struct to reduce argument counts and keep
-/// helper functions under the Codacy complexity limit.
+/// Bundles the candidate/result heaps, visited set, stagnation counter,
+/// and a cached copy of the furthest result distance into a single
+/// struct to reduce argument counts and keep helper functions under
+/// the Codacy complexity limit.
+///
+/// `cached_furthest` mirrors `results.peek().0` and is updated by
+/// [`push_candidate`] and [`evict_furthest`] so that the hot-path
+/// termination check in [`should_terminate`] and the admission test
+/// in [`process_batch_results`] avoid repeated heap peeks.
 struct SearchState {
     candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>>,
     results: BinaryHeap<(OrderedFloat, NodeId)>,
     visited: BitVecVisited,
     stagnation_count: usize,
+    /// Cached distance of the furthest (worst) result in the max-heap.
+    /// Kept in sync with `results.peek().map(|r| r.0.0)`.
+    /// Initialized to `f32::MAX` when the result set is empty.
+    cached_furthest: f32,
 }
 
 impl SearchState {
@@ -233,27 +243,35 @@ impl SearchState {
             results: acquire_result_heap(),
             visited: acquire_visited_set(capacity_hint),
             stagnation_count: 0,
+            cached_furthest: f32::MAX,
         }
     }
 
     /// Pushes a candidate node into both heaps and marks it visited.
+    ///
+    /// Refreshes `cached_furthest` from the heap root because the newly
+    /// pushed node may become the furthest result. Called only during
+    /// entry-point seeding (1-4 calls), so the `peek()` cost is negligible.
     #[inline]
     fn push_candidate(&mut self, node: NodeId, dist: f32) {
         self.candidates.push(Reverse((OrderedFloat(dist), node)));
         self.results.push((OrderedFloat(dist), node));
+        self.cached_furthest = self.results.peek().map_or(f32::MAX, |r| r.0 .0);
         self.visited.insert(node);
     }
 
     /// Returns `true` if the search should terminate.
     ///
     /// Termination conditions:
-    /// 1. The current candidate distance exceeds the furthest result and
+    /// 1. The current candidate distance exceeds `cached_furthest` and
     ///    the result set has reached `ef` capacity.
     /// 2. Stagnation limit is enabled and the counter has reached it.
+    ///
+    /// Uses `cached_furthest` instead of `results.peek()` to avoid a
+    /// heap pointer chase on every candidate evaluation (Issue #422).
     #[inline]
     fn should_terminate(&self, c_dist: f32, ef: usize, stagnation_limit: usize) -> bool {
-        let furthest = self.results.peek().map_or(f32::MAX, |r| r.0 .0);
-        if c_dist > furthest && self.results.len() >= ef {
+        if c_dist > self.cached_furthest && self.results.len() >= ef {
             return true;
         }
         stagnation_limit > 0 && self.stagnation_count >= stagnation_limit
@@ -365,6 +383,9 @@ fn gather_unvisited_neighbors<'a>(
 
 /// Processes batch distance results into the search state heaps.
 ///
+/// Uses `state.cached_furthest` for the admission test instead of
+/// `results.peek()`, and refreshes it after each eviction (Issue #422).
+///
 /// Returns `true` if any neighbor improved the result set.
 #[inline]
 fn process_batch_results(
@@ -375,14 +396,18 @@ fn process_batch_results(
 ) -> bool {
     let mut improved = false;
     for (&(node_id, _), &dist) in batch.iter().zip(distances.iter()) {
-        let furthest = state.results.peek().map_or(f32::MAX, |r| r.0 .0);
-        if dist < furthest || state.results.len() < ef {
+        if dist < state.cached_furthest || state.results.len() < ef {
             state
                 .candidates
                 .push(Reverse((OrderedFloat(dist), node_id)));
             state.results.push((OrderedFloat(dist), node_id));
             if state.results.len() > ef {
                 state.results.pop();
+                // Refresh cache: the evicted node was the previous furthest,
+                // so the new furthest is the current heap root.
+                state.cached_furthest = state.results.peek().map_or(f32::MAX, |r| r.0 .0);
+            } else if dist > state.cached_furthest {
+                state.cached_furthest = dist;
             }
             improved = true;
         }
@@ -406,10 +431,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
         let prepared_query = self.prepare_query(query);
         let query: &[f32] = &prepared_query;
-        let entry_point = *self.entry_point.read();
-        let Some(ep) = entry_point else {
+        let ep = self.entry_point.load(Ordering::Acquire);
+        if ep == NO_ENTRY_POINT {
             return Vec::new();
-        };
+        }
 
         let max_layer = self.max_layer.load(Ordering::Relaxed);
 
@@ -462,10 +487,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ) -> Vec<(NodeId, f32)> {
         let prepared_query = self.prepare_query(query);
         let query: &[f32] = &prepared_query;
-        let entry_point = *self.entry_point.read();
-        let Some(ep) = entry_point else {
+        let ep = self.entry_point.load(Ordering::Acquire);
+        if ep == NO_ENTRY_POINT {
             return Vec::new();
-        };
+        }
 
         let count = self.count.load(Ordering::Relaxed);
         if count == 0 {
@@ -1608,6 +1633,145 @@ mod search_refactor_tests {
 
         // Verify the expected unvisited nodes: 0,1,3,4,6,7,9
         assert_eq!(ids_pf, vec![0, 1, 3, 4, 6, 7, 9]);
+    }
+
+    // =========================================================================
+    // 14. cached_furthest correctness (Issue #422, Component A)
+    // =========================================================================
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Exact float comparison is intentional for sentinel/cache values
+    fn test_cached_furthest_tracks_push_candidate() {
+        let mut state = SearchState::new(0);
+
+        // Initially f32::MAX (empty heap)
+        assert_eq!(
+            state.cached_furthest,
+            f32::MAX,
+            "cached_furthest must be f32::MAX when results heap is empty"
+        );
+
+        // After first push, cached_furthest == that distance
+        state.push_candidate(1, 0.3);
+        assert!(
+            (state.cached_furthest - 0.3).abs() < f32::EPSILON,
+            "cached_furthest must track single-element heap root: got {}",
+            state.cached_furthest,
+        );
+
+        // After pushing a closer candidate, cached_furthest stays at max
+        state.push_candidate(2, 0.1);
+        assert!(
+            (state.cached_furthest - 0.3).abs() < f32::EPSILON,
+            "cached_furthest must remain at max distance: got {}",
+            state.cached_furthest,
+        );
+
+        // After pushing a farther candidate, cached_furthest updates
+        state.push_candidate(3, 0.9);
+        assert!(
+            (state.cached_furthest - 0.9).abs() < f32::EPSILON,
+            "cached_furthest must update to new max: got {}",
+            state.cached_furthest,
+        );
+    }
+
+    #[test]
+    fn test_cached_furthest_tracks_batch_eviction() {
+        let mut state = SearchState::new(0);
+        let ef = 3;
+
+        // Fill to ef capacity
+        state.push_candidate(10, 0.2);
+        state.push_candidate(20, 0.4);
+        state.push_candidate(30, 0.6);
+
+        // Insert a closer candidate that causes eviction of 0.6
+        let v: Vec<f32> = vec![1.0; 4];
+        let batch: Vec<(NodeId, &[f32])> = vec![(40, v.as_slice())];
+        let distances = vec![0.1_f32];
+        process_batch_results(&batch, &distances, ef, &mut state);
+
+        // After eviction, cached_furthest should be 0.4 (new max)
+        assert!(
+            (state.cached_furthest - 0.4).abs() < f32::EPSILON,
+            "cached_furthest must refresh after eviction: got {}",
+            state.cached_furthest,
+        );
+    }
+
+    // =========================================================================
+    // 15. AtomicUsize entry_point (Issue #422, Component B)
+    // =========================================================================
+
+    #[test]
+    fn test_atomic_entry_point_starts_as_sentinel() {
+        use super::super::super::distance::CpuDistance;
+        use super::NO_ENTRY_POINT;
+        use std::sync::atomic::Ordering;
+
+        let engine = CpuDistance::new(DistanceMetric::Euclidean);
+        let hnsw = NativeHnsw::new(engine, 8, 32, 100);
+
+        // Empty index has NO_ENTRY_POINT sentinel
+        let ep = hnsw.entry_point.load(Ordering::Acquire);
+        assert_eq!(
+            ep, NO_ENTRY_POINT,
+            "fresh index must have NO_ENTRY_POINT sentinel"
+        );
+
+        // Search on empty index returns empty
+        let results = hnsw.search(&[1.0, 2.0, 3.0, 4.0], 5, 64);
+        assert!(
+            results.is_empty(),
+            "search on empty index must return empty"
+        );
+    }
+
+    #[test]
+    fn test_atomic_entry_point_set_after_insert() {
+        use super::NO_ENTRY_POINT;
+        use std::sync::atomic::Ordering;
+
+        let engine = SimdDistance::new(DistanceMetric::Euclidean);
+        let hnsw = NativeHnsw::new(engine, 8, 32, 100);
+
+        hnsw.insert(&[1.0, 2.0, 3.0, 4.0])
+            .expect("insert should succeed");
+
+        let ep = hnsw.entry_point.load(Ordering::Acquire);
+        assert_ne!(
+            ep, NO_ENTRY_POINT,
+            "entry_point must be set after first insert"
+        );
+        assert_eq!(ep, 0, "first inserted node should be entry point");
+    }
+
+    #[test]
+    fn test_atomic_entry_point_promotes_higher_layer() {
+        use super::NO_ENTRY_POINT;
+        use std::sync::atomic::Ordering;
+
+        let engine = SimdDistance::new(DistanceMetric::Euclidean);
+        let hnsw = NativeHnsw::new(engine, 16, 100, 5000);
+
+        // Insert many vectors; the entry point should eventually
+        // be promoted to a node at a higher layer.
+        for i in 0..2000_usize {
+            #[allow(clippy::cast_precision_loss)]
+            let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
+            hnsw.insert(&v).expect("insert should succeed");
+        }
+
+        let ep = hnsw.entry_point.load(Ordering::Acquire);
+        assert_ne!(ep, NO_ENTRY_POINT);
+        // With 2000 nodes, the entry point should have been promoted
+        // beyond node 0 (node 0 is layer 0 with high probability).
+        let max_layer = hnsw.max_layer.load(Ordering::Relaxed);
+        assert!(
+            max_layer > 0,
+            "max_layer must be > 0 with 2000 nodes (got {max_layer})"
+        );
     }
 
     #[test]

@@ -20,8 +20,15 @@ use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
 use crate::perf_optimizations::ContiguousVectors;
 use locking::{record_lock_acquire, record_lock_release, LockRank};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+/// Sentinel value for [`NativeHnsw::entry_point`]: indicates no entry point exists.
+///
+/// Using `usize::MAX` instead of `Option<NodeId>` behind an `RwLock` allows
+/// lock-free reads on the search hot path (`Ordering::Acquire` load) while
+/// writes remain serialized via `entry_point_promote_lock` (Issue #422).
+pub const NO_ENTRY_POINT: usize = usize::MAX;
 
 /// Native HNSW index implementation.
 ///
@@ -36,8 +43,15 @@ pub struct NativeHnsw<D: DistanceEngine> {
     pub(in crate::index::hnsw::native) vectors: RwLock<Option<ContiguousVectors>>,
     /// Hierarchical layers (layer 0 = bottom, dense connections)
     pub(in crate::index::hnsw::native) layers: RwLock<Vec<Layer>>,
-    /// Entry point for search (highest layer node)
-    pub(in crate::index::hnsw::native) entry_point: RwLock<Option<NodeId>>,
+    /// Entry point for search (highest layer node).
+    ///
+    /// Stores `NO_ENTRY_POINT` (`usize::MAX`) when the index is empty.
+    /// Read with `Ordering::Acquire`, written under `entry_point_promote_lock`
+    /// with `Ordering::Release` (Issue #422).
+    pub(in crate::index::hnsw::native) entry_point: AtomicUsize,
+    /// Serializes entry-point promotions so that `entry_point` and `max_layer`
+    /// are updated atomically with respect to each other.
+    pub(in crate::index::hnsw::native) entry_point_promote_lock: Mutex<()>,
     /// Maximum layer for entry point
     pub(in crate::index::hnsw::native) max_layer: AtomicUsize,
     /// Number of elements in the index
@@ -144,7 +158,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             distance,
             vectors: RwLock::new(vectors),
             layers: RwLock::new(vec![Layer::new(max_elements)]),
-            entry_point: RwLock::new(None),
+            entry_point: AtomicUsize::new(NO_ENTRY_POINT),
+            entry_point_promote_lock: Mutex::new(()),
             max_layer: AtomicUsize::new(0),
             count: AtomicUsize::new(0),
             rng_state: AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),

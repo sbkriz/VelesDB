@@ -16,7 +16,7 @@
 //! │  D: DistanceEngine (CPU/GPU/SIMD)      │
 //! ├─────────────────────────────────────────┤
 //! │  layers: Vec<Layer>                     │
-//! │  entry_point: Option<NodeId>            │
+//! │  entry_point: AtomicUsize (NO_ENTRY_POINT sentinel)│
 //! │  params: HnswParams                     │
 //! └─────────────────────────────────────────┘
 //! ```
@@ -53,7 +53,7 @@ pub use distance::{
     SimdDistance,
 };
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
-pub use graph::NativeHnsw;
+pub use graph::{NativeHnsw, NO_ENTRY_POINT};
 pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use search::SearchResult;

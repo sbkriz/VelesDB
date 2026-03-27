@@ -22,7 +22,7 @@
 //! ```
 
 use super::distance::DistanceEngine;
-use super::graph::NativeHnsw;
+use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use super::layer::NodeId;
 use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
 use std::sync::Arc;
@@ -385,10 +385,13 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let entry_point = *self.inner.entry_point.read();
-        let Some(ep) = entry_point else {
+        let ep = self
+            .inner
+            .entry_point
+            .load(std::sync::atomic::Ordering::Acquire);
+        if ep == NO_ENTRY_POINT {
             return Vec::new();
-        };
+        }
 
         let max_layer = self
             .inner

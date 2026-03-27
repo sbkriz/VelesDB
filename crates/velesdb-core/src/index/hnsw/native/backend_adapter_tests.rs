@@ -4,7 +4,7 @@
 
 use super::backend_adapter::*;
 use super::distance::{DistanceEngine, SimdDistance};
-use super::graph::NativeHnsw;
+use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use crate::distance::DistanceMetric;
 use crate::metrics::recall_at_k;
 use tempfile::tempdir;
@@ -353,8 +353,11 @@ fn test_parallel_insert_chunked_ep_update() {
     // With 2000 nodes and deterministic PRNG (fixed seed 0x5DEE_CE66_D1A4_B5B5),
     // node 0 is never assigned the highest layer. The entry point must have been
     // promoted to a higher-layer node during chunked insertion.
-    let ep = *hnsw.entry_point.read();
-    let ep_id = ep.expect("entry_point should be Some after inserting 2000 vectors");
+    let ep_id = hnsw.entry_point.load(std::sync::atomic::Ordering::Acquire);
+    assert_ne!(
+        ep_id, NO_ENTRY_POINT,
+        "entry_point should be set after inserting 2000 vectors"
+    );
     assert_ne!(
         ep_id, 0,
         "entry point should have been promoted beyond node 0 with 2000 inserts"
