@@ -85,9 +85,9 @@ impl HnswIndex {
         let neighbours = inner.search(query, k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-        for n in &neighbours {
-            if let Some(id) = self.mappings.get_id(n.d_id) {
-                let score = inner.transform_score(n.distance);
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
+                let score = inner.transform_score(raw_dist);
                 results.push(ScoredResult::new(id, score));
             }
         }

@@ -51,10 +51,30 @@ impl NativeHnswInner {
         Ok(Self { inner, metric })
     }
 
-    /// Searches the HNSW graph and returns raw neighbors with distances.
+    /// Searches the HNSW graph and returns `(node_id, raw_distance)` tuples.
+    ///
+    /// Returns results directly from the core search without wrapping in
+    /// `NativeNeighbour`, eliminating an intermediate allocation on the
+    /// hot path. Callers that need `NativeNeighbour` for trait compatibility
+    /// should use [`search_neighbours`](Self::search_neighbours).
     #[inline]
     #[must_use]
-    pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<NativeNeighbour> {
+    pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        self.inner.search(query, k, ef_search)
+    }
+
+    /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
+    ///
+    /// Wraps the raw `(node_id, distance)` tuples from [`search`](Self::search)
+    /// into `NativeNeighbour` for [`NativeHnswBackend`] trait compatibility.
+    #[inline]
+    #[must_use]
+    pub fn search_neighbours(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<NativeNeighbour> {
         self.inner.search_neighbours(query, k, ef_search)
     }
 

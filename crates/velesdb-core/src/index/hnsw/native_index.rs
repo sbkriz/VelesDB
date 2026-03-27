@@ -251,9 +251,9 @@ impl NativeHnswIndex {
 
         neighbors
             .into_iter()
-            .filter_map(|n| {
-                self.mappings.get_id(n.d_id).map(|id| {
-                    let score = inner.transform_score(n.distance);
+            .filter_map(|(node_id, raw_dist)| {
+                self.mappings.get_id(node_id).map(|id| {
+                    let score = inner.transform_score(raw_dist);
                     ScoredResult::new(id, score)
                 })
             })
