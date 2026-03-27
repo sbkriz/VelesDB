@@ -31,8 +31,10 @@ pub use pq::{PQCodebook, PQVector, ProductQuantizer};
 pub use pq_opq::train_opq;
 
 // Re-export RaBitQ quantization
+#[cfg(feature = "persistence")]
 pub(crate) use rabitq::PreparedQuery;
 pub use rabitq::{RaBitQCorrection, RaBitQIndex, RaBitQVector};
+#[cfg(feature = "persistence")]
 pub(crate) use rabitq_store::RaBitQVectorStore;
 
 // Re-export scalar quantization
