@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 25, 2026 (v1.7.2 — sequential benchmarks on idle machine)*
+*Last updated: March 27, 2026 (v1.7.2 — sequential benchmarks on idle machine)*
 
 ---
 
@@ -21,13 +21,13 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2/AVX-512 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 24, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA, AVX-512 disabled — hybrid P+E topology), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.
+SIMD kernels use AVX2 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 27, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.92.0, Windows 11 Pro, sequential run on idle machine.
 
 ### SIMD Kernel Latency
 
 | Operation | 128D | 384D | 768D | 1536D | 3072D |
 |-----------|------|------|------|-------|-------|
-| **Dot Product** | 5.4 ns | 12.0 ns | 17.6 ns | 43.8 ns | 91.2 ns |
+| **Dot Product** | 5.4 ns | 12.0 ns | 19.8 ns | 43.8 ns | 91.2 ns |
 | **Euclidean** | 5.2 ns | 11.5 ns | 22.5 ns | 46.1 ns | 99.3 ns |
 | **Cosine** | 7.7 ns | 18.6 ns | 33.1 ns | 61.4 ns | 118.9 ns |
 | **Hamming** | 7.3 ns | 17.8 ns | 35.8 ns | 69.2 ns | 132.2 ns |
@@ -49,7 +49,7 @@ Engine dispatch overhead is negligible at typical embedding dimensions (768D+).
 
 | Dimension | Dot Product | Throughput |
 |-----------|-------------|------------|
-| 768D | 17.6 ns | 43.6 Gelem/s |
+| 768D | 19.8 ns | 38.8 Gelem/s |
 | 1536D | 43.8 ns | 35.1 Gelem/s |
 | 3072D | 91.2 ns | 33.7 Gelem/s |
 
@@ -136,10 +136,10 @@ No dedicated hybrid benchmark suite exists yet. Performance can be estimated fro
 
 | Component | Latency (10K corpus) | Source |
 |-----------|---------------------|--------|
-| Dense HNSW search (k=10, 768D) | ~55 µs | hnsw_benchmark |
+| Dense HNSW search (k=10, 768D) | ~47 µs | hnsw_benchmark |
 | Sparse search (top-10, 10K) | ~813 µs | sparse_benchmark |
 | RRF fusion overhead | negligible (score merging) | -- |
-| **Estimated hybrid total** | **~0.87 ms** | Dense + Sparse + fusion |
+| **Estimated hybrid total** | **~0.86 ms** | Dense + Sparse + fusion |
 
 The RRF fusion step is a simple score merge with no distance computation, so hybrid latency is dominated by the sparse search branch. For workloads where sparse search is the bottleneck, the MaxScore optimization provides early termination on high-selectivity queries.
 
@@ -154,7 +154,7 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **Search k=10** (10K/768D) | 54.6 µs | 18.3K QPS |
+| **Search k=10** (10K/768D) | 47.0 µs | 21.3K QPS |
 | **Search k=50** | 63.5 µs | -- |
 | **Search k=100** | 151.5 µs | -- |
 | **Insert 1K x 768D** (sequential) | 263.7 ms | 3.8K vec/s |

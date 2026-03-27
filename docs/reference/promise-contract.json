@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-03-24",
+  "last_updated": "2026-03-27",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -34,26 +34,26 @@
     {
       "id": "readme_simd_dot_product_latency",
       "file": "README.md",
-      "must_contain": "**17.6 ns**",
+      "must_contain": "**19.8 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
       "note": "Re-run benchmark and update if value changes",
-      "last_updated": "2026-03-24"
+      "last_updated": "2026-03-27"
     },
     {
       "id": "readme_simd_euclidean_latency",
       "file": "README.md",
-      "must_contain": "**54.6 us**",
+      "must_contain": "**47.0 us**",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
       "note": "HNSW search latency in Vector Engine table",
-      "last_updated": "2026-03-24"
+      "last_updated": "2026-03-27"
     },
     {
       "id": "readme_hnsw_search_latency",
       "file": "README.md",
-      "must_contain": "54.6us",
+      "must_contain": "47.0us",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
       "note": "Appears in intro table and comparison",
-      "last_updated": "2026-03-24"
+      "last_updated": "2026-03-27"
     },
     {
       "id": "readme_recall_at_10_accurate",

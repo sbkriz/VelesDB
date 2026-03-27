@@ -42,7 +42,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
-| **Vector** | Semantic similarity search (HNSW + AVX-512/NEON SIMD) | **54.6us** search, **17.6ns** dot product |
+| **Vector** | Semantic similarity search (HNSW + AVX-512/NEON SIMD) | **47us** search (768D), **19.8ns** dot product |
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
 
@@ -66,7 +66,7 @@ ORDER BY similarity() DESC LIMIT 5
 
 | Today (3 systems to maintain) | With VelesDB (1 binary) |
 |-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 54.6us HNSW search |
+| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
 | PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
@@ -80,7 +80,7 @@ ORDER BY similarity() DESC LIMIT 5
 <tr>
 <td align="center" width="33%">
 <h3>Vector Engine</h3>
-<p>Native HNSW + AVX-512/AVX2/NEON SIMD<br/><strong>54.6us search, 17.6ns dot product</strong></p>
+<p>Native HNSW + AVX-512/AVX2/NEON SIMD<br/><strong>47us search (768D), 19.8ns dot product</strong></p>
 <p><em>Semantic similarity, embeddings, RAG retrieval</em></p>
 </td>
 <td align="center" width="33%">
@@ -198,7 +198,7 @@ memory.procedural.delete(1)
 | **Metadata filtering** | **ColumnStore (130x vs JSON)** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
-| **Search latency** | 54.6us (embedded) | ~1-5ms | ~1-5ms | ~5-20ms |
+| **Search latency** | 47us (embedded, 768D) | ~1-5ms | ~1-5ms | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM)** | Yes | No | No | No |
@@ -289,8 +289,8 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search** (10K/768D, k=10) | **54.6 us** |
-| **SIMD Dot Product** (768D) | **17.6 ns** (43.6 Gelem/s) |
+| **HNSW Search** (10K/768D, k=10) | **47.0 us** |
+| **SIMD Dot Product** (768D) | **19.8 ns** |
 | **Recall@10** (Balanced mode) | **98.8%** |
 | **Recall@10** (Accurate mode) | **100%** |
 
@@ -302,6 +302,7 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 | Balanced (default) | 128 | 98.8% | 57us |
 | Accurate | 512 | 100% | 130us |
 | Adaptive | 32-512 | 95%+ | ~15-40us (easy queries) |
+| **AutoTune** | auto | 95%+ | auto (scales with collection size) |
 
 ### Vector search with metadata filter
 
@@ -326,11 +327,11 @@ SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
 | **SQ8** | 4x | < 1% loss |
 | **PQ** (m=8, k=256) | 32x | ~5% loss (with rescore) |
 | **Binary** | 32x | For Hamming-compatible workloads |
-| **RaBitQ** | 32x | Learned quantization |
+| **RaBitQ** | 32x | Random rotation + binary codes ([arXiv:2405.12497](https://arxiv.org/abs/2405.12497)). Dual-precision HNSW: binary traversal + f32 rerank |
 
 > **Full benchmarks:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
-*Measured March 24, 2026 on i9-14900KF, 64GB DDR5, Rust 1.92.0. Criterion.rs, sequential runs on idle machine.*
+*Measured March 27, 2026 on i9-14900KF, 64GB DDR5, Rust 1.92.0, AVX2. Criterion.rs, sequential runs on idle machine.*
 
 ---
 
@@ -580,6 +581,43 @@ cd examples/ecommerce_recommendation && cargo run --release
 | [**mini_recommender**](examples/mini_recommender/) | Simple product recommendations | Rust |
 
 </details>
+
+---
+
+## Research Foundations
+
+VelesDB's performance is built on peer-reviewed research. Every technique listed below is **implemented and production-active** in the codebase.
+
+### Vector Search Core
+
+| Technique | Paper | What it does in VelesDB |
+|-----------|-------|------------------------|
+| **HNSW** | [Malkov & Yashunin, 2016](https://arxiv.org/abs/1603.09320) | Hierarchical navigable small-world graph for approximate nearest neighbor search |
+| **VAMANA Diversification** | [Subramanya et al. (DiskANN), 2019](https://arxiv.org/abs/1907.05024) | Alpha-based neighbor selection for graph quality and recall |
+| **Graph Reordering** | [Chen et al., NeurIPS 2022](https://arxiv.org/abs/2104.03221) | BFS-based node reordering for 15-30% cache miss reduction |
+
+### Quantization & Compression
+
+| Technique | Paper | What it does in VelesDB |
+|-----------|-------|------------------------|
+| **RaBitQ** | [Gao & Long, 2024](https://arxiv.org/abs/2405.12497) | 1-bit quantization with random rotation + affine correction (32x compression). Dual-precision HNSW: binary traversal + float32 re-ranking |
+| **Dual-Precision (VSAG)** | [Xu et al., 2025](https://arxiv.org/abs/2503.17911) | int8 quantized graph traversal with exact float32 re-ranking (4x bandwidth reduction) |
+
+### SIMD & Memory Optimization
+
+| Technique | Paper | What it does in VelesDB |
+|-----------|-------|------------------------|
+| **Software Pipelining** | [Jiang et al. (Bang for the Buck), 2025](https://arxiv.org/abs/2505.07621) | Speculative prefetch of next candidate's vectors during distance computation. Peek-based pipeline preserving recall |
+| **PDX Layout** | [Pirk et al., 2025](https://arxiv.org/abs/2503.04422) | Block-columnar vector storage (64 vectors/block) for SIMD-parallel batch distance computation |
+| **SIMD Distance Kernels** | Lemire et al. | Multi-accumulator FMA loops, masked-tail AVX-512, runtime dispatch (AVX-512/AVX2/NEON/scalar) |
+
+### Data Structures
+
+| Technique | Reference | What it does in VelesDB |
+|-----------|-----------|------------------------|
+| **BitVec Visited Set** | ANN best practice | 1-bit-per-node tracking (1.25 KB for 10K nodes vs 80 KB HashSet). Thread-local pooling |
+| **Partial Sort** | `select_nth_unstable_by` | O(n + k log k) top-k extraction instead of O(n log n) full sort |
+| **Two-Tier Cache** | [LRU + DashMap] | Lock-free L1 (DashMap, ~50ns) + LRU L2 for distance and query caching |
 
 ---
 

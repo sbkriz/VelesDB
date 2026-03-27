@@ -315,9 +315,9 @@ LIMIT 20
 
 | Metric | Latency | Throughput | SIMD Optimized |
 |--------|---------|------------|----------------|
-| **Cosine** | 33.1 ns | 30M ops/sec | AVX2/AVX-512 |
-| **Euclidean** | 22.5 ns | 44M ops/sec | AVX-512 |
-| **DotProduct** | 17.6 ns | 57M ops/sec | AVX-512 |
+| **Cosine** | 33.1 ns | 30M ops/sec | AVX2 |
+| **Euclidean** | 22.5 ns | 44M ops/sec | AVX2 |
+| **DotProduct** | 19.8 ns | 50M ops/sec | AVX2 |
 | **Hamming** | **35.8 ns** | **28M ops/sec** | POPCNT |
 | **Jaccard** | 35.1 ns | 28M ops/sec | AVX2 |
 
