@@ -639,6 +639,12 @@ VelesDB's performance is built on peer-reviewed research. Every technique listed
 | **PDX Layout** | [Pirk et al., 2025](https://arxiv.org/abs/2503.04422) | Block-columnar vector storage (64 vectors/block) for SIMD-parallel batch distance computation |
 | **SIMD Distance Kernels** | Lemire et al. | Multi-accumulator FMA loops, masked-tail AVX-512, runtime dispatch (AVX-512/AVX2/NEON/scalar) |
 
+### Text Search
+
+| Technique | Reference | What it does in VelesDB |
+|-----------|-----------|------------------------|
+| **Trigram Fingerprint** | [Broder, 1997](https://doi.org/10.1109/SEQUEN.1997.666900) | 256-bit bloom filter for SIMD-accelerated Jaccard similarity pre-filtering in trigram search |
+
 ### Data Structures
 
 | Technique | Reference | What it does in VelesDB |
@@ -646,6 +652,7 @@ VelesDB's performance is built on peer-reviewed research. Every technique listed
 | **BitVec Visited Set** | ANN best practice | 1-bit-per-node tracking (1.25 KB for 10K nodes vs 80 KB HashSet). Thread-local pooling |
 | **Partial Sort** | `select_nth_unstable_by` | O(n + k log k) top-k extraction instead of O(n log n) full sort |
 | **Two-Tier Cache** | [LRU + DashMap] | Lock-free L1 (DashMap, ~50ns) + LRU L2 for distance and query caching |
+| **AutoTune ef** | Adaptive search (VelesDB) | Auto-computed ef_search from collection size + dimension. Two-phase adaptive: low-ef first, escalate on hard queries |
 
 ---
 
@@ -665,7 +672,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Version | Status | Highlights |
 |---------|--------|------------|
-| **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix (20x) |
+| **v1.7.2** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
 | **v1.7.0** | Released | HNSW Upsert, GPU Acceleration, Batch SIMD, Chunked Insertion |
 | **v1.6.0** | Released | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
 | **v1.4.0** | Released | VelesQL v2.2.0, Multi-Score Fusion, Parallel Graph, 2,765 tests |
@@ -674,7 +681,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 <details>
 <summary>Detailed release history</summary>
 
-**v1.7.2** — Partial sort in HNSW search_layer (#373), batch insert fast-path (#375), upsert lock contention elimination (3-phase pipeline, write-to-read lock). Agent Memory SDK with complete Python API.
+**v1.7.2** — 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Closes #404, #408, #410, #416, #417, #421, #422, #425, #430.
 
 **v1.7.0** — HNSW upsert semantics, complete GPU multi-metric pipelines (wgpu), chunked batch insertion, search_layer batch SIMD + deferred indexing.
 
