@@ -103,10 +103,11 @@ impl HnswIndex {
         k: usize,
         ef_search: usize,
     ) -> Option<usize> {
-        // Skip reranking for Fast quality or if vector storage is disabled
+        // Skip reranking for Fast, Adaptive, or AutoTune quality (these handle
+        // their own exploration strategy) or if vector storage is disabled.
         if matches!(
             quality,
-            SearchQuality::Fast | SearchQuality::Adaptive { .. }
+            SearchQuality::Fast | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || !self.enable_vector_storage
         {
             return None;
@@ -117,7 +118,10 @@ impl HnswIndex {
         let min_rerank_k = match quality {
             SearchQuality::Balanced => k * 2,
             SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
-            SearchQuality::Fast | SearchQuality::Perfect | SearchQuality::Adaptive { .. } => {
+            SearchQuality::Fast
+            | SearchQuality::Perfect
+            | SearchQuality::Adaptive { .. }
+            | SearchQuality::AutoTune => {
                 return None;
             }
         };
@@ -210,6 +214,14 @@ impl HnswIndex {
         // Adaptive two-phase: start with min_ef, escalate if query is hard
         if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
             return self.search_adaptive(query, k, min_ef.max(k), max_ef);
+        }
+
+        // AutoTune: compute ef range from collection statistics, then delegate
+        // to the same adaptive two-phase algorithm.
+        if matches!(quality, SearchQuality::AutoTune) {
+            let (min_ef, max_ef) =
+                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
+            return self.search_adaptive(query, k, min_ef, max_ef);
         }
 
         let ef_search = quality.ef_search(k);

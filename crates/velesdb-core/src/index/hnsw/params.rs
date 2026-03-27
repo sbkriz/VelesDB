@@ -261,6 +261,27 @@ pub enum SearchQuality {
         /// Maximum `ef_search` (cap). Default: 512.
         max_ef: usize,
     },
+    /// Auto-tuned adaptive search based on collection statistics.
+    ///
+    /// Computes optimal `min_ef` / `max_ef` from the collection's current size
+    /// and vector dimension, then delegates to the same two-phase adaptive
+    /// algorithm used by [`SearchQuality::Adaptive`].
+    ///
+    /// This is the recommended quality setting for applications that want
+    /// good recall without manual ef tuning:
+    ///
+    /// - Small collections (≤1K): conservative ef (fast)
+    /// - Medium collections (1K–100K): moderate ef (balanced)
+    /// - Large collections (100K+): aggressive ef (high recall)
+    /// - High dimensions (>512): additional exploration factor
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use velesdb_core::SearchQuality;
+    /// let results = index.search_with_quality(&query, 10, SearchQuality::AutoTune);
+    /// ```
+    AutoTune,
 }
 
 impl SearchQuality {
@@ -275,7 +296,9 @@ impl SearchQuality {
     pub fn ef_search(&self, k: usize) -> usize {
         match self {
             Self::Fast => 64.max(k * 2),
-            Self::Balanced => 128.max(k * 4),
+            // AutoTune: resolved at search time via auto_ef_range(); fallback
+            // to Balanced for contexts that call ef_search() without collection info.
+            Self::Balanced | Self::AutoTune => 128.max(k * 4),
             // Increased from 256 to 512 for better recall at 100K+ scale
             Self::Accurate => 512.max(k * 16),
             // Increased from 2048 to 4096 for guaranteed 100% recall at 100K+
@@ -289,7 +312,7 @@ impl SearchQuality {
     /// Returns `true` if this quality profile uses two-phase adaptive search.
     #[must_use]
     pub const fn is_adaptive(&self) -> bool {
-        matches!(self, Self::Adaptive { .. })
+        matches!(self, Self::Adaptive { .. } | Self::AutoTune)
     }
 
     /// Returns the maximum ef for adaptive search, or `None` for fixed profiles.
