@@ -17,7 +17,6 @@ mod search;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
-use std::sync::Arc;
 #[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 use velesdb_core::{
     Collection as CoreCollection, Filter, FusionStrategy as CoreFusionStrategy, SearchResult,
@@ -33,14 +32,16 @@ const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 #[pyclass]
 #[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 pub struct Collection {
-    pub(crate) inner: Arc<CoreCollection>,
+    /// Core collection (cheap to clone — all fields are `Arc`-wrapped internally).
+    pub(crate) inner: CoreCollection,
+    /// Cached name to avoid acquiring `config` read lock on every `#[getter]` access.
     pub(crate) name: String,
 }
 
 #[allow(deprecated)]
 impl Collection {
     /// Create a new Collection wrapper.
-    pub fn new(inner: Arc<CoreCollection>, name: String) -> Self {
+    pub fn new(inner: CoreCollection, name: String) -> Self {
         Self { inner, name }
     }
 

@@ -52,7 +52,7 @@ impl StreamingConfig {
 }
 
 /// Result of a BFS traversal step.
-#[pyclass]
+#[pyclass(frozen)]
 #[derive(Clone)]
 pub struct TraversalResult {
     /// Current depth in the traversal.

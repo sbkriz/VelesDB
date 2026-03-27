@@ -25,7 +25,7 @@ use velesdb_core::{GraphCollection, GraphSchema};
 /// Example:
 ///     >>> schema = PyGraphSchema.schemaless()
 ///     >>> schema = PyGraphSchema.strict()
-#[pyclass(name = "GraphSchema")]
+#[pyclass(name = "GraphSchema", frozen)]
 #[derive(Clone)]
 pub struct PyGraphSchema {
     inner: GraphSchema,
