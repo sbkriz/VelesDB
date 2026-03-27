@@ -514,6 +514,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             alpha: 1.0,
             stagnation_limit: graph.ef_construction / 4,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
+            columnar: parking_lot::RwLock::new(None),
         })
     }
 

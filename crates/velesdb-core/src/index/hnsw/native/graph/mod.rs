@@ -17,6 +17,7 @@ pub(crate) mod safety_counters;
 mod search;
 mod search_pipeline;
 
+use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
 use crate::perf_optimizations::ContiguousVectors;
@@ -76,6 +77,11 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// to skip the write lock when the insert falls within the pre-allocated range.
     /// Transient: not serialized to disk.
     pub(in crate::index::hnsw::native) pre_allocated_capacity: AtomicUsize,
+    /// PDX block-columnar layout for SIMD-parallel distance computation.
+    ///
+    /// Built automatically after BFS reordering (`reorder_for_locality()`).
+    /// Lock rank 15 (between vectors=10 and layers=20).
+    pub(in crate::index::hnsw::native) columnar: RwLock<Option<ColumnarVectors>>,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -171,6 +177,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             alpha,
             stagnation_limit: ef_construction / 4,
             pre_allocated_capacity: AtomicUsize::new(0),
+            columnar: RwLock::new(None),
         }
     }
 
