@@ -373,6 +373,23 @@ impl VectorCollection {
         self.inner.stream_insert(point)
     }
 
+    /// Sends a batch of points into the streaming ingestion channel.
+    ///
+    /// Acquires the ingester lock once for the entire batch, eliminating
+    /// per-point lock overhead. Returns the number of points successfully
+    /// queued. See [`Collection::stream_insert_batch`] for details.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackpressureError` on buffer-full, drain-dead, or not-configured.
+    #[cfg(feature = "persistence")]
+    pub fn stream_insert_batch(
+        &self,
+        points: Vec<crate::point::Point>,
+    ) -> std::result::Result<usize, crate::collection::streaming::BackpressureError> {
+        self.inner.stream_insert_batch(points)
+    }
+
     /// Pushes `(id, vector)` entries into the delta buffer if it is active.
     ///
     /// No-op when the delta buffer is inactive. This is the public interface

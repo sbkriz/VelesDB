@@ -172,17 +172,12 @@ impl Collection {
             // Phase 1: Parse all points while holding the GIL (required for PyObject access)
             let parsed = parse_point_dicts(py, &points)?;
 
-            // Phase 2: Send all parsed points to the channel in a tight loop
-            let mut count = 0usize;
-            for point in parsed {
-                self.inner.stream_insert(point).map_err(|e| {
-                    PyRuntimeError::new_err(format!(
-                        "Stream insert failed at point {count} (buffer full or not configured): {e}"
-                    ))
-                })?;
-                count += 1;
-            }
-            Ok(count)
+            // Phase 2: Send entire batch in one call (single lock acquisition)
+            self.inner.stream_insert_batch(parsed).map_err(|e| {
+                PyRuntimeError::new_err(format!(
+                    "Stream insert failed (buffer full or not configured): {e}"
+                ))
+            })
         })
     }
 }

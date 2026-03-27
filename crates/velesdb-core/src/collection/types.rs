@@ -360,6 +360,25 @@ impl Collection {
         }
     }
 
+    /// Sends a batch of points into the streaming ingestion channel.
+    ///
+    /// Acquires the ingester read-lock once for the entire batch, eliminating
+    /// per-point lock overhead. Returns the number of points successfully
+    /// queued. If the channel fills mid-batch, returns
+    /// [`BackpressureError::BufferFull`] (points already sent are still queued).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackpressureError`] on buffer-full, drain-dead, or not-configured.
+    #[cfg(feature = "persistence")]
+    pub fn stream_insert_batch(&self, points: Vec<Point>) -> Result<usize, BackpressureError> {
+        let guard = self.stream_ingester.read();
+        match guard.as_ref() {
+            Some(ingester) => ingester.try_send_batch(points),
+            None => Err(BackpressureError::NotConfigured),
+        }
+    }
+
     /// Enables streaming ingestion on this collection.
     ///
     /// Creates a [`StreamIngester`] with the given `config` and stores it in

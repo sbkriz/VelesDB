@@ -145,6 +145,34 @@ impl StreamIngester {
         })
     }
 
+    /// Attempts to send a batch of points into the streaming channel.
+    ///
+    /// Sends points one by one through the bounded channel. If the channel
+    /// fills up mid-batch, returns [`BackpressureError::BufferFull`] — the
+    /// points already sent before the full condition are still queued and
+    /// will be drained normally. If the drain task has exited, returns
+    /// [`BackpressureError::DrainTaskDead`] on the first failed send.
+    ///
+    /// Returns the number of points successfully queued on success (all points).
+    ///
+    /// # Errors
+    ///
+    /// - [`BackpressureError::BufferFull`] — the bounded channel filled mid-batch.
+    /// - [`BackpressureError::DrainTaskDead`] — the drain task exited unexpectedly.
+    pub fn try_send_batch(
+        &self,
+        points: Vec<crate::point::Point>,
+    ) -> Result<usize, BackpressureError> {
+        let count = points.len();
+        for point in points {
+            self.sender.try_send(point).map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => BackpressureError::BufferFull,
+                mpsc::error::TrySendError::Closed(_) => BackpressureError::DrainTaskDead,
+            })?;
+        }
+        Ok(count)
+    }
+
     /// Returns a reference to the streaming configuration.
     #[must_use]
     pub fn config(&self) -> &StreamingConfig {
