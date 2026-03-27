@@ -57,7 +57,7 @@ pub use scalar::{cosine_similarity_fast, fast_rsqrt};
 // Re-export public API from prefetch
 pub use prefetch::{
     calculate_prefetch_distance, prefetch_vector, prefetch_vector_multi_cache_line,
-    L2_CACHE_LINE_BYTES,
+    prefetch_vector_u64, L2_CACHE_LINE_BYTES,
 };
 
 // =============================================================================
@@ -93,8 +93,8 @@ mod neon;
 pub(crate) use x86_avx512::{
     cosine_fused_avx512, cosine_fused_avx512_4acc, cosine_fused_avx512_8acc, dot_product_avx512,
     dot_product_avx512_4acc, dot_product_avx512_8acc, hamming_avx512, hamming_avx512_4acc,
-    hamming_binary_avx512, jaccard_avx512, jaccard_avx512_4acc, jaccard_avx512_8acc,
-    squared_l2_avx512, squared_l2_avx512_4acc, squared_l2_avx512_8acc,
+    hamming_binary_avx512, hamming_binary_avx512_vpopcntdq, jaccard_avx512, jaccard_avx512_4acc,
+    jaccard_avx512_8acc, squared_l2_avx512, squared_l2_avx512_4acc, squared_l2_avx512_8acc,
 };
 
 #[cfg(target_arch = "x86_64")]

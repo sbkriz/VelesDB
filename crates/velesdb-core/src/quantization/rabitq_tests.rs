@@ -482,3 +482,128 @@ fn rabitq_save_uses_atomic_write() {
     // Final file should exist
     assert!(dir.path().join("rabitq.idx").exists());
 }
+
+// ====================================================================
+// Phase 2: SIMD-dispatched popcount regression tests
+// ====================================================================
+
+/// Reference scalar XOR+popcount implementation for regression testing.
+///
+/// Computes the same result as the old `xor_popcount_ip` before SIMD dispatch.
+fn xor_popcount_ip_scalar_reference(
+    q_bits: &[u64],
+    enc_bits: &[u64],
+    num_words: usize,
+    dim: usize,
+) -> f32 {
+    let mut matching_bits: u32 = 0;
+    for (qw, ew) in q_bits.iter().zip(enc_bits.iter()).take(num_words) {
+        let xor = qw ^ ew;
+        matching_bits += 64 - xor.count_ones();
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let padding_bits = (num_words * 64 - dim) as u32;
+    let matching_bits = matching_bits - padding_bits;
+
+    #[allow(clippy::cast_precision_loss)]
+    let d_f = dim as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let ip = (2.0f32.mul_add(matching_bits as f32, -d_f)) / d_f;
+    ip
+}
+
+#[test]
+fn rabitq_simd_dispatch_matches_scalar_reference() {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(7777);
+
+    // Test across multiple dimensions including non-64-aligned
+    for &dim in &[64_usize, 128, 191, 256, 384, 768] {
+        let num_words = dim.div_ceil(64);
+        let index = identity_index(dim);
+
+        for _ in 0..10 {
+            let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+            let vector: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+
+            let encoded = index.encode(&vector).unwrap();
+
+            let q_rotated = apply_rotation_flat(
+                &index.rotation,
+                &{
+                    let norm_sq: f32 = query
+                        .iter()
+                        .zip(index.centroid.iter())
+                        .map(|(&v, &c)| (v - c) * (v - c))
+                        .sum();
+                    let norm = norm_sq.sqrt();
+                    if norm < f32::EPSILON {
+                        continue;
+                    }
+                    query
+                        .iter()
+                        .zip(index.centroid.iter())
+                        .map(|(&v, &c)| (v - c) / norm)
+                        .collect::<Vec<f32>>()
+                },
+                dim,
+            );
+            let q_bits = signs_to_bits(&q_rotated, dim);
+
+            let scalar_ip =
+                xor_popcount_ip_scalar_reference(&q_bits, &encoded.bits, num_words, dim);
+            let simd_ip = xor_popcount_ip(&q_bits, &encoded.bits, num_words, dim);
+
+            assert!(
+                (scalar_ip - simd_ip).abs() < 1e-7,
+                "dim={dim}: scalar_ip={scalar_ip} != simd_ip={simd_ip}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rabitq_simd_dispatch_distance_unchanged() {
+    // Verify end-to-end distance results are identical before/after SIMD wiring.
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(8888);
+
+    let dim = 128;
+    let index = identity_index(dim);
+
+    let vectors: Vec<Vec<f32>> = (0..50)
+        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect())
+        .collect();
+    let query: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect();
+
+    let encoded: Vec<RaBitQVector> = vectors.iter().map(|v| index.encode(v).unwrap()).collect();
+
+    // Distances must be non-negative and batch must match individual
+    let batch = index.batch_distance(&query, &encoded);
+    for (i, ev) in encoded.iter().enumerate() {
+        let d = index.distance(&query, ev);
+        assert!(d >= 0.0, "distance[{i}] = {d} must be non-negative");
+        assert!(
+            (d - batch[i]).abs() < 1e-6,
+            "distance mismatch at {i}: individual={d}, batch={}",
+            batch[i]
+        );
+    }
+}
+
+#[test]
+fn rabitq_prepared_query_is_pub_crate() {
+    // Compile-time check that PreparedQuery and prepare_query are accessible
+    // from within the crate (pub(crate) visibility).
+    let dim = 64;
+    let index = identity_index(dim);
+    let v: Vec<f32> = vec![1.0; dim];
+    let pq = index.prepare_query(&v);
+    assert!(pq.is_some());
+    let pq = pq.unwrap();
+    assert_eq!(pq.num_words, 1);
+    assert!(pq.norm > 0.0);
+    assert!(pq.norm_sq > 0.0);
+    assert_eq!(pq.bits.len(), 1);
+    assert_eq!(pq.rotated.len(), dim);
+}

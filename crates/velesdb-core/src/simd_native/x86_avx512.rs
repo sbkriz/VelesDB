@@ -1503,3 +1503,58 @@ pub(crate) unsafe fn hamming_binary_avx512(a: &[u64], b: &[u64]) -> u32 {
     // (len <= 67_108_864 words = 4 billion bits) this fits in u32.
     total as u32
 }
+
+/// AVX-512 VPOPCNTDQ binary Hamming distance for packed u64 vectors.
+///
+/// Uses native `_mm512_popcnt_epi64` for hardware-accelerated 64-bit popcount,
+/// eliminating the extract+scalar loop used by [`hamming_binary_avx512`].
+/// Available on Ice Lake (client), Cascade Lake (server), and Zen4+ CPUs.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX-512F **and** AVX-512 VPOPCNTDQ (enforced by `#[target_feature]`
+///   and runtime detection via `has_avx512vpopcntdq()`)
+/// - `a.len() == b.len()` (enforced by public API assert)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vpopcntdq")]
+#[inline]
+pub(crate) unsafe fn hamming_binary_avx512_vpopcntdq(a: &[u64], b: &[u64]) -> u32 {
+    // SAFETY: This function is only called after runtime detection confirms
+    // both AVX-512F and AVX-512 VPOPCNTDQ.
+    // - `_mm512_loadu_si512` handles unaligned loads safely.
+    // - Loop guard `i + 8 <= len` ensures pointer arithmetic stays in bounds.
+    // - `_mm512_popcnt_epi64` operates entirely within registers.
+    // - `_mm512_reduce_add_epi64` horizontal sum within register.
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let a_ptr = a.as_ptr().cast::<i64>();
+    let b_ptr = b.as_ptr().cast::<i64>();
+    let mut acc = _mm512_setzero_si512();
+    let mut i = 0;
+
+    // Process 8 u64 per iteration (512 bits / 64 bits = 8 elements)
+    while i + 8 <= len {
+        // SAFETY: i + 8 <= len guarantees 8 i64 elements are readable from both pointers
+        let va = _mm512_loadu_si512(a_ptr.add(i).cast());
+        let vb = _mm512_loadu_si512(b_ptr.add(i).cast());
+        let xor = _mm512_xor_si512(va, vb);
+        // Native 64-bit popcount per lane — no extract+scalar loop needed
+        let popcnt = _mm512_popcnt_epi64(xor);
+        acc = _mm512_add_epi64(acc, popcnt);
+        i += 8;
+    }
+
+    // Horizontal sum of 8 i64 lanes
+    let mut total = _mm512_reduce_add_epi64(acc) as u64;
+
+    // Scalar remainder for < 8 trailing u64 elements
+    for j in i..len {
+        total += u64::from((a[j] ^ b[j]).count_ones());
+    }
+
+    // Reason: max total = len * 64; for any practical binary vector dimension
+    // (len <= 67_108_864 words = 4 billion bits) this fits in u32.
+    total as u32
+}

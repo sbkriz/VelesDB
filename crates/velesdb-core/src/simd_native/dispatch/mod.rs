@@ -114,6 +114,21 @@ pub fn has_avx512vnni() -> bool {
     false
 }
 
+/// Returns `true` if the CPU supports AVX-512 VPOPCNTDQ (native 64-bit popcount).
+///
+/// Available on Ice Lake (client), Cascade Lake (server), and Zen4+ CPUs.
+/// Enables `_mm512_popcnt_epi64` for hardware-accelerated binary Hamming distance.
+#[inline]
+#[must_use]
+pub fn has_avx512vpopcntdq() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return is_x86_feature_detected!("avx512vpopcntdq");
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
 /// Batch distance computation with multi-level prefetch hints.
 ///
 /// Applies a single-pair distance function to each candidate against the query,
@@ -165,11 +180,16 @@ pub struct DistanceEngine {
 
 impl std::fmt::Debug for DistanceEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let avx512_ext = (has_avx512vl(), has_avx512bw(), has_avx512vnni());
+        let avx512_ext = (
+            has_avx512vl(),
+            has_avx512bw(),
+            has_avx512vnni(),
+            has_avx512vpopcntdq(),
+        );
         f.debug_struct("DistanceEngine")
             .field("dimension", &self.dimension)
             .field("simd_level", &simd_level())
-            .field("avx512_ext(vl,bw,vnni)", &avx512_ext)
+            .field("avx512_ext(vl,bw,vnni,vpopcntdq)", &avx512_ext)
             .finish_non_exhaustive()
     }
 }

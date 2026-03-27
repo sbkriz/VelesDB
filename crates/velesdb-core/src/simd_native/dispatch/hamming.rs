@@ -1,3 +1,5 @@
+#[cfg(target_arch = "x86_64")]
+use super::has_avx512vpopcntdq;
 use super::{simd_level, SimdLevel};
 
 /// Hamming distance with runtime SIMD dispatch.
@@ -210,6 +212,14 @@ pub fn hamming_binary_native(a: &[u64], b: &[u64]) -> u32 {
     );
 
     match simd_level() {
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 if a.len() >= 8 && has_avx512vpopcntdq() => {
+            // SAFETY: AVX-512 VPOPCNTDQ binary hamming uses native _mm512_popcnt_epi64.
+            // - Condition 1: `simd_level()` selected `Avx512` after runtime detection.
+            // - Condition 2: `has_avx512vpopcntdq()` confirms hardware popcount support.
+            // Reason: native 64-bit popcount avoids extract+scalar loop.
+            unsafe { crate::simd_native::hamming_binary_avx512_vpopcntdq(a, b) }
+        }
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 8 => {
             // SAFETY: AVX-512 binary hamming kernel requires CPU feature + minimum dim.
