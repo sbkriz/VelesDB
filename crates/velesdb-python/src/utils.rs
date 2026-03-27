@@ -64,9 +64,10 @@ pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
         "full" | "f32" => Ok(StorageMode::Full),
         "sq8" | "int8" => Ok(StorageMode::SQ8),
         "binary" | "bit" => Ok(StorageMode::Binary),
+        "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
+        "rabitq" => Ok(StorageMode::RaBitQ),
         _ => Err(PyValueError::new_err(format!(
-            "Invalid storage_mode '{}'. Use 'full', 'sq8', or 'binary'",
-            mode
+            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', 'binary', 'pq', or 'rabitq'"
         ))),
     }
 }
