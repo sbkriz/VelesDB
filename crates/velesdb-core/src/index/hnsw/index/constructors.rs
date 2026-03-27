@@ -291,6 +291,7 @@ impl HnswIndex {
                 dimension: self.dimension,
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
+                storage_mode: crate::StorageMode::Full,
             },
         )?;
 

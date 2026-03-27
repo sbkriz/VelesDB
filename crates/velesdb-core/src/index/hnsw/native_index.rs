@@ -140,6 +140,7 @@ impl NativeHnswIndex {
                 dimension: self.dimension,
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
+                storage_mode: self.inner.read().storage_mode(),
             },
         )?;
 
@@ -168,8 +169,14 @@ impl NativeHnswIndex {
 
         let meta = persistence::load_meta(path)?;
 
-        // Load HNSW graph
-        let inner = NativeHnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
+        // Load HNSW graph (with storage mode for RaBitQ backend support)
+        let inner = NativeHnswInner::file_load_with_storage_mode(
+            path,
+            "native_hnsw",
+            meta.metric,
+            meta.dimension,
+            meta.storage_mode,
+        )?;
 
         // Load mappings
         let mappings_data = persistence::load_mappings(path)?;

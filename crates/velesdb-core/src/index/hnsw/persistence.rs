@@ -21,6 +21,8 @@ pub(crate) struct HnswMeta {
     pub dimension: usize,
     pub metric: DistanceMetric,
     pub enable_vector_storage: bool,
+    /// Storage mode for the HNSW backend (defaults to `Full` for backward compat).
+    pub storage_mode: crate::StorageMode,
 }
 
 /// HNSW mappings data as stored on disk.
@@ -48,6 +50,7 @@ pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
         meta.dimension,
         meta.metric as u8,
         meta.enable_vector_storage,
+        storage_mode_to_u8(meta.storage_mode),
     ))
     .map_err(std::io::Error::other)?;
     atomic_write(&meta_path, &bytes)
@@ -62,16 +65,31 @@ pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
 pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
     let meta_path = path.join("native_meta.bin");
     let bytes = std::fs::read(meta_path)?;
+
+    // Try 4-tuple format first (v1.7.2+), fall back to 3-tuple (pre-v1.7.2)
+    if let Ok((dimension, metric_u8, enable_vector_storage, storage_mode_u8)) =
+        postcard::from_bytes::<(usize, u8, bool, u8)>(&bytes)
+    {
+        let metric = metric_from_u8(metric_u8)?;
+        let storage_mode = storage_mode_from_u8(storage_mode_u8);
+        return Ok(HnswMeta {
+            dimension,
+            metric,
+            enable_vector_storage,
+            storage_mode,
+        });
+    }
+
+    // Backward-compat: 3-tuple format (pre-v1.7.2) defaults to Full
     let (dimension, metric_u8, enable_vector_storage): (usize, u8, bool) =
         postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
-
-    // Match enum order: Cosine=0, Euclidean=1, DotProduct=2, Hamming=3, Jaccard=4
     let metric = metric_from_u8(metric_u8)?;
 
     Ok(HnswMeta {
         dimension,
         metric,
         enable_vector_storage,
+        storage_mode: crate::StorageMode::Full,
     })
 }
 
@@ -253,5 +271,28 @@ fn metric_from_u8(value: u8) -> std::io::Result<DistanceMetric> {
             std::io::ErrorKind::InvalidData,
             "Unknown distance metric",
         )),
+    }
+}
+
+/// Encodes [`StorageMode`] as a `u8` for on-disk persistence.
+const fn storage_mode_to_u8(mode: crate::StorageMode) -> u8 {
+    match mode {
+        crate::StorageMode::Full => 0,
+        crate::StorageMode::SQ8 => 1,
+        crate::StorageMode::Binary => 2,
+        crate::StorageMode::ProductQuantization => 3,
+        crate::StorageMode::RaBitQ => 4,
+    }
+}
+
+/// Decodes a `u8` from disk to [`StorageMode`], defaulting to `Full` for unknown values.
+const fn storage_mode_from_u8(value: u8) -> crate::StorageMode {
+    match value {
+        1 => crate::StorageMode::SQ8,
+        2 => crate::StorageMode::Binary,
+        3 => crate::StorageMode::ProductQuantization,
+        4 => crate::StorageMode::RaBitQ,
+        // 0 and unknown values default to Full
+        _ => crate::StorageMode::Full,
     }
 }

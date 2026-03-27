@@ -26,7 +26,7 @@ fn test_rabitq_precision_empty_index() {
 #[test]
 fn test_rabitq_precision_fallback_when_untrained() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert fewer vectors than training threshold
     for i in 0..50 {
@@ -49,7 +49,7 @@ fn test_rabitq_precision_fallback_when_untrained() {
 fn test_rabitq_precision_insert_trains_lazily() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
     // training_sample_size = min(1000, 100) = 100
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 100).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 100).expect("test");
 
     for i in 0..100 {
         let v: Vec<f32> = (0..64)
@@ -67,7 +67,7 @@ fn test_rabitq_precision_insert_trains_lazily() {
 #[test]
 fn test_rabitq_precision_force_train() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
 
     // Insert fewer than threshold
     for i in 0..50 {
@@ -89,7 +89,7 @@ fn test_rabitq_precision_force_train() {
 #[test]
 fn test_rabitq_precision_search_after_training() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, 64, 16, 100, 1000).expect("test");
 
     for i in 0..200 {
         let v: Vec<f32> = (0..64)
@@ -117,7 +117,7 @@ fn test_rabitq_precision_search_after_training() {
 #[test]
 fn test_rabitq_precision_insert_after_training() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert and train
     for i in 0..50 {
@@ -157,7 +157,7 @@ fn test_rabitq_precision_recall_above_threshold() {
 
     // Build index
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, dim, 32, 200, n).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, dim, 32, 200, n).expect("test");
 
     let vectors: Vec<Vec<f32>> = (0..n)
         .map(|i| {
@@ -228,7 +228,7 @@ fn test_rabitq_euclidean_returns_sqrt_not_squared() {
 
     let dim = 32;
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
-    let mut hnsw = RaBitQPrecisionHnsw::new(engine, dim, 16, 100, 1000).expect("test");
+    let hnsw = RaBitQPrecisionHnsw::new(engine, dim, 16, 100, 1000).expect("test");
 
     let v0 = vec![0.0_f32; dim];
     let v1 = vec![1.0_f32; dim];

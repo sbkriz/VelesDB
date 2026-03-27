@@ -28,6 +28,7 @@ use super::distance::DistanceEngine;
 use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use super::layer::NodeId;
 use crate::quantization::{RaBitQIndex, RaBitQVectorStore};
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
 /// Configuration for `RaBitQ`-precision search.
@@ -61,17 +62,18 @@ impl Default for RaBitQPrecisionConfig {
 /// inner `NativeHnsw` vector store.
 pub struct RaBitQPrecisionHnsw<D: DistanceEngine> {
     /// Inner HNSW index (graph + float32 vectors).
-    pub(in crate::index::hnsw::native) inner: NativeHnsw<D>,
+    pub(in crate::index::hnsw) inner: NativeHnsw<D>,
     /// Trained `RaBitQ` index (rotation matrix + centroid).
-    rabitq_index: Option<Arc<RaBitQIndex>>,
+    /// Write-locked once during training, then read-only.
+    rabitq_index: RwLock<Option<Arc<RaBitQIndex>>>,
     /// Contiguous `RaBitQ`-encoded vector storage.
-    rabitq_store: Option<RaBitQVectorStore>,
+    rabitq_store: RwLock<Option<RaBitQVectorStore>>,
     /// Vector dimension.
     dimension: usize,
     /// Number of vectors to accumulate before training.
     training_sample_size: usize,
     /// Buffer for vectors awaiting quantizer training.
-    training_buffer: Vec<Vec<f32>>,
+    training_buffer: Mutex<Vec<Vec<f32>>>,
 }
 
 impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
@@ -95,12 +97,28 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
                 max_elements,
                 dimension,
             )?,
-            rabitq_index: None,
-            rabitq_store: None,
+            rabitq_index: RwLock::new(None),
+            rabitq_store: RwLock::new(None),
             dimension,
             training_sample_size: 1000.min(max_elements),
-            training_buffer: Vec::with_capacity(1000),
+            training_buffer: Mutex::new(Vec::with_capacity(1000)),
         })
+    }
+
+    /// Creates a `RaBitQ`-precision HNSW from a pre-loaded `NativeHnsw` graph.
+    ///
+    /// The quantizer is NOT trained — it trains lazily from new inserts.
+    /// Until trained, search falls back to standard f32 distances.
+    #[must_use]
+    pub fn from_inner(inner: NativeHnsw<D>, _distance: D, dimension: usize) -> Self {
+        Self {
+            inner,
+            rabitq_index: RwLock::new(None),
+            rabitq_store: RwLock::new(None),
+            dimension,
+            training_sample_size: 1000,
+            training_buffer: Mutex::new(Vec::with_capacity(1000)),
+        }
     }
 
     /// Returns the number of elements in the index.
@@ -118,7 +136,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// Returns true if the `RaBitQ` quantizer is trained.
     #[must_use]
     pub fn is_quantizer_trained(&self) -> bool {
-        self.rabitq_index.is_some()
+        self.rabitq_index.read().is_some()
     }
 
     /// Inserts a vector into the index.
@@ -126,25 +144,41 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// The quantizer is trained lazily after `training_sample_size` vectors.
     /// After training, all subsequent vectors are encoded into the `RaBitQ` store.
     ///
+    /// Uses interior mutability so the index can be shared across threads.
+    ///
     /// # Errors
     ///
     /// Returns an error if allocation, insertion, or encoding fails.
-    pub fn insert(&mut self, vector: &[f32]) -> crate::error::Result<NodeId> {
+    pub fn insert(&self, vector: &[f32]) -> crate::error::Result<NodeId> {
         debug_assert_eq!(vector.len(), self.dimension);
 
-        if let Some(ref rabitq) = self.rabitq_index {
+        let index_guard = self.rabitq_index.read();
+        if let Some(rabitq) = index_guard.as_ref().map(Arc::clone) {
+            // Drop read lock BEFORE encoding — holding it blocks training.
+            drop(index_guard);
             let encoded = rabitq.encode(vector)?;
-            if let Some(ref mut store) = self.rabitq_store {
+            if let Some(store) = self.rabitq_store.write().as_mut() {
                 store.push(&encoded.bits, encoded.correction);
             }
         } else {
-            self.training_buffer.push(vector.to_vec());
-            if self.training_buffer.len() >= self.training_sample_size {
-                self.train_rabitq()?;
-            }
+            drop(index_guard);
+            self.insert_training_phase(vector)?;
         }
 
         self.inner.insert(vector)
+    }
+
+    /// Handles insert during the pre-training phase.
+    ///
+    /// Buffers the vector and triggers training when the sample size is reached.
+    fn insert_training_phase(&self, vector: &[f32]) -> crate::error::Result<()> {
+        let mut buffer = self.training_buffer.lock();
+        buffer.push(vector.to_vec());
+        if buffer.len() >= self.training_sample_size {
+            drop(buffer);
+            self.train_rabitq()?;
+        }
+        Ok(())
     }
 
     /// Searches for k nearest neighbors using `RaBitQ`-precision.
@@ -157,7 +191,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// (`transform_score` applied).
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
-        if self.rabitq_index.is_none() {
+        if self.rabitq_index.read().is_none() {
             return self.search_and_transform(query, k, ef_search);
         }
 
@@ -186,8 +220,8 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// # Errors
     ///
     /// Returns an error if `RaBitQ` training or encoding fails.
-    pub fn force_train_quantizer(&mut self) -> crate::error::Result<()> {
-        if self.rabitq_index.is_none() && !self.training_buffer.is_empty() {
+    pub fn force_train_quantizer(&self) -> crate::error::Result<()> {
+        if self.rabitq_index.read().is_none() && !self.training_buffer.lock().is_empty() {
             self.train_rabitq()?;
         }
         Ok(())
@@ -198,30 +232,48 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
 
 impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// Trains `RaBitQ` from accumulated samples and encodes them.
+    ///
+    /// Double-checks `rabitq_index` under write lock to prevent concurrent
+    /// training races.
     #[cfg(feature = "persistence")]
-    fn train_rabitq(&mut self) -> crate::error::Result<()> {
-        if self.training_buffer.is_empty() {
+    fn train_rabitq(&self) -> crate::error::Result<()> {
+        // Re-check under write lock: another thread may have trained already
+        let mut index_guard = self.rabitq_index.write();
+        if index_guard.is_some() {
             return Ok(());
         }
 
-        let rabitq = Arc::new(RaBitQIndex::train(&self.training_buffer, 42)?);
+        let buffer = self.training_buffer.lock();
+        if buffer.is_empty() {
+            return Ok(());
+        }
+
+        let rabitq = Arc::new(RaBitQIndex::train(&buffer, 42)?);
         let mut store = RaBitQVectorStore::new(self.dimension, self.inner.len() + 1000);
 
-        for vec in &self.training_buffer {
+        for vec in buffer.iter() {
             let encoded = rabitq.encode(vec)?;
             store.push(&encoded.bits, encoded.correction);
         }
 
-        self.rabitq_index = Some(rabitq);
-        self.rabitq_store = Some(store);
-        self.training_buffer.clear();
-        self.training_buffer.shrink_to_fit();
+        // Release training buffer before re-acquiring to clear it (non-reentrant).
+        drop(buffer);
+
+        // Store MUST be visible before index: search checks index first,
+        // and a Some(index) + None store would silently skip RaBitQ encoding.
+        *self.rabitq_store.write() = Some(store);
+        *index_guard = Some(rabitq);
+        drop(index_guard);
+
+        let mut buffer = self.training_buffer.lock();
+        buffer.clear();
+        buffer.shrink_to_fit();
         Ok(())
     }
 
     /// Stub for non-persistence builds (training requires ndarray/rayon).
     #[cfg(not(feature = "persistence"))]
-    fn train_rabitq(&mut self) -> crate::error::Result<()> {
+    fn train_rabitq(&self) -> crate::error::Result<()> {
         Ok(())
     }
 
@@ -232,8 +284,15 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         k: usize,
         ef_search: usize,
     ) -> Vec<(NodeId, f32)> {
-        let (Some(rabitq), Some(store)) = (self.rabitq_index.as_ref(), self.rabitq_store.as_ref())
-        else {
+        let index_guard = self.rabitq_index.read();
+        let Some(rabitq) = index_guard.as_ref() else {
+            return self.search_and_transform(query, k, ef_search);
+        };
+        let rabitq = Arc::clone(rabitq);
+        drop(index_guard);
+
+        let store_guard = self.rabitq_store.read();
+        let Some(store) = store_guard.as_ref() else {
             return self.search_and_transform(query, k, ef_search);
         };
 
@@ -243,7 +302,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
 
         let config = RaBitQPrecisionConfig::default();
         let candidates_k = k * config.oversampling_ratio;
-        let coarse = self.search_layer_rabitq(&prepared, candidates_k, ef_search, rabitq, store);
+        let coarse = self.search_layer_rabitq(&prepared, candidates_k, ef_search, &rabitq, store);
 
         if coarse.is_empty() {
             return Vec::new();
