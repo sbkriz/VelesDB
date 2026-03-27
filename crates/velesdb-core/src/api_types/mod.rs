@@ -101,6 +101,7 @@ pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
 ///
 /// Supports all named modes including `"autotune"` which adapts ef
 /// automatically based on collection statistics.
+#[cfg(feature = "persistence")]
 #[must_use]
 pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
     match mode.to_lowercase().as_str() {
