@@ -243,31 +243,30 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
             return Ok(());
         }
 
-        let buffer = self.training_buffer.lock();
-        if buffer.is_empty() {
-            return Ok(());
-        }
+        // Drain buffer atomically — no window for vectors to be pushed
+        // then cleared without encoding (fixes race reported by Devin Review).
+        let training_data = {
+            let mut buffer = self.training_buffer.lock();
+            if buffer.is_empty() {
+                return Ok(());
+            }
+            let data = std::mem::take(&mut *buffer);
+            buffer.shrink_to_fit();
+            data
+        };
 
-        let rabitq = Arc::new(RaBitQIndex::train(&buffer, 42)?);
+        let rabitq = Arc::new(RaBitQIndex::train(&training_data, 42)?);
         let mut store = RaBitQVectorStore::new(self.dimension, self.inner.len() + 1000);
 
-        for vec in buffer.iter() {
+        for vec in &training_data {
             let encoded = rabitq.encode(vec)?;
             store.push(&encoded.bits, encoded.correction);
         }
-
-        // Release training buffer before re-acquiring to clear it (non-reentrant).
-        drop(buffer);
 
         // Store MUST be visible before index: search checks index first,
         // and a Some(index) + None store would silently skip RaBitQ encoding.
         *self.rabitq_store.write() = Some(store);
         *index_guard = Some(rabitq);
-        drop(index_guard);
-
-        let mut buffer = self.training_buffer.lock();
-        buffer.clear();
-        buffer.shrink_to_fit();
         Ok(())
     }
 
