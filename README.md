@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.2">Download v1.7.2</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.8.0">Download v1.8.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -287,7 +287,7 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
 
-### Performance (v1.7.2)
+### Performance (v1.8.0)
 
 End-to-end numbers on the **complete production path**: WAL durability, payload storage, HNSW search, result resolution. No shortcuts.
 
@@ -672,7 +672,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Version | Status | Highlights |
 |---------|--------|------------|
-| **v1.7.2** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
+| **v1.8.0** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
+| **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix, Agent Memory SDK |
 | **v1.7.0** | Released | HNSW Upsert, GPU Acceleration, Batch SIMD, Chunked Insertion |
 | **v1.6.0** | Released | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
 | **v1.4.0** | Released | VelesQL v2.2.0, Multi-Score Fusion, Parallel Graph, 2,765 tests |
@@ -681,7 +682,9 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 <details>
 <summary>Detailed release history</summary>
 
-**v1.7.2** — 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Closes #404, #408, #410, #416, #417, #421, #422, #425, #430.
+**v1.8.0** — 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Bug fixes: bool→int conversion (#412), silent payload data loss (#413). Concurrency fixes: training buffer race, enum cache regression. Closes #404, #408, #410, #412, #413, #416, #417, #421, #422, #425, #430.
+
+**v1.7.2** — Partial sort in HNSW search_layer (#373), batch insert fast-path (#375), upsert lock contention elimination (3-phase pipeline, write-to-read lock). Agent Memory SDK with complete Python API.
 
 **v1.7.0** — HNSW upsert semantics, complete GPU multi-metric pipelines (wgpu), chunked batch insertion, search_layer batch SIMD + deferred indexing.
 
