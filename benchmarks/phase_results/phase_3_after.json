@@ -1,0 +1,399 @@
+{
+  "phase": "3",
+  "phase_name": "RaBitQ HNSW Integration",
+  "stage": "after",
+  "captured_at": "2026-03-27T13:13:20.416038",
+  "git_commit": "500a91b1",
+  "benchmarks": {
+    "search_layer": {
+      "status": "ok",
+      "results": {
+        "search_layer/128d/ef50/128": {
+          "mean_us": 4.9251,
+          "unit": "us"
+        },
+        "search_layer/128d/ef128/128": {
+          "mean_us": 5.362,
+          "unit": "us"
+        },
+        "search_layer/128d/ef256/128": {
+          "mean_us": 5.4039,
+          "unit": "us"
+        },
+        "search_layer/768d/ef50/768": {
+          "mean_us": 6.725,
+          "unit": "us"
+        },
+        "search_layer/768d/ef128/768": {
+          "mean_us": 6.698,
+          "unit": "us"
+        },
+        "search_layer/768d/ef256/768": {
+          "mean_us": 6.7147,
+          "unit": "us"
+        }
+      },
+      "raw_lines": 86
+    },
+    "smoke": {
+      "status": "ok",
+      "results": {
+        "smoke_search/10k_k10/128d": {
+          "mean_us": 164.5,
+          "unit": "us"
+        },
+        "smoke_hybrid/vector_plus_filter": {
+          "mean_us": 346.75,
+          "unit": "us"
+        }
+      },
+      "raw_lines": 40
+    },
+    "hnsw": {
+      "status": "ok",
+      "results": {
+        "hnsw_insert/sequential/1000x768d": {
+          "mean_us": 230550.0,
+          "unit": "us"
+        },
+        "hnsw_insert_parallel/parallel/1000x768d": {
+          "mean_us": 21240.0,
+          "unit": "us"
+        },
+        "hnsw_insert_parallel/parallel/10000x768d": {
+          "mean_us": 274470.0,
+          "unit": "us"
+        },
+        "hnsw_insert_fast/standard/1000x768d": {
+          "mean_us": 231960.0,
+          "unit": "us"
+        },
+        "hnsw_insert_fast/fast_insert/1000x768d": {
+          "mean_us": 84344.0,
+          "unit": "us"
+        },
+        "hnsw_insert_fast/turbo/1000x768d": {
+          "mean_us": 50524.0,
+          "unit": "us"
+        },
+        "hnsw_search_latency/top_k/10": {
+          "mean_us": 53.797,
+          "unit": "us"
+        },
+        "hnsw_search_latency/top_k/50": {
+          "mean_us": 81.885,
+          "unit": "us"
+        },
+        "hnsw_search_latency/top_k/100": {
+          "mean_us": 173.73,
+          "unit": "us"
+        },
+        "hnsw_search_throughput/100_queries_top10": {
+          "mean_us": 9279.9,
+          "unit": "us"
+        },
+        "collection_search/search_10k_top10": {
+          "mean_us": 53.853,
+          "unit": "us"
+        },
+        "distance_metrics/search/Cosine": {
+          "mean_us": 32.391,
+          "unit": "us"
+        },
+        "distance_metrics/search/Euclidean": {
+          "mean_us": 30.512,
+          "unit": "us"
+        },
+        "recall_validation/recall/128d": {
+          "mean_us": 20359.0,
+          "unit": "us"
+        },
+        "recall_validation/recall/384d": {
+          "mean_us": 30295.0,
+          "unit": "us"
+        },
+        "recall_validation/recall/768d": {
+          "mean_us": 47005.0,
+          "unit": "us"
+        },
+        "recall_validation/recall/1536d": {
+          "mean_us": 131380.0,
+          "unit": "us"
+        },
+        "recall_validation/recall/3072d": {
+          "mean_us": 283800.0,
+          "unit": "us"
+        }
+      },
+      "raw_lines": 221
+    },
+    "simd": {
+      "status": "ok",
+      "results": {
+        "dot_product/dispatch/128": {
+          "mean_us": 0.0045207,
+          "unit": "us"
+        },
+        "dot_product/dispatch/384": {
+          "mean_us": 0.0088488,
+          "unit": "us"
+        },
+        "dot_product/dispatch/768": {
+          "mean_us": 0.022523,
+          "unit": "us"
+        },
+        "dot_product/dispatch/1536": {
+          "mean_us": 0.035064,
+          "unit": "us"
+        },
+        "dot_product/dispatch/3072": {
+          "mean_us": 0.06995399999999999,
+          "unit": "us"
+        },
+        "euclidean_distance/dispatch/128": {
+          "mean_us": 0.0048471,
+          "unit": "us"
+        },
+        "euclidean_distance/dispatch/384": {
+          "mean_us": 0.0098339,
+          "unit": "us"
+        },
+        "euclidean_distance/dispatch/768": {
+          "mean_us": 0.020093,
+          "unit": "us"
+        },
+        "euclidean_distance/dispatch/1536": {
+          "mean_us": 0.038909,
+          "unit": "us"
+        },
+        "euclidean_distance/dispatch/3072": {
+          "mean_us": 0.080621,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/128": {
+          "mean_us": 0.0071963,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/128": {
+          "mean_us": 0.0075447,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/384": {
+          "mean_us": 0.017327000000000002,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/384": {
+          "mean_us": 0.017626000000000003,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/767": {
+          "mean_us": 0.032426,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/767": {
+          "mean_us": 0.032242,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/768": {
+          "mean_us": 0.029245,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/768": {
+          "mean_us": 0.029044,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/769": {
+          "mean_us": 0.030961,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/769": {
+          "mean_us": 0.031012,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/1536": {
+          "mean_us": 0.054275,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/1536": {
+          "mean_us": 0.055302,
+          "unit": "us"
+        },
+        "cosine_similarity/dispatch/3072": {
+          "mean_us": 0.10540000000000001,
+          "unit": "us"
+        },
+        "cosine_similarity/resolved/3072": {
+          "mean_us": 0.10561,
+          "unit": "us"
+        },
+        "hamming_f32/dispatch/128": {
+          "mean_us": 0.0065323,
+          "unit": "us"
+        },
+        "hamming_f32/dispatch/384": {
+          "mean_us": 0.016998000000000003,
+          "unit": "us"
+        },
+        "hamming_f32/dispatch/768": {
+          "mean_us": 0.031613,
+          "unit": "us"
+        },
+        "hamming_f32/dispatch/1536": {
+          "mean_us": 0.06261699999999999,
+          "unit": "us"
+        },
+        "hamming_f32/dispatch/3072": {
+          "mean_us": 0.12276999999999999,
+          "unit": "us"
+        },
+        "hamming_binary_u64/dispatch/512": {
+          "mean_us": 0.003561,
+          "unit": "us"
+        },
+        "hamming_binary_u64/dispatch/1024": {
+          "mean_us": 0.0048438,
+          "unit": "us"
+        },
+        "hamming_binary_u64/dispatch/2048": {
+          "mean_us": 0.008131600000000001,
+          "unit": "us"
+        },
+        "hamming_binary_u64/dispatch/4096": {
+          "mean_us": 0.014535,
+          "unit": "us"
+        },
+        "jaccard_similarity/fast/128": {
+          "mean_us": 0.0067625,
+          "unit": "us"
+        },
+        "jaccard_similarity/fast/384": {
+          "mean_us": 0.016131,
+          "unit": "us"
+        },
+        "jaccard_similarity/fast/768": {
+          "mean_us": 0.029258,
+          "unit": "us"
+        },
+        "jaccard_similarity/fast/1536": {
+          "mean_us": 0.050441,
+          "unit": "us"
+        },
+        "jaccard_similarity/fast/3072": {
+          "mean_us": 0.097943,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/native/128": {
+          "mean_us": 0.004480400000000001,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/engine/128": {
+          "mean_us": 0.0046369,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/native/384": {
+          "mean_us": 0.008847899999999999,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/engine/384": {
+          "mean_us": 0.0091385,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/native/768": {
+          "mean_us": 0.018244,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/engine/768": {
+          "mean_us": 0.019641,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/native/1536": {
+          "mean_us": 0.035779000000000005,
+          "unit": "us"
+        },
+        "engine_vs_native/dot_product/engine/1536": {
+          "mean_us": 0.037094999999999996,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/native/128": {
+          "mean_us": 0.0069257,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/engine/128": {
+          "mean_us": 0.0071147,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/native/384": {
+          "mean_us": 0.017269,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/engine/384": {
+          "mean_us": 0.017556000000000002,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/native/768": {
+          "mean_us": 0.030132000000000003,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/engine/768": {
+          "mean_us": 0.030143,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/native/1536": {
+          "mean_us": 0.054422,
+          "unit": "us"
+        },
+        "engine_vs_native/cosine/engine/1536": {
+          "mean_us": 0.054890999999999995,
+          "unit": "us"
+        },
+        "engine_batch_simulation/native_1000x768": {
+          "mean_us": 40.633,
+          "unit": "us"
+        },
+        "engine_batch_simulation/engine_1000x768": {
+          "mean_us": 41.402,
+          "unit": "us"
+        },
+        "batch_hamming_f32/batch_100/128": {
+          "mean_us": 0.77485,
+          "unit": "us"
+        },
+        "batch_hamming_f32/batch_100/384": {
+          "mean_us": 1.9857,
+          "unit": "us"
+        },
+        "batch_hamming_f32/batch_100/768": {
+          "mean_us": 3.4996,
+          "unit": "us"
+        },
+        "batch_hamming_f32/batch_100/1536": {
+          "mean_us": 6.8476,
+          "unit": "us"
+        },
+        "batch_jaccard/batch_100/128": {
+          "mean_us": 0.75797,
+          "unit": "us"
+        },
+        "batch_jaccard/batch_100/384": {
+          "mean_us": 1.8076,
+          "unit": "us"
+        },
+        "batch_jaccard/batch_100/768": {
+          "mean_us": 3.0719,
+          "unit": "us"
+        },
+        "batch_jaccard/batch_100/1536": {
+          "mean_us": 6.4107,
+          "unit": "us"
+        }
+      },
+      "raw_lines": 765
+    }
+  },
+  "recall": {
+    "recall_rust": {
+      "status": "pass",
+      "returncode": 0
+    }
+  }
+}

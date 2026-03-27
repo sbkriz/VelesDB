@@ -43,6 +43,8 @@ mod graph;
 pub(crate) mod layer;
 mod ordered_float;
 mod quantization;
+pub(crate) mod rabitq_precision;
+mod rabitq_traversal;
 mod search;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
@@ -56,6 +58,7 @@ pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::{NativeHnsw, NO_ENTRY_POINT};
 pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
+pub use rabitq_precision::{RaBitQPrecisionConfig, RaBitQPrecisionHnsw};
 pub use search::SearchResult;
 
 #[cfg(test)]
@@ -72,5 +75,9 @@ mod layer_tests;
 mod ordered_float_tests;
 #[cfg(test)]
 mod quantization_tests;
+#[cfg(test)]
+mod rabitq_precision_tests;
+#[cfg(test)]
+mod search_pipeline_tests;
 #[cfg(test)]
 mod tests;
