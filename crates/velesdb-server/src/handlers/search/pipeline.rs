@@ -6,8 +6,8 @@ use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use crate::types::{
-    mode_to_search_quality, ErrorResponse, IdScoreResult, SearchIdsResponse,
-    SearchRequest, SearchResponse, SearchResultResponse,
+    mode_to_search_quality, ErrorResponse, IdScoreResult, SearchIdsResponse, SearchRequest,
+    SearchResponse, SearchResultResponse,
 };
 use crate::AppState;
 
