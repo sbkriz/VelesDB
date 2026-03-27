@@ -155,7 +155,11 @@ impl Database {
         }
     }
 
-    /// Flushes all WALs across the typed collection registries.
+    /// Flushes all collections including `vectors.idx` serialization.
+    ///
+    /// Issue #423: Uses `flush_full()` to ensure the vector index file is
+    /// up-to-date, avoiding a full WAL replay on the next startup. This is
+    /// the correct method for graceful shutdown.
     ///
     /// Best-effort: logs warnings for individual flush failures but continues
     /// flushing remaining collections. Returns the count of failures.
@@ -227,24 +231,27 @@ fn flush_registry<T: Flushable>(
 }
 
 /// Internal trait for deduplicating `flush_all` iteration across collection types.
+///
+/// Issue #423: Uses `flush_full()` to include `vectors.idx` serialization,
+/// ensuring fast startup after graceful shutdown.
 trait Flushable {
     fn flush(&self) -> crate::Result<()>;
 }
 
 impl Flushable for VectorCollection {
     fn flush(&self) -> crate::Result<()> {
-        self.flush()
+        self.flush_full()
     }
 }
 
 impl Flushable for GraphCollection {
     fn flush(&self) -> crate::Result<()> {
-        self.flush()
+        self.flush_full()
     }
 }
 
 impl Flushable for MetadataCollection {
     fn flush(&self) -> crate::Result<()> {
-        self.flush()
+        self.flush_full()
     }
 }

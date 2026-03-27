@@ -37,6 +37,8 @@ mod wal_batcher_tests;
 #[cfg(test)]
 mod compaction_tests;
 #[cfg(test)]
+mod deferred_index_tests;
+#[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
 mod histogram_tests;

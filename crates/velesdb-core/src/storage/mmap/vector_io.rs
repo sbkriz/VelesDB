@@ -261,9 +261,16 @@ impl VectorStorage for MmapStorage {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        // Explicit durability barrier:
-        // 1) flush mmap bytes, 2) flush+fsync WAL, 3) persist+fsync index file.
-        // Callers requiring durable state across crashes should call this method.
+        // Issue #423: Fast durability barrier — WAL + mmap only, no index file.
+        //
+        // The WAL contains enough information to reconstruct the index on
+        // recovery via `wal_replay::replay_wal_to_index`. Writing `vectors.idx`
+        // on every flush added ~5-10ms (serialize + fsync) that is unnecessary
+        // for crash safety.
+        //
+        // Use `flush_full()` to also persist the index file (e.g., before
+        // shutdown or compaction), or `flush_index()` to write only the index.
+        //
         // 1. Flush Mmap
         self.mmap.write().flush()?;
 
@@ -273,20 +280,6 @@ impl VectorStorage for MmapStorage {
             wal.flush()?;
             wal.get_ref().sync_all()?;
         }
-
-        // 3. Save Index (EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization)
-        // EPIC-069/US-001: fsync index file for crash recovery on Windows
-        let index_path = self.path.join("vectors.idx");
-        let file = File::create(&index_path)?;
-        let mut writer = io::BufWriter::new(file);
-        let flat_index = self.index.to_hashmap();
-        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
-        writer.write_all(&bytes)?;
-        writer.flush()?;
-        writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?
-            .sync_all()?;
 
         Ok(())
     }

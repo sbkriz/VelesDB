@@ -376,7 +376,10 @@ impl MmapStorage {
             let data_path = self.path.join("vectors.dat");
             self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
 
-            self.flush()?;
+            // Issue #423: Use flush_full() after compaction because compact()
+            // rewrites all offsets — the old vectors.idx is invalid and must be
+            // rewritten to avoid a full WAL replay on next startup.
+            self.flush_full()?;
         }
 
         Ok(bytes_reclaimed)
@@ -475,6 +478,47 @@ impl MmapStorage {
             epoch_ptr: &self.remap_epoch,
             epoch_at_creation,
         }))
+    }
+
+    /// Persists the `vectors.idx` index file to disk with fsync.
+    ///
+    /// Issue #423: Extracted from the former `flush()` to allow callers to
+    /// control when the (expensive) index serialization happens. The WAL
+    /// provides crash recovery even if this file is stale, so it can be
+    /// deferred to compaction or explicit shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or I/O fails.
+    pub fn flush_index(&self) -> io::Result<()> {
+        // EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization
+        // EPIC-069/US-001: fsync index file for crash recovery on Windows
+        let index_path = self.path.join("vectors.idx");
+        let file = File::create(&index_path)?;
+        let mut writer = io::BufWriter::new(file);
+        let flat_index = self.index.to_hashmap();
+        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
+        writer.write_all(&bytes)?;
+        writer.flush()?;
+        writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?
+            .sync_all()?;
+        Ok(())
+    }
+
+    /// Full durability flush: WAL + mmap + `vectors.idx`.
+    ///
+    /// Equivalent to the pre-#423 `flush()` behavior. Use this on shutdown
+    /// or before compaction to ensure the index file is up-to-date, avoiding
+    /// a full WAL replay on the next startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any I/O operation fails.
+    pub fn flush_full(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.flush_index()
     }
 
     /// Attempts a best-effort durability sync during shutdown.

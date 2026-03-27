@@ -66,11 +66,26 @@ impl MetadataCollection {
 
     /// Flushes to disk.
     ///
+    /// Issue #423: This fast-path flush skips `vectors.idx` serialization.
+    /// The WAL provides crash recovery for the vector index.
+    ///
     /// # Errors
     ///
     /// Returns an error if the flush fails.
     pub fn flush(&self) -> Result<()> {
         self.inner.flush()
+    }
+
+    /// Full durability flush including `vectors.idx` serialization.
+    ///
+    /// Issue #423: Use on graceful shutdown to avoid a full WAL replay
+    /// on the next startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the flush fails.
+    pub fn flush_full(&self) -> Result<()> {
+        self.inner.flush_full()
     }
 
     // -------------------------------------------------------------------------

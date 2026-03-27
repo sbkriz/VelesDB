@@ -651,6 +651,9 @@ impl Collection {
     /// Returns an error if storage operations fail.
     pub fn flush(&self) -> Result<()> {
         self.save_config()?;
+        // Issue #423: vector_storage.flush() is now a fast path (WAL + mmap
+        // only, no vectors.idx serialization). The WAL provides crash recovery
+        // even with a stale index file.
         self.vector_storage.write().flush()?;
         self.payload_storage.write().flush()?;
         // Drain delta buffer into HNSW before persisting the index.
@@ -662,6 +665,23 @@ impl Collection {
         self.index.save(&self.path)?;
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()
+    }
+
+    /// Full durability flush including `vectors.idx` serialization.
+    ///
+    /// Issue #423: This is equivalent to the pre-#423 `flush()` behavior.
+    /// Use on graceful shutdown or before compaction to ensure the vector
+    /// index file is up-to-date, avoiding a full WAL replay on the next
+    /// startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn flush_full(&self) -> Result<()> {
+        self.flush()?;
+        // Write the deferred vectors.idx after all other flush steps.
+        self.vector_storage.read().flush_index()?;
+        Ok(())
     }
 
     /// Drains the delta buffer into the HNSW index (if active).
