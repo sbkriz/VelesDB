@@ -6,6 +6,7 @@
 //! - GPU (future: CUDA/Vulkan compute)
 
 use crate::distance::DistanceMetric;
+use smallvec::SmallVec;
 
 /// Trait for distance computation engines.
 ///
@@ -54,15 +55,21 @@ pub(crate) fn simd_distance_for_metric(metric: DistanceMetric, a: &[f32], b: &[f
 
 /// Batch distance with CPU prefetch hints to hide memory latency.
 ///
+/// Returns `SmallVec<[f32; 32]>` to avoid heap allocation for typical
+/// batch sizes (M=16..32 neighbors). For batches up to 32 elements
+/// (~128 bytes), the result lives entirely on the stack.
+///
 /// Used by `SimdDistance`, `AdaptiveSimdDistance`, and `CachedSimdDistance`.
+/// Also called directly from the HNSW search hot loop to bypass the
+/// `DistanceEngine::batch_distance` trait method (which returns `Vec<f32>`).
 #[inline]
 pub(crate) fn batch_distance_with_prefetch(
     engine: &impl DistanceEngine,
     query: &[f32],
     candidates: &[&[f32]],
-) -> Vec<f32> {
+) -> SmallVec<[f32; 32]> {
     let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
-    let mut results = Vec::with_capacity(candidates.len());
+    let mut results = SmallVec::with_capacity(candidates.len());
 
     for (i, candidate) in candidates.iter().enumerate() {
         if i + prefetch_distance < candidates.len() {
@@ -130,7 +137,7 @@ impl DistanceEngine for SimdDistance {
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        batch_distance_with_prefetch(self, query, candidates)
+        batch_distance_with_prefetch(self, query, candidates).into_vec()
     }
 
     fn metric(&self) -> DistanceMetric {
@@ -247,7 +254,7 @@ impl DistanceEngine for CachedSimdDistance {
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        batch_distance_with_prefetch(self, query, candidates)
+        batch_distance_with_prefetch(self, query, candidates).into_vec()
     }
 
     fn metric(&self) -> DistanceMetric {

@@ -1,6 +1,6 @@
 //! HNSW search operations.
 
-use super::super::distance::DistanceEngine;
+use super::super::distance::{batch_distance_with_prefetch, DistanceEngine};
 use super::super::layer::{Layer, NodeId};
 use super::super::ordered_float::OrderedFloat;
 use super::{NativeHnsw, NO_ENTRY_POINT};
@@ -767,7 +767,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                         return false;
                     }
                     let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
-                    let distances = distance.batch_distance(query, &vecs);
+                    let distances = batch_distance_with_prefetch(distance, query, &vecs);
                     process_batch_results(&batch, &distances, ef, state)
                 })
                 .unwrap_or(false);
