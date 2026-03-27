@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-03-27
+
+### Performance (Papers to Production)
+
+- **Software Pipelining** — Peek-based speculative prefetch in HNSW search for datasets >10K vectors ([arXiv:2505.07621](https://arxiv.org/abs/2505.07621))
+- **RaBitQ Dual-Precision HNSW** — 32x bandwidth reduction via binary graph traversal + f32 reranking ([arXiv:2405.12497](https://arxiv.org/abs/2405.12497))
+- **PDX Block-Columnar Layout** — 64-vector block transpose for SIMD-parallel distance computation ([arXiv:2503.04422](https://arxiv.org/abs/2503.04422))
+- **SmallVec Batch Distances** — Eliminate heap allocation on hot search path via `SmallVec<[f32; 32]>`
+- **AutoTune Search** — Adaptive ef_search computed from collection size + dimension (`SearchQuality::AutoTune`)
+- **Trigram SIMD Fingerprint** — 256-bit bloom filter with Broder 1997 Jaccard estimator for text search pre-filtering
+
+### Features
+
+- **AutoTune via REST/Python** — `mode="autotune"` in search requests, `search_with_quality()` in Python SDK
+- **RaBitQ Backend** — `StorageMode::RaBitQ` creates a RaBitQ-precision HNSW backend with `HnswBackend` enum
+- **PDX Auto-Build** — Columnar layout built automatically after BFS graph reordering
+- **Ecosystem Propagation** — `StorageMode::RaBitQ` available in all 8 crates + TypeScript SDK
+- **Official Benchmark Script** — `benchmarks/velesdb_benchmark.py --recall` for reproducible user-facing benchmarks
+
+### Bug Fixes
+
+- **#412** — bool→int silent conversion in Python payloads (bool check before i64 extraction)
+- **#413** — Silent payload data loss for unsupported types (now raises `ValueError`)
+- **BM25 Stale Entries** — `upsert_bulk_from_raw` now removes BM25 entries for `None` payloads
+- **Training Buffer Race** — Atomic drain via `std::mem::take` eliminates race in `train_rabitq()`
+- **Enum Cache Regression** — Box RaBitQ variant to prevent cache line inflation
+- **Inconsistent Snapshot** — Set `rabitq_store` before `rabitq_index` during training
+
+### Documentation
+
+- Updated: TUNING_GUIDE, NATIVE_HNSW, CONCURRENCY_MODEL, SOUNDNESS
+- README: honest production-path benchmarks (WAL ON, recall >= 96%)
+- Research Foundations: 13 peer-reviewed techniques referenced
+
+### Benchmarks (i9-14900KF, 64GB DDR5, WAL ON, recall@10 >= 96%)
+
+- 10K/384D: **18.5K vec/s** insert, **450us** p50 search
+- 50K/384D: **5.9K vec/s** insert, **1.1ms** p50 search
+- vs v0.8.10: insert **x55**, search **x4**, disk **-47%**
+
+### Closes
+
+#404, #408, #410, #412, #413, #416, #417, #421, #422, #425, #430
+
 ## [1.7.2] - 2026-03-25
 
 ### Performance
