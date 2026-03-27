@@ -8,6 +8,7 @@
 #![allow(clippy::cast_possible_truncation)] // RoaringBitmap uses u32, truncation is acceptable
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for scoring
 
+use super::fingerprint::TrigramFingerprint;
 use roaring::RoaringBitmap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashSet;
@@ -95,6 +96,9 @@ pub struct TrigramStats {
 ///
 /// Provides O(1) trigram lookup and O(k) intersection for k trigrams.
 /// Memory-efficient through Roaring Bitmap compression.
+///
+/// Each document also stores a [`TrigramFingerprint`] (256-bit bloom filter)
+/// for fast approximate Jaccard scoring via bitwise AND + popcount.
 #[derive(Debug, Default)]
 pub struct TrigramIndex {
     /// Inverted index: trigram → bitmap of doc IDs containing it.
@@ -105,6 +109,9 @@ pub struct TrigramIndex {
 
     /// All document IDs (for empty pattern queries).
     all_docs: RoaringBitmap,
+
+    /// Trigram fingerprints for fast approximate Jaccard scoring.
+    doc_fingerprints: FxHashMap<u64, TrigramFingerprint>,
 }
 
 impl TrigramIndex {
@@ -148,6 +155,10 @@ impl TrigramIndex {
 
         let trigrams = extract_trigrams(text);
 
+        // Build and store fingerprint for fast approximate scoring.
+        let fingerprint = TrigramFingerprint::from_trigram_set(&trigrams);
+        self.doc_fingerprints.insert(doc_id, fingerprint);
+
         // Store trigrams for this document
         let trigram_set: FxHashSet<Trigram> = trigrams.iter().copied().collect();
         self.doc_trigrams.insert(doc_id, trigram_set);
@@ -177,6 +188,8 @@ impl TrigramIndex {
         // SAFETY: Bounds checked above
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
+        self.doc_fingerprints.remove(&doc_id);
+
         if let Some(trigrams) = self.doc_trigrams.remove(&doc_id) {
             // Remove from inverted index
             for trigram in trigrams {
@@ -271,10 +284,47 @@ impl TrigramIndex {
         }
     }
 
+    /// Fast approximate Jaccard score using bloom-filter fingerprints.
+    ///
+    /// Uses bitwise AND + popcount on 256-bit fingerprints (~8 cycles)
+    /// instead of `HashSet` intersection (~30-50 cycles per lookup).
+    ///
+    /// Returns 0.0 if the document is not in the index.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc_id` - Document to score
+    /// * `query_fp` - Precomputed fingerprint of the query trigrams
+    /// * `query_count` - Exact trigram count of the query (for Jaccard denominator)
+    #[must_use]
+    pub fn score_jaccard_fast(
+        &self,
+        doc_id: u64,
+        query_fp: &TrigramFingerprint,
+        query_count: usize,
+    ) -> f32 {
+        let (Some(doc_fp), Some(doc_tris)) = (
+            self.doc_fingerprints.get(&doc_id),
+            self.doc_trigrams.get(&doc_id),
+        ) else {
+            return 0.0;
+        };
+
+        let doc_count = doc_tris.len();
+        if doc_count == 0 || query_count == 0 {
+            return 0.0;
+        }
+
+        doc_fp.approx_jaccard(query_fp, doc_count, query_count)
+    }
+
     /// Search for documents matching a LIKE pattern with threshold pruning.
     ///
     /// Returns a vector of (`doc_id`, score) tuples sorted by score descending.
     /// Documents with score below threshold are filtered out.
+    ///
+    /// Uses [`TrigramFingerprint`] bloom filters for fast approximate Jaccard
+    /// scoring during the ranking pass.
     ///
     /// # Arguments
     ///
@@ -284,6 +334,8 @@ impl TrigramIndex {
     /// # Performance
     ///
     /// Threshold pruning reduces result set size and post-processing overhead.
+    /// Fingerprint-based scoring replaces per-document `HashSet` intersection
+    /// with ~8-cycle bitwise AND + popcount.
     #[must_use]
     pub fn search_like_ranked(&self, pattern: &str, threshold: f32) -> Vec<(u64, f32)> {
         // Empty pattern returns all docs with score 0
@@ -303,12 +355,16 @@ impl TrigramIndex {
             return Vec::new();
         }
 
-        // Score and filter candidates
+        // Build query fingerprint once for the whole scoring pass.
+        let query_fp = TrigramFingerprint::from_trigram_set(&query_trigrams);
+        let query_count = query_trigrams.len();
+
+        // Score candidates using fast fingerprint-based Jaccard.
         let mut results: Vec<(u64, f32)> = candidates
             .iter()
             .map(|id| {
                 let doc_id = u64::from(id);
-                let score = self.score_jaccard(doc_id, &query_trigrams);
+                let score = self.score_jaccard_fast(doc_id, &query_fp, query_count);
                 (doc_id, score)
             })
             .filter(|(_, score)| *score >= threshold)
@@ -332,10 +388,13 @@ impl TrigramIndex {
             .sum();
         let doc_trigrams_size = self.doc_trigrams.len() * 64; // rough estimate
 
+        // Each TrigramFingerprint is 32 bytes (4 x u64) + map overhead (~16 bytes).
+        let fingerprint_size = self.doc_fingerprints.len() * 48;
+
         TrigramStats {
             doc_count: self.all_docs.len(),
             trigram_count: self.inverted.len(),
-            memory_bytes: inverted_size + bitmap_size + doc_trigrams_size,
+            memory_bytes: inverted_size + bitmap_size + doc_trigrams_size + fingerprint_size,
         }
     }
 }

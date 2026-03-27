@@ -29,10 +29,12 @@
 //! | 1M     | 4.5s          | < 100ms      | > 45x   |
 #![allow(clippy::doc_markdown)] // Includes architecture/ISA identifiers in markdown tables.
 
+pub mod fingerprint;
 pub mod gpu;
 mod index;
 pub mod simd;
 
+pub use fingerprint::TrigramFingerprint;
 pub use gpu::TrigramComputeBackend;
 pub use index::{extract_trigrams, TrigramIndex};
 pub use simd::{extract_trigrams_simd, TrigramSimdLevel};
@@ -45,5 +47,7 @@ mod thread_safety_tests;
 #[cfg(test)]
 pub use thread_safety_tests::ConcurrentTrigramIndex;
 
+#[cfg(test)]
+mod fingerprint_tests;
 #[cfg(test)]
 mod tests;
