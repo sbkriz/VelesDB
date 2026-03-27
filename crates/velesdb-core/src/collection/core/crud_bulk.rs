@@ -207,6 +207,10 @@ impl Collection {
     }
 
     /// Updates BM25 text index from raw payload slices.
+    ///
+    /// Points with `Some(payload)` get their text indexed.
+    /// Points with `None` payload get their stale BM25 entry removed
+    /// (consistent with `update_text_index` in `crud.rs`).
     fn update_text_index_from_raw(
         &self,
         ids: &[u64],
@@ -219,6 +223,8 @@ impl Collection {
                 if !text.is_empty() {
                     self.text_index.add_document(ids[i], &text);
                 }
+            } else {
+                self.text_index.remove_document(ids[i]);
             }
         }
     }
