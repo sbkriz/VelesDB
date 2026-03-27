@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "tool": "velesdb_benchmark.py",
+  "machine": {
+    "cpu": "Intel(R) Core(TM) i9-14900KF",
+    "ram": "64 GB",
+    "os": "Windows-10-10.0.26200-SP0",
+    "python": "3.10.18",
+    "velesdb": "1.7.2",
+    "numpy": "2.2.5",
+    "date": "2026-03-27"
+  },
+  "protocol": {
+    "wal": true,
+    "recall_target": ">=95%",
+    "seed": 42,
+    "search_rounds": 200,
+    "warmup_discarded": true,
+    "batch_size": 5000
+  },
+  "results": [
+    {
+      "dataset": "10K x 384D",
+      "num_vectors": 10000,
+      "dimension": 384,
+      "insert_total_s": 3.0,
+      "insert_rate": 3337,
+      "search_avg_us": 408,
+      "search_p50_us": 391,
+      "search_p99_us": 701,
+      "search_min_us": 353,
+      "search_max_us": 904,
+      "search_rounds": 200,
+      "db_size_mb": 31.2
+    },
+    {
+      "dataset": "50K x 384D",
+      "num_vectors": 50000,
+      "dimension": 384,
+      "insert_total_s": 7.64,
+      "insert_rate": 6542,
+      "search_avg_us": 1051,
+      "search_p50_us": 1034,
+      "search_p99_us": 1350,
+      "search_min_us": 917,
+      "search_max_us": 1352,
+      "search_rounds": 200,
+      "db_size_mb": 161.8
+    }
+  ],
+  "recall": {
+    "dataset": "10K x 384D (clustered)",
+    "recall_at_10_mean": 0.964,
+    "recall_at_10_min": 0.6,
+    "recall_queries": 100
+  }
+}
