@@ -49,6 +49,18 @@ impl HnswIndex {
     /// Computes exact SIMD distance between query and vector based on metric.
     ///
     /// This helper eliminates code duplication across search methods.
+    ///
+    /// # Invariant
+    ///
+    /// This method intentionally uses metric-specific `simd_native` functions
+    /// (e.g. `euclidean_native` which includes sqrt) rather than the HNSW inner
+    /// engine's `compute_distance()` (which returns squared L2 for Euclidean
+    /// via `CachedSimdDistance`). This ensures reranking scores in
+    /// `rerank_candidates_simd` are already in the user-visible metric space
+    /// and do not require a subsequent `transform_score()` call. Changing this
+    /// to use the inner engine's `compute_distance()` would produce squared L2
+    /// scores that break reranking sort order against `transform_score`-applied
+    /// HNSW results.
     #[inline]
     pub(crate) fn compute_distance(&self, query: &[f32], vector: &[f32]) -> f32 {
         match self.metric {
@@ -73,9 +85,9 @@ impl HnswIndex {
         let neighbours = inner.search(query, k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-        for n in &neighbours {
-            if let Some(id) = self.mappings.get_id(n.d_id) {
-                let score = inner.transform_score(n.distance);
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
+                let score = inner.transform_score(raw_dist);
                 results.push(ScoredResult::new(id, score));
             }
         }
@@ -91,10 +103,11 @@ impl HnswIndex {
         k: usize,
         ef_search: usize,
     ) -> Option<usize> {
-        // Skip reranking for Fast quality or if vector storage is disabled
+        // Skip reranking for Fast, Adaptive, or AutoTune quality (these handle
+        // their own exploration strategy) or if vector storage is disabled.
         if matches!(
             quality,
-            SearchQuality::Fast | SearchQuality::Adaptive { .. }
+            SearchQuality::Fast | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || !self.enable_vector_storage
         {
             return None;
@@ -105,7 +118,10 @@ impl HnswIndex {
         let min_rerank_k = match quality {
             SearchQuality::Balanced => k * 2,
             SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
-            SearchQuality::Fast | SearchQuality::Perfect | SearchQuality::Adaptive { .. } => {
+            SearchQuality::Fast
+            | SearchQuality::Perfect
+            | SearchQuality::Adaptive { .. }
+            | SearchQuality::AutoTune => {
                 return None;
             }
         };
@@ -198,6 +214,14 @@ impl HnswIndex {
         // Adaptive two-phase: start with min_ef, escalate if query is hard
         if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
             return self.search_adaptive(query, k, min_ef.max(k), max_ef);
+        }
+
+        // AutoTune: compute ef range from collection statistics, then delegate
+        // to the same adaptive two-phase algorithm.
+        if matches!(quality, SearchQuality::AutoTune) {
+            let (min_ef, max_ef) =
+                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
+            return self.search_adaptive(query, k, min_ef, max_ef);
         }
 
         let ef_search = quality.ef_search(k);

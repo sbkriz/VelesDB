@@ -342,3 +342,96 @@ fn test_dual_precision_config_defaults() {
     assert!(config.use_int8_traversal);
     assert_eq!(config.min_index_size, 10_000);
 }
+
+// =========================================================================
+// Regression: rerank_with_exact_f32 applies transform_score (C-2 / #420)
+// =========================================================================
+
+/// Verifies that `DualPrecisionHnsw` with `CachedSimdDistance` (production
+/// engine) returns actual Euclidean distances (with sqrt), NOT squared L2.
+///
+/// Before the fix, `rerank_with_exact_f32` returned raw `compute_distance()`
+/// values which are squared L2 for Euclidean under `CachedSimdDistance`.
+#[test]
+fn test_rerank_euclidean_returns_sqrt_not_squared_with_cached_engine() {
+    use super::distance::CachedSimdDistance;
+
+    let dim = 32;
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let mut hnsw = DualPrecisionHnsw::new(engine, dim, 16, 100, 1000).expect("test");
+
+    // Insert two known vectors: origin and a vector at distance 1.0 per component
+    // v0 = [0, 0, 0, ...]
+    // v1 = [1, 1, 1, ...]
+    // Expected Euclidean distance from v0 to v1 = sqrt(32 * 1^2) = sqrt(32) ~= 5.657
+    // Squared L2 would be 32.0 (the bug value)
+    let v0 = vec![0.0_f32; dim];
+    let v1 = vec![1.0_f32; dim];
+    hnsw.insert(&v0).expect("test");
+    hnsw.insert(&v1).expect("test");
+
+    // Force-train to enable dual-precision search path
+    hnsw.force_train_quantizer();
+
+    // Search from v0 — expect both v0 (dist=0) and v1 (dist=sqrt(32))
+    let results = hnsw.search(&v0, 2, 50);
+    assert!(
+        results.len() >= 2,
+        "Expected at least 2 results, got {}",
+        results.len()
+    );
+
+    // Find v1's distance in results
+    let v1_dist = results
+        .iter()
+        .find(|(id, _)| *id == 1)
+        .map(|(_, d)| *d)
+        .expect("v1 should be in results");
+
+    let expected = (dim as f32).sqrt(); // sqrt(32) ~= 5.657
+    let tolerance = 0.01;
+
+    // This assertion would fail pre-fix: v1_dist would be 32.0 (squared L2)
+    assert!(
+        (v1_dist - expected).abs() < tolerance,
+        "Distance to v1 should be sqrt({dim}) ~= {expected:.3}, got {v1_dist:.3} \
+         (if ~{dim}.0, transform_score was not applied)"
+    );
+}
+
+/// Same regression test for Cosine metric — verifies transform_score clamps
+/// cosine similarity correctly through the dual-precision rerank path.
+#[test]
+fn test_rerank_cosine_applies_transform_with_cached_engine() {
+    use super::distance::CachedSimdDistance;
+
+    let dim = 32;
+    let engine = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
+    let mut hnsw = DualPrecisionHnsw::new(engine, dim, 16, 100, 1000).expect("test");
+
+    // Insert normalized vectors
+    let norm = 1.0 / (dim as f32).sqrt();
+    let v0: Vec<f32> = vec![norm; dim];
+    // v1 is orthogonal-ish to v0
+    let mut v1 = vec![0.0_f32; dim];
+    let v1_norm = 1.0 / (dim as f32 / 2.0).sqrt();
+    for slot in v1.iter_mut().take(dim / 2) {
+        *slot = v1_norm;
+    }
+
+    hnsw.insert(&v0).expect("test");
+    hnsw.insert(&v1).expect("test");
+
+    hnsw.force_train_quantizer();
+
+    let results = hnsw.search(&v0, 2, 50);
+    assert!(!results.is_empty());
+
+    // All cosine scores should be in [0, 1] after transform_score clamping
+    for (id, score) in &results {
+        assert!(
+            *score >= 0.0 && *score <= 1.0,
+            "Cosine score for node {id} should be in [0,1], got {score}"
+        );
+    }
+}

@@ -68,20 +68,20 @@ All AVX2 cosine kernels use vectorized 8-wide remainder handling, reducing the
 scalar tail from up to 31 elements to at most 7. AVX-512 kernels use masked
 loads for zero-cost remainder.
 
-## Performance Benchmarks (March 2026)
+## Performance Benchmarks (March 27, 2026)
 
 ### Distance Functions (768D vectors)
 
 | Function | Latency | Throughput | vs Previous |
 |----------|---------|------------|-------------|
-| `dot_product_native` | **17.6ns** | 43.6 Gelem/s | Baseline |
+| `dot_product_native` | **19.8ns** | 38.8 Gelem/s | Baseline |
 | `euclidean_native` | **22.5ns** | 34.1 Gelem/s | Improved |
 | `cosine_similarity_native` | **33.1ns** | 23.2 Gelem/s | Optimized (4-acc, single-sqrt finish) |
-| `cosine_normalized_native` | **17.6ns** | 43.6 Gelem/s | Same as dot |
+| `cosine_normalized_native` | **19.8ns** | 38.8 Gelem/s | Same as dot |
 | `hamming_distance_native` | **35.8ns** | 21.5M ops/s | FP-domain 4-acc (no cross-domain penalty) + NEON + batch |
 | `jaccard_similarity_native` | **35.1ns** | 21.9 Gelem/s | Optimized (4-acc + NEON + batch) |
 
-*Measured March 24, 2026 on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.*
+*Measured March 27, 2026 on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.92.0, Windows 11 Pro, sequential run on idle machine.*
 
 ### Scaling by Dimension (simd_native)
 
@@ -89,7 +89,7 @@ loads for zero-cost remainder.
 |-----------|--------|-------------|-------|
 | 128 | 8.1ns | 5.4ns | MiniLM |
 | 384 | 20.1ns | 12.0ns | all-MiniLM-L6-v2 |
-| 768 | 33.1ns | 17.6ns | BERT, ada-002 |
+| 768 | 33.1ns | 19.8ns | BERT, ada-002 |
 | 1536 | 69.0ns | 43.8ns | text-embedding-3-small |
 | 3072 | 112.2ns | 91.2ns | text-embedding-3-large |
 

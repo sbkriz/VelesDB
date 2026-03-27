@@ -218,6 +218,38 @@ impl Collection {
         ))
     }
 
+    /// Performs vector similarity search with a specific [`SearchQuality`] profile.
+    ///
+    /// Use this instead of [`search_with_ef`] for named quality modes like
+    /// [`SearchQuality::AutoTune`] that compute ef dynamically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub fn search_with_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let metric = config.metric;
+        drop(config);
+
+        let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        Ok(resolve::resolve_scored_results(
+            &index_results,
+            &*vector_storage,
+            &*payload_storage,
+        ))
+    }
+
     /// Performs fast vector similarity search returning only IDs and scores.
     ///
     /// Perf: This is ~3-5x faster than `search()` because it skips vector/payload retrieval.

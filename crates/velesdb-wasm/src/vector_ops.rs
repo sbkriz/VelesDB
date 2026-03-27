@@ -144,9 +144,8 @@ impl ScratchBuffer {
                 let start = idx * dimension;
                 &data[start..start + dimension]
             }
-            // ProductQuantization shares the SQ8 decode path because WASM-side PQ
-            // centroids are pre-decoded to per-vector SQ8 codes during ingestion.
-            StorageMode::SQ8 | StorageMode::ProductQuantization => {
+            // ProductQuantization/RaBitQ share the SQ8 decode path in WASM context.
+            StorageMode::SQ8 | StorageMode::ProductQuantization | StorageMode::RaBitQ => {
                 let start = idx * dimension;
                 let min = sq8_mins[idx];
                 let scale = sq8_scales[idx];

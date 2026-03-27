@@ -268,7 +268,68 @@ Use the comparison script to analyze x86_64 vs ARM64 performance:
 
 ---
 
-## �📚 References
+## Performance Phase Gate Protocol
+
+When implementing performance optimizations across multiple phases, use the
+`perf_phase_gate.py` script to ensure no regressions slip through.
+
+### Workflow Per Phase
+
+```bash
+# 1. BEFORE starting implementation: capture baseline
+python scripts/perf_phase_gate.py capture --phase 1 --stage before
+
+# 2. Implement the optimization
+# ...
+
+# 3. AFTER implementation: full gate check (captures + compares + recall)
+python scripts/perf_phase_gate.py gate --phase 1
+
+# 4. View summary of all phases
+python scripts/perf_phase_gate.py summary
+```
+
+### What the Gate Checks
+
+| Check | Threshold | Blocks PR? |
+|-------|-----------|------------|
+| Search latency regression | > 5% | Yes |
+| Insert throughput regression | > 10% | Yes |
+| SIMD kernel regression | > 3% | Yes |
+| Recall@10 drop | Any | Yes |
+| Recall Rust tests | Must pass | Yes |
+
+### Phase IDs
+
+| ID | Optimization |
+|----|-------------|
+| 1 | Software Pipelining |
+| 2 | RaBitQ SIMD Popcount |
+| 3 | RaBitQ HNSW Integration |
+| 4 | PDX Columnar Layout |
+| 5A | Cross-Layer Distance Cache |
+| 5B | Fused Batch Distance |
+| 5C | Auto-EF Tuning |
+| 6 | Trigram SIMD |
+
+### Results Storage
+
+Phase results are stored in `benchmarks/phase_results/`:
+- `phase_1_before.json` — baseline before Phase 1
+- `phase_1_after.json` — results after Phase 1
+- The reference baseline is `benchmarks/baseline_local_perf_optim.json`
+
+### Rules
+
+1. **Never skip the "before" capture** — without it, comparison is impossible
+2. **Run benchmarks sequentially** — never in parallel (resource contention)
+3. **Close background apps** before capturing (see System Preparation above)
+4. **Gate must pass** before merging any optimization phase
+5. **Re-baseline** after a phase is merged: the "after" becomes the next "before"
+
+---
+
+## References
 
 - [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
 - [Rust Performance Book](https://nnethercote.github.io/perf-book/)

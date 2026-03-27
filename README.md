@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.7.2">Download v1.7.2</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.8.0">Download v1.8.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -42,7 +42,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
-| **Vector** | Semantic similarity search (HNSW + AVX-512/NEON SIMD) | **54.6us** search, **17.6ns** dot product |
+| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **450us** p50 end-to-end (384D, WAL ON, recall>=96%) |
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
 
@@ -66,7 +66,7 @@ ORDER BY similarity() DESC LIMIT 5
 
 | Today (3 systems to maintain) | With VelesDB (1 binary) |
 |-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 54.6us HNSW search |
+| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
 | PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
@@ -80,7 +80,7 @@ ORDER BY similarity() DESC LIMIT 5
 <tr>
 <td align="center" width="33%">
 <h3>Vector Engine</h3>
-<p>Native HNSW + AVX-512/AVX2/NEON SIMD<br/><strong>54.6us search, 17.6ns dot product</strong></p>
+<p>Native HNSW + AVX-512/AVX2/NEON SIMD<br/><strong>47us search (768D), 19.8ns dot product</strong></p>
 <p><em>Semantic similarity, embeddings, RAG retrieval</em></p>
 </td>
 <td align="center" width="33%">
@@ -198,12 +198,14 @@ memory.procedural.delete(1)
 | **Metadata filtering** | **ColumnStore (130x vs JSON)** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
-| **Search latency** | 54.6us (embedded) | ~1-5ms | ~1-5ms | ~5-20ms |
+| **Search latency** | **450us** p50 (10K/384D, WAL ON, recall>=96%) | ~1-5ms | ~1-5ms (in-memory) | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM)** | Yes | No | No | No |
 | **Mobile (iOS/Android)** | Yes | No | No | No |
 | **Offline / Local-first** | Yes | Partial | No | No |
+
+> *Competitor latencies are typical ranges from public benchmarks and vendor documentation. Direct comparison is approximate — architectures differ (embedded vs client-server, durable vs in-memory, recall levels). Run your own benchmarks for accurate comparison.*
 
 > **VelesDB's sweet spot:** When you need vector + graph + structured filtering in a single engine, local-first deployment, or a lightweight binary that runs anywhere.
 >
@@ -285,23 +287,50 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
 
-### Performance
+### Performance (v1.8.0)
+
+End-to-end numbers on the **complete production path**: WAL durability, payload storage, HNSW search, result resolution. No shortcuts.
+
+#### Full production path (Python SDK, WAL ON, recall@10 >= 96%)
+
+| Dataset | Bulk insert | Search p50 | Search p99 | Recall@10 | DB size |
+|---------|-------------|-----------|------------|-----------|---------|
+| 10K x 384D | **18.5K vec/s** | **450 us** | **670 us** | >= 96% | 31 MB |
+| 50K x 384D | **5.9K vec/s** | **1.1 ms** | **1.4 ms** | >= 96% | 162 MB |
+
+#### Core engine (Rust, index-only, no WAL/payload overhead)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search** (10K/768D, k=10) | **54.6 us** |
-| **SIMD Dot Product** (768D) | **17.6 ns** (43.6 Gelem/s) |
-| **Recall@10** (Balanced mode) | **98.8%** |
-| **Recall@10** (Accurate mode) | **100%** |
+| HNSW Search (5K/768D, k=10) | **55 us** |
+| SIMD Dot Product (768D, AVX2) | **21.7 ns** |
+| SIMD Euclidean (768D, AVX2) | **20.1 ns** |
+| Parallel insert (1K/768D) | **48.2K vec/s** |
+| Recall@10 (Balanced) | **98.8%** |
+| Recall@10 (Accurate) | **100%** |
+
+<details>
+<summary>What these numbers mean</summary>
+
+- **Full production path**: measures the real user experience — Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees. Measured with `benchmarks/velesdb_benchmark.py --recall`.
+- **Core engine**: measures the Rust index layer in isolation (Criterion.rs, sequential runs). Useful for architecture comparisons but not representative of end-to-end latency.
+- **Recall@10 >= 96%**: measured on synthetic clustered datasets (50 Gaussian clusters, 384D). Real-world recall depends on your data distribution — run the benchmark on your own dataset to verify. We use `Balanced` mode (ef_search=128) which prioritizes recall over raw speed.
+- **WAL ON**: every insert is durable. A crash at any point recovers all committed data.
+- **Reproduce these numbers**: `pip install velesdb numpy && python benchmarks/velesdb_benchmark.py --recall`
+
+</details>
+
+*Measured 2026-03-27 on i9-14900KF, 64 GB DDR5, Windows 11, Rust 1.92.0, AVX2. [Benchmark script](benchmarks/velesdb_benchmark.py).*
 
 ### Search quality modes
 
-| Mode | ef_search | Recall@10 | Latency (10K/128D) |
-|------|-----------|-----------|---------------------|
-| Fast | 64 | 92.2% | 36us |
-| Balanced (default) | 128 | 98.8% | 57us |
-| Accurate | 512 | 100% | 130us |
-| Adaptive | 32-512 | 95%+ | ~15-40us (easy queries) |
+| Mode | ef_search | Recall@10 | Use case |
+|------|-----------|-----------|----------|
+| Fast | 64 | 92.2% | Real-time suggestions, typeahead |
+| Balanced (default) | 128 | 98.8% | Production search, RAG pipelines |
+| Accurate | 512 | 100% | Evaluation, ground truth comparison |
+| **AutoTune** | auto | 95%+ | Adapts to collection size and dimension |
+| Adaptive | 32-512 | 95%+ | Hard-query escalation (two-phase) |
 
 ### Vector search with metadata filter
 
@@ -326,11 +355,11 @@ SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
 | **SQ8** | 4x | < 1% loss |
 | **PQ** (m=8, k=256) | 32x | ~5% loss (with rescore) |
 | **Binary** | 32x | For Hamming-compatible workloads |
-| **RaBitQ** | 32x | Learned quantization |
+| **RaBitQ** | 32x | Random rotation + binary codes ([arXiv:2405.12497](https://arxiv.org/abs/2405.12497)). Dual-precision HNSW: binary traversal + f32 rerank |
 
 > **Full benchmarks:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
-*Measured March 24, 2026 on i9-14900KF, 64GB DDR5, Rust 1.92.0. Criterion.rs, sequential runs on idle machine.*
+*Quantization benchmarks: Criterion.rs, sequential runs on idle machine. Same hardware as above.*
 
 ---
 
@@ -583,6 +612,50 @@ cd examples/ecommerce_recommendation && cargo run --release
 
 ---
 
+## Research Foundations
+
+VelesDB's performance is built on peer-reviewed research. Every technique listed below is **implemented and production-active** in the codebase.
+
+### Vector Search Core
+
+| Technique | Paper | What it does in VelesDB |
+|-----------|-------|------------------------|
+| **HNSW** | [Malkov & Yashunin, 2016](https://arxiv.org/abs/1603.09320) | Hierarchical navigable small-world graph for approximate nearest neighbor search |
+| **VAMANA Diversification** | [Subramanya et al. (DiskANN), 2019](https://arxiv.org/abs/1907.05024) | Alpha-based neighbor selection for graph quality and recall |
+| **Graph Reordering** | [Chen et al., NeurIPS 2022](https://arxiv.org/abs/2104.03221) | BFS-based node reordering for 15-30% cache miss reduction |
+
+### Quantization & Compression
+
+| Technique | Paper | What it does in VelesDB |
+|-----------|-------|------------------------|
+| **RaBitQ** | [Gao & Long, 2024](https://arxiv.org/abs/2405.12497) | 1-bit quantization with random rotation + affine correction (32x compression). Dual-precision HNSW: binary traversal + float32 re-ranking |
+| **Dual-Precision (VSAG)** | [Xu et al., 2025](https://arxiv.org/abs/2503.17911) | int8 quantized graph traversal with exact float32 re-ranking (4x bandwidth reduction) |
+
+### SIMD & Memory Optimization
+
+| Technique | Paper | What it does in VelesDB |
+|-----------|-------|------------------------|
+| **Software Pipelining** | [Jiang et al. (Bang for the Buck), 2025](https://arxiv.org/abs/2505.07621) | Speculative prefetch of next candidate's vectors during distance computation. Peek-based pipeline preserving recall |
+| **PDX Layout** | [Pirk et al., 2025](https://arxiv.org/abs/2503.04422) | Block-columnar vector storage (64 vectors/block) for SIMD-parallel batch distance computation |
+| **SIMD Distance Kernels** | Lemire et al. | Multi-accumulator FMA loops, masked-tail AVX-512, runtime dispatch (AVX-512/AVX2/NEON/scalar) |
+
+### Text Search
+
+| Technique | Reference | What it does in VelesDB |
+|-----------|-----------|------------------------|
+| **Trigram Fingerprint** | [Broder, 1997](https://doi.org/10.1109/SEQUEN.1997.666900) | 256-bit bloom filter for SIMD-accelerated Jaccard similarity pre-filtering in trigram search |
+
+### Data Structures
+
+| Technique | Reference | What it does in VelesDB |
+|-----------|-----------|------------------------|
+| **BitVec Visited Set** | ANN best practice | 1-bit-per-node tracking (1.25 KB for 10K nodes vs 80 KB HashSet). Thread-local pooling |
+| **Partial Sort** | `select_nth_unstable_by` | O(n + k log k) top-k extraction instead of O(n log n) full sort |
+| **Two-Tier Cache** | [LRU + DashMap] | Lock-free L1 (DashMap, ~50ns) + LRU L2 for distance and query caching |
+| **AutoTune ef** | Adaptive search (VelesDB) | Auto-computed ef_search from collection size + dimension. Two-phase adaptive: low-ef first, escalate on hard queries |
+
+---
+
 ## Contributing
 
 ```bash
@@ -599,7 +672,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Version | Status | Highlights |
 |---------|--------|------------|
-| **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix (20x) |
+| **v1.8.0** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
+| **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix, Agent Memory SDK |
 | **v1.7.0** | Released | HNSW Upsert, GPU Acceleration, Batch SIMD, Chunked Insertion |
 | **v1.6.0** | Released | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
 | **v1.4.0** | Released | VelesQL v2.2.0, Multi-Score Fusion, Parallel Graph, 2,765 tests |
@@ -607,6 +681,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 <details>
 <summary>Detailed release history</summary>
+
+**v1.8.0** — 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Bug fixes: bool→int conversion (#412), silent payload data loss (#413). Concurrency fixes: training buffer race, enum cache regression. Closes #404, #408, #410, #412, #413, #416, #417, #421, #422, #425, #430.
 
 **v1.7.2** — Partial sort in HNSW search_layer (#373), batch insert fast-path (#375), upsert lock contention elimination (3-phase pipeline, write-to-read lock). Agent Memory SDK with complete Python API.
 

@@ -7,6 +7,7 @@
 //!
 //! [EPIC-016/US-030, US-032]
 
+use parking_lot::RwLock;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 
 use crate::graph::{dict_to_edge, edge_to_dict};
 use velesdb_core::collection::graph::EdgeStore;
+
 // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
 use velesdb_core::collection::graph::{bfs_stream, StreamingConfig as CoreStreamingConfig};
 
@@ -50,7 +52,7 @@ impl StreamingConfig {
 }
 
 /// Result of a BFS traversal step.
-#[pyclass]
+#[pyclass(frozen)]
 #[derive(Clone)]
 pub struct TraversalResult {
     /// Current depth in the traversal.
@@ -90,7 +92,7 @@ impl TraversalResult {
 ///     ...     print(f"Depth {result.depth}: {result.source} -> {result.target}")
 #[pyclass]
 pub struct GraphStore {
-    inner: Arc<std::sync::RwLock<EdgeStore>>,
+    inner: Arc<RwLock<EdgeStore>>,
 }
 
 #[pymethods]
@@ -99,7 +101,7 @@ impl GraphStore {
     #[new]
     fn new() -> Self {
         Self {
-            inner: Arc::new(std::sync::RwLock::new(EdgeStore::new())),
+            inner: Arc::new(RwLock::new(EdgeStore::new())),
         }
     }
 
@@ -109,13 +111,10 @@ impl GraphStore {
     ///     edge: Dict with keys: id (int), source (int), target (int), label (str),
     ///           properties (dict, optional)
     #[pyo3(signature = (edge))]
-    fn add_edge(&self, edge: HashMap<String, PyObject>) -> PyResult<()> {
-        Python::with_gil(|py| {
-            let graph_edge = dict_to_edge(py, &edge)?;
-            let mut store = self
-                .inner
-                .write()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+    fn add_edge(&self, py: Python<'_>, edge: HashMap<String, PyObject>) -> PyResult<()> {
+        let graph_edge = dict_to_edge(py, &edge)?;
+        py.allow_threads(|| {
+            let mut store = self.inner.write();
             store
                 .add_edge(graph_edge)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to add edge: {e}")))
@@ -133,58 +132,65 @@ impl GraphStore {
     /// Note:
     ///     Uses internal label index for O(1) lookup per label.
     #[pyo3(signature = (label))]
-    fn get_edges_by_label(&self, label: &str) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-            let edges = store.get_edges_by_label(label);
-            Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    fn get_edges_by_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<PyObject>> {
+        let label_owned = label.to_string();
+        let edges = py.allow_threads(|| {
+            let store = self.inner.read();
+            store
+                .get_edges_by_label(&label_owned)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Gets outgoing edges from a node.
     #[pyo3(signature = (node_id))]
-    fn get_outgoing(&self, node_id: u64) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-            let edges = store.get_outgoing(node_id);
-            Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        let edges = py.allow_threads(|| {
+            let store = self.inner.read();
+            store
+                .get_outgoing(node_id)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Gets incoming edges to a node.
     #[pyo3(signature = (node_id))]
-    fn get_incoming(&self, node_id: u64) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-            let edges = store.get_incoming(node_id);
-            Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        let edges = py.allow_threads(|| {
+            let store = self.inner.read();
+            store
+                .get_incoming(node_id)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Gets outgoing edges filtered by label.
     #[pyo3(signature = (node_id, label))]
     fn get_outgoing_by_label(
         &self,
+        py: Python<'_>,
         node_id: u64,
         label: &str,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let store = self
-                .inner
-                .read()
-                .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-            let edges = store.get_outgoing_by_label(node_id, label);
-            Ok(edges.into_iter().map(|e| edge_to_dict(py, e)).collect())
-        })
+    ) -> PyResult<Vec<PyObject>> {
+        let label_owned = label.to_string();
+        let edges = py.allow_threads(|| {
+            let store = self.inner.read();
+            store
+                .get_outgoing_by_label(node_id, &label_owned)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Performs streaming BFS traversal from a start node.
@@ -209,18 +215,12 @@ impl GraphStore {
     #[pyo3(signature = (start_node, config))]
     fn traverse_bfs_streaming(
         &self,
+        py: Python<'_>,
         start_node: u64,
         config: StreamingConfig,
     ) -> PyResult<Vec<TraversalResult>> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-
-        // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
         // Convert Python config to core config
         let rel_types: Vec<String> = config.relationship_types.unwrap_or_default();
-
         let core_config = CoreStreamingConfig {
             max_depth: u32::try_from(config.max_depth)
                 .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
@@ -229,53 +229,58 @@ impl GraphStore {
             limit: Some(config.max_visited),
         };
 
-        // Use core's bfs_stream iterator
-        let iterator = bfs_stream(&store, start_node, core_config);
+        // Release GIL during traversal (no PyObject involved)
+        py.allow_threads(|| {
+            let store = self.inner.read();
 
-        // Collect results, converting from core TraversalResult to Python TraversalResult
-        // FLAG-2 FIX: Handle empty path correctly instead of using unwrap_or(0)
-        // which could collide with a real edge_id=0
-        let results: Vec<TraversalResult> = iterator
-            .take(config.max_visited)
-            .filter_map(|r| {
-                // Get edge info from the path - skip results with empty path
-                let edge_id = r.path.last().copied()?;
-                let edge = store.get_edge(edge_id);
-                let (source, label) = edge
-                    .map(|e| (e.source(), e.label().to_string()))
-                    .unwrap_or((start_node, String::new()));
+            // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
+            let iterator = bfs_stream(&store, start_node, core_config);
 
-                Some(TraversalResult {
-                    depth: r.depth as usize,
-                    source,
-                    target: r.target_id,
-                    label,
-                    edge_id,
+            // Collect results, converting from core TraversalResult to Python TraversalResult.
+            // FLAG-2 FIX: Handle empty path correctly instead of using unwrap_or(0)
+            // which could collide with a real edge_id=0.
+            // Note: core's bfs_stream already respects config.limit, so no `.take()` needed.
+            let results: Vec<TraversalResult> = iterator
+                .filter_map(|r| {
+                    // Get edge info from the path — skip results with empty path
+                    let edge_id = r.path.last().copied()?;
+                    let edge = store.get_edge(edge_id);
+                    let (source, label) = edge
+                        .map(|e| (e.source(), e.label().to_string()))
+                        .unwrap_or((start_node, String::new()));
+
+                    // Reason: depth is bounded by SAFETY_MAX_DEPTH (100), always fits in usize.
+                    #[allow(clippy::cast_possible_truncation)]
+                    Some(TraversalResult {
+                        depth: r.depth as usize,
+                        source,
+                        target: r.target_id,
+                        label,
+                        edge_id,
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        Ok(results)
+            Ok(results)
+        })
     }
 
     /// Removes an edge by ID.
     #[pyo3(signature = (edge_id))]
-    fn remove_edge(&self, edge_id: u64) -> PyResult<()> {
-        let mut store = self
-            .inner
-            .write()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-        store.remove_edge(edge_id);
+    fn remove_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<()> {
+        py.allow_threads(|| {
+            let mut store = self.inner.write();
+            store.remove_edge(edge_id);
+        });
         Ok(())
     }
 
     /// Returns the number of edges in the store.
-    fn edge_count(&self) -> PyResult<usize> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-        Ok(store.edge_count())
+    fn edge_count(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(py.allow_threads(|| {
+            let store = self.inner.read();
+            store.edge_count()
+        }))
     }
 
     /// Checks if an edge exists.
@@ -286,12 +291,11 @@ impl GraphStore {
     /// Returns:
     ///     True if the edge exists, False otherwise.
     #[pyo3(signature = (edge_id))]
-    fn has_edge(&self, edge_id: u64) -> PyResult<bool> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-        Ok(store.get_edge(edge_id).is_some())
+    fn has_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<bool> {
+        Ok(py.allow_threads(|| {
+            let store = self.inner.read();
+            store.get_edge(edge_id).is_some()
+        }))
     }
 
     /// Gets the out-degree (number of outgoing edges) of a node.
@@ -302,12 +306,11 @@ impl GraphStore {
     /// Returns:
     ///     Number of outgoing edges from this node.
     #[pyo3(signature = (node_id))]
-    fn out_degree(&self, node_id: u64) -> PyResult<usize> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-        Ok(store.get_outgoing(node_id).len())
+    fn out_degree(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
+        Ok(py.allow_threads(|| {
+            let store = self.inner.read();
+            store.get_outgoing(node_id).len()
+        }))
     }
 
     /// Gets the in-degree (number of incoming edges) of a node.
@@ -318,12 +321,11 @@ impl GraphStore {
     /// Returns:
     ///     Number of incoming edges to this node.
     #[pyo3(signature = (node_id))]
-    fn in_degree(&self, node_id: u64) -> PyResult<usize> {
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
-        Ok(store.get_incoming(node_id).len())
+    fn in_degree(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
+        Ok(py.allow_threads(|| {
+            let store = self.inner.read();
+            store.get_incoming(node_id).len()
+        }))
     }
 
     /// Performs DFS traversal from a source node.
@@ -342,58 +344,62 @@ impl GraphStore {
     #[pyo3(signature = (source_id, config))]
     fn traverse_dfs(
         &self,
+        py: Python<'_>,
         source_id: u64,
         config: &StreamingConfig,
     ) -> PyResult<Vec<TraversalResult>> {
-        use std::collections::HashSet;
+        let max_visited = config.max_visited;
+        let max_depth = config.max_depth;
+        let relationship_types = config.relationship_types.clone();
 
-        let store = self
-            .inner
-            .read()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        py.allow_threads(|| {
+            use std::collections::HashSet;
 
-        let mut results = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
-        let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
+            let store = self.inner.read();
 
-        while let Some((node_id, depth)) = stack.pop() {
-            if visited.len() >= config.max_visited {
-                break;
-            }
+            let mut results = Vec::new();
+            let mut visited: HashSet<u64> = HashSet::new();
+            let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
 
-            if visited.contains(&node_id) {
-                continue;
-            }
-            visited.insert(node_id);
+            while let Some((node_id, depth)) = stack.pop() {
+                if visited.len() >= max_visited {
+                    break;
+                }
 
-            if depth < config.max_depth {
-                let edges = store.get_outgoing(node_id);
-                let filtered: Vec<_> = edges
-                    .into_iter()
-                    .filter(|e| {
-                        if let Some(ref types) = config.relationship_types {
-                            types.contains(&e.label().to_string())
-                        } else {
-                            true
-                        }
-                    })
-                    .filter(|e| !visited.contains(&e.target()))
-                    .collect();
+                if visited.contains(&node_id) {
+                    continue;
+                }
+                visited.insert(node_id);
 
-                for edge in filtered.into_iter().rev() {
-                    results.push(TraversalResult {
-                        depth: depth + 1,
-                        source: edge.source(),
-                        target: edge.target(),
-                        label: edge.label().to_string(),
-                        edge_id: edge.id(),
-                    });
-                    stack.push((edge.target(), depth + 1));
+                if depth < max_depth {
+                    let edges = store.get_outgoing(node_id);
+                    let filtered: Vec<_> = edges
+                        .into_iter()
+                        .filter(|e| {
+                            if let Some(ref types) = relationship_types {
+                                types.contains(&e.label().to_string())
+                            } else {
+                                true
+                            }
+                        })
+                        .filter(|e| !visited.contains(&e.target()))
+                        .collect();
+
+                    for edge in filtered.into_iter().rev() {
+                        results.push(TraversalResult {
+                            depth: depth + 1,
+                            source: edge.source(),
+                            target: edge.target(),
+                            label: edge.label().to_string(),
+                            edge_id: edge.id(),
+                        });
+                        stack.push((edge.target(), depth + 1));
+                    }
                 }
             }
-        }
 
-        Ok(results)
+            Ok(results)
+        })
     }
 }
 

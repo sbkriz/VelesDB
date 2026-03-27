@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// Scalar correction factors for a `RaBitQ`-encoded vector.
 ///
 /// These values are needed to apply the affine correction during distance estimation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RaBitQCorrection {
     /// L2 norm of the centered vector before binarization.
     pub vector_norm: f32,
@@ -84,34 +84,29 @@ pub(crate) fn apply_rotation_flat(rotation: &[f32], vector: &[f32], dim: usize) 
 
 /// Compute XOR+popcount inner product estimate from query bits and encoded bits.
 ///
+/// Uses SIMD-dispatched XOR+popcount (AVX-512 VPOPCNTDQ / AVX-512F / AVX2 / NEON / scalar)
+/// via `hamming_binary_native` for the XOR+popcount hot loop.
+///
 /// Returns the binary inner product in `[-1, 1]` range.
 fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usize) -> f32 {
-    let mut matching_bits: u32 = 0;
-    for (qw, ew) in q_bits.iter().zip(enc_bits.iter()).take(num_words) {
-        let xor = qw ^ ew;
-        // count_ones gives number of differing bits
-        // matching = total_bits_in_word - differing
-        matching_bits += 64 - xor.count_ones();
-    }
-    // Adjust for padding bits in last word: padding bits are 0 in both vectors
-    // (signs_to_bits only writes bits up to `dim`, zeroing the rest), so they
-    // count as matching but shouldn't contribute.
-    let padding_bits = num_words * 64 - dim;
-    // Invariant: padding_bits <= num_words * 64 - dim.
-    // matching_bits counts matching bits in `num_words * 64` positions. The
-    // minimum number of matching bits equals the number of padding bits (since
-    // padding bits are 0 in both vectors and thus always match). Therefore
-    // matching_bits >= padding_bits is a guaranteed invariant.
-    // `padding_bits` is at most `num_words * 64 - 1 < 64 * usize::MAX / 64`, which
-    // is always less than u32::MAX for any realistic dimension. The cast is safe.
+    // hamming_binary_native returns the number of DIFFERING bits (XOR popcount).
+    // Padding bits are 0 in both vectors (signs_to_bits zeroes beyond `dim`),
+    // so they XOR to 0 and are NOT counted as differing.
+    // Therefore: matching_bits = dim - differing_bits.
+    let differing_bits =
+        crate::simd_native::hamming_binary_native(&q_bits[..num_words], &enc_bits[..num_words]);
+
+    // Invariant: differing_bits <= dim because padding bits never contribute.
+    // Reason: dim fits in u32 for any practical vector dimension (< 2^32).
     #[allow(clippy::cast_possible_truncation)]
-    let padding_bits_u32 = padding_bits as u32;
+    let dim_u32 = dim as u32;
     debug_assert!(
-        matching_bits >= padding_bits_u32,
-        "matching_bits ({matching_bits}) < padding_bits ({padding_bits}): \
+        differing_bits <= dim_u32,
+        "differing_bits ({differing_bits}) > dim ({dim}): \
          signs_to_bits must zero padding bits"
     );
-    let matching_bits = matching_bits - padding_bits_u32;
+
+    let matching_bits = dim_u32 - differing_bits;
 
     // Inner product estimate: each matching bit contributes +1/D,
     // each differing bit contributes -1/D.
@@ -126,24 +121,28 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
 ///
 /// RF-DEDUP: Shared between `distance` and `batch_distance` to eliminate
 /// the repeated center-normalize-rotate-bitsign preprocessing pipeline.
-struct PreparedQuery {
+///
+/// `pub(crate)` for Phase 3 integration (`RaBitQ` HNSW search path).
+pub(crate) struct PreparedQuery {
     /// Squared L2 norm of the centered query.
-    norm_sq: f32,
+    pub(crate) norm_sq: f32,
     /// L2 norm of the centered query.
-    norm: f32,
+    pub(crate) norm: f32,
     /// Sign bits of the rotated normalized query.
-    bits: Vec<u64>,
+    pub(crate) bits: Vec<u64>,
     /// Number of u64 words in the bit representation.
-    num_words: usize,
+    pub(crate) num_words: usize,
     /// Rotated normalized vector (used by encode for correction factors).
-    rotated: Vec<f32>,
+    pub(crate) rotated: Vec<f32>,
 }
 
 impl RaBitQIndex {
     /// Centers, normalizes, rotates, and extracts sign bits from a vector.
     ///
     /// Returns `None` when the centered vector has near-zero norm.
-    fn prepare_query(&self, vector: &[f32]) -> Option<PreparedQuery> {
+    ///
+    /// `pub(crate)` for Phase 3 integration (`RaBitQ` HNSW search path).
+    pub(crate) fn prepare_query(&self, vector: &[f32]) -> Option<PreparedQuery> {
         let centered: Vec<f32> = vector
             .iter()
             .zip(self.centroid.iter())
@@ -172,10 +171,28 @@ impl RaBitQIndex {
     }
 
     /// Computes L2 distance from a prepared query to an encoded vector.
-    fn distance_from_prepared(&self, pq: &PreparedQuery, encoded: &RaBitQVector) -> f32 {
-        let ip_binary = xor_popcount_ip(&pq.bits, &encoded.bits, pq.num_words, self.dimension);
+    ///
+    /// `pub(crate)` for Phase 3 integration (`RaBitQ` HNSW search path).
+    pub(crate) fn distance_from_prepared(&self, pq: &PreparedQuery, encoded: &RaBitQVector) -> f32 {
+        self.distance_from_prepared_slice(pq, &encoded.bits, encoded.correction)
+    }
 
-        let v_norm = encoded.correction.vector_norm;
+    /// Zero-copy L2 distance from a prepared query to raw bits + correction.
+    ///
+    /// Avoids the `Vec<u64>` allocation that `distance_from_prepared` would
+    /// require when the caller only has a borrowed slice (e.g. from
+    /// [`RaBitQVectorStore::get_bits_slice`]).
+    ///
+    /// `pub(crate)` for Phase 3 integration (`RaBitQ` HNSW search path).
+    pub(crate) fn distance_from_prepared_slice(
+        &self,
+        pq: &PreparedQuery,
+        bits: &[u64],
+        correction: RaBitQCorrection,
+    ) -> f32 {
+        let ip_binary = xor_popcount_ip(&pq.bits, bits, pq.num_words, self.dimension);
+
+        let v_norm = correction.vector_norm;
         let estimated_ip = pq.norm * v_norm * ip_binary;
         let l2_sq = v_norm.mul_add(v_norm, pq.norm_sq) - 2.0 * estimated_ip;
         l2_sq.max(0.0).sqrt()

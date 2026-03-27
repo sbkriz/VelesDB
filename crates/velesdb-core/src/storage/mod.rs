@@ -37,6 +37,8 @@ mod wal_batcher_tests;
 #[cfg(test)]
 mod compaction_tests;
 #[cfg(test)]
+mod deferred_index_tests;
+#[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
 mod histogram_tests;
@@ -48,6 +50,8 @@ mod log_payload_tests;
 mod loom_tests;
 #[cfg(test)]
 mod metrics_tests;
+#[cfg(test)]
+mod mmap_durability_tests;
 #[cfg(test)]
 mod storage_reliability_tests;
 #[cfg(test)]

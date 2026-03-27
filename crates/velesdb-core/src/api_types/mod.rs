@@ -96,3 +96,20 @@ pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
         _ => None,
     }
 }
+
+/// Convert search mode string to [`SearchQuality`].
+///
+/// Supports all named modes including `"autotune"` which adapts ef
+/// automatically based on collection statistics.
+#[cfg(feature = "persistence")]
+#[must_use]
+pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
+    match mode.to_lowercase().as_str() {
+        "fast" => Some(crate::SearchQuality::Fast),
+        "balanced" => Some(crate::SearchQuality::Balanced),
+        "accurate" => Some(crate::SearchQuality::Accurate),
+        "perfect" => Some(crate::SearchQuality::Perfect),
+        "autotune" | "auto_tune" | "auto" => Some(crate::SearchQuality::AutoTune),
+        _ => None,
+    }
+}

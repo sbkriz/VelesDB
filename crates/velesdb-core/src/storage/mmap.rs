@@ -23,6 +23,7 @@ mod wal_replay;
 
 use super::compaction::{self, CompactionContext};
 use super::guard::VectorSliceGuard;
+use super::log_payload::DurabilityMode;
 use super::metrics::StorageMetrics;
 use super::sharded_index::ShardedIndex;
 use super::traits::VectorStorage;
@@ -71,6 +72,12 @@ pub struct MmapStorage {
     /// on wrap is a false-positive panic in `VectorSliceGuard::as_slice()`,
     /// which is acceptable given the astronomical time required.
     remap_epoch: AtomicU64,
+    /// Controls WAL write and sync behavior for vector storage.
+    ///
+    /// Issue #423 Component 4: `DurabilityMode::None` skips WAL writes
+    /// entirely for bulk import scenarios where data can be re-derived.
+    /// Default is `Fsync` (unchanged from pre-#423 behavior).
+    durability: DurabilityMode,
 }
 
 impl MmapStorage {
@@ -88,6 +95,8 @@ impl MmapStorage {
 
     /// Creates a new `MmapStorage` or opens an existing one.
     ///
+    /// Uses the default durability mode (`Fsync`).
+    ///
     /// # Arguments
     ///
     /// * `path` - Directory to store data
@@ -97,6 +106,32 @@ impl MmapStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn new<P: AsRef<Path>>(path: P, dimension: usize) -> io::Result<Self> {
+        Self::new_with_durability(path, dimension, DurabilityMode::default())
+    }
+
+    /// Creates a new `MmapStorage` with the specified durability mode.
+    ///
+    /// See [`DurabilityMode`] for available modes and their trade-offs.
+    ///
+    /// Issue #423 Component 4: `DurabilityMode::None` skips WAL writes
+    /// entirely for bulk import scenarios. Data is written directly to
+    /// the mmap file and is readable immediately, but not recoverable
+    /// from WAL after a crash.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Directory to store data
+    /// * `dimension` - Vector dimension
+    /// * `durability` - WAL write/sync behavior
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file operations fail.
+    pub fn new_with_durability<P: AsRef<Path>>(
+        path: P,
+        dimension: usize,
+        durability: DurabilityMode,
+    ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
 
@@ -125,6 +160,7 @@ impl MmapStorage {
             next_offset: AtomicUsize::new(next_offset),
             metrics: Arc::new(StorageMetrics::new()),
             remap_epoch: AtomicU64::new(0),
+            durability,
         })
     }
 
@@ -336,6 +372,24 @@ impl MmapStorage {
         &self.metrics
     }
 
+    /// Returns the current durability mode for WAL writes.
+    ///
+    /// Issue #423 Component 4.
+    #[must_use]
+    pub fn durability(&self) -> DurabilityMode {
+        self.durability
+    }
+
+    /// Sets the durability mode for WAL writes at runtime.
+    ///
+    /// This allows switching between `Fsync` (full durability) and `None`
+    /// (skip WAL for bulk imports) without reconstructing the storage.
+    ///
+    /// Issue #423 Component 4.
+    pub fn set_durability_mode(&mut self, mode: DurabilityMode) {
+        self.durability = mode;
+    }
+
     /// Compacts the storage by rewriting only active vectors.
     ///
     /// This reclaims disk space from deleted vectors by:
@@ -376,7 +430,10 @@ impl MmapStorage {
             let data_path = self.path.join("vectors.dat");
             self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
 
-            self.flush()?;
+            // Issue #423: Use flush_full() after compaction because compact()
+            // rewrites all offsets — the old vectors.idx is invalid and must be
+            // rewritten to avoid a full WAL replay on next startup.
+            self.flush_full()?;
         }
 
         Ok(bytes_reclaimed)
@@ -475,6 +532,47 @@ impl MmapStorage {
             epoch_ptr: &self.remap_epoch,
             epoch_at_creation,
         }))
+    }
+
+    /// Persists the `vectors.idx` index file to disk with fsync.
+    ///
+    /// Issue #423: Extracted from the former `flush()` to allow callers to
+    /// control when the (expensive) index serialization happens. The WAL
+    /// provides crash recovery even if this file is stale, so it can be
+    /// deferred to compaction or explicit shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or I/O fails.
+    pub fn flush_index(&self) -> io::Result<()> {
+        // EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization
+        // EPIC-069/US-001: fsync index file for crash recovery on Windows
+        let index_path = self.path.join("vectors.idx");
+        let file = File::create(&index_path)?;
+        let mut writer = io::BufWriter::new(file);
+        let flat_index = self.index.to_hashmap();
+        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
+        writer.write_all(&bytes)?;
+        writer.flush()?;
+        writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?
+            .sync_all()?;
+        Ok(())
+    }
+
+    /// Full durability flush: WAL + mmap + `vectors.idx`.
+    ///
+    /// Equivalent to the pre-#423 `flush()` behavior. Use this on shutdown
+    /// or before compaction to ensure the index file is up-to-date, avoiding
+    /// a full WAL replay on the next startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any I/O operation fails.
+    pub fn flush_full(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.flush_index()
     }
 
     /// Attempts a best-effort durability sync during shutdown.

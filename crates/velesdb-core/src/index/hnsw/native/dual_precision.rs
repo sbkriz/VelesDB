@@ -22,7 +22,7 @@
 //! ```
 
 use super::distance::DistanceEngine;
-use super::graph::NativeHnsw;
+use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use super::layer::NodeId;
 use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
 use std::sync::Arc;
@@ -196,16 +196,40 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     /// 2. Re-ranks top candidates with float32 distances (accurate)
     ///
     /// If quantizer is not trained, falls back to standard float32 search.
+    ///
+    /// # Distance semantics
+    ///
+    /// All returned distances are in user-visible metric space (e.g. actual
+    /// Euclidean with sqrt, not squared L2). `transform_score()` is applied
+    /// to both the fallback and dual-precision paths for consistency.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
-        // If no quantizer, use standard search
+        // If no quantizer, use standard search with transform
         if self.quantizer.is_none() {
-            return self.inner.search(query, k, ef_search);
+            return self.search_and_transform(query, k, ef_search);
         }
 
         // Dual-precision search: use quantized distances for traversal,
-        // then re-rank with exact distances
+        // then re-rank with exact distances (transform_score applied in rerank)
         self.search_dual_precision(query, k, ef_search)
+    }
+
+    /// Runs `inner.search()` and applies `transform_score` to each result.
+    ///
+    /// `NativeHnsw::search` returns raw engine distances (e.g. squared L2 for
+    /// Euclidean with `CachedSimdDistance`). This helper ensures the fallback
+    /// path returns the same user-visible metric as the rerank path.
+    fn search_and_transform(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<(NodeId, f32)> {
+        self.inner
+            .search(query, k, ef_search)
+            .into_iter()
+            .map(|(id, raw)| (id, self.inner.transform_score(raw)))
+            .collect()
     }
 
     /// Dual-precision search implementation.
@@ -239,6 +263,13 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     ///
     /// RF-DEDUP: Single source of truth for the rerank pipeline shared by
     /// `search_dual_precision` (f32 traversal) and `search_int8_traversal` (int8 traversal).
+    ///
+    /// # Distance semantics
+    ///
+    /// `self.inner.compute_distance()` returns the raw engine distance, which
+    /// may be squared L2 for Euclidean when `D = CachedSimdDistance`. We apply
+    /// `transform_score()` to convert to the user-visible metric (e.g. sqrt
+    /// for Euclidean, similarity clamping for Cosine).
     fn rerank_with_exact_f32(
         &self,
         query: &[f32],
@@ -251,8 +282,9 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
                 .iter()
                 .filter_map(|&node_id| {
                     let vec = vectors.get(node_id)?;
-                    let exact_dist = self.inner.compute_distance(query, vec);
-                    Some((node_id, exact_dist))
+                    let raw_dist = self.inner.compute_distance(query, vec);
+                    let final_dist = self.inner.transform_score(raw_dist);
+                    Some((node_id, final_dist))
                 })
                 .collect()
         } else {
@@ -288,12 +320,12 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     ) -> Vec<(NodeId, f32)> {
         // If no quantizer or int8 traversal disabled, use standard search
         if self.quantizer.is_none() || !config.use_int8_traversal {
-            return self.inner.search(query, k, ef_search);
+            return self.search_and_transform(query, k, ef_search);
         }
 
         // Check minimum index size
         if self.inner.len() < config.min_index_size {
-            return self.inner.search(query, k, ef_search);
+            return self.search_and_transform(query, k, ef_search);
         }
 
         self.search_int8_traversal(query, k, ef_search, config)
@@ -353,10 +385,13 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let entry_point = *self.inner.entry_point.read();
-        let Some(ep) = entry_point else {
+        let ep = self
+            .inner
+            .entry_point
+            .load(std::sync::atomic::Ordering::Acquire);
+        if ep == NO_ENTRY_POINT {
             return Vec::new();
-        };
+        }
 
         let max_layer = self
             .inner

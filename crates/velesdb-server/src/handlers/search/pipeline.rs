@@ -6,8 +6,8 @@ use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use crate::types::{
-    mode_to_ef_search, ErrorResponse, IdScoreResult, SearchIdsResponse, SearchRequest,
-    SearchResponse, SearchResultResponse,
+    mode_to_search_quality, ErrorResponse, IdScoreResult, SearchIdsResponse,
+    SearchRequest, SearchResponse, SearchResultResponse,
 };
 use crate::AppState;
 
@@ -195,15 +195,18 @@ pub(crate) fn execute_dense_search(
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
 
-    let effective_ef = req
-        .ef_search
-        .or_else(|| req.mode.as_ref().and_then(|m| mode_to_ef_search(m)));
+    // Quality-based mode (supports AutoTune which computes ef dynamically).
+    // Supersedes mode_to_ef_search — all named modes map to SearchQuality.
+    let quality_mode = req.mode.as_ref().and_then(|m| mode_to_search_quality(m));
 
     let result = if let Some(ref filter_json) = req.filter {
         let filter = parse_filter_or_400(filter_json, &state.onboarding_metrics)?;
         collection.search_with_filter(&req.vector, req.top_k, &filter)
-    } else if let Some(ef) = effective_ef {
+    } else if let Some(ef) = req.ef_search {
+        // Explicit ef_search takes precedence over quality mode
         collection.search_with_ef(&req.vector, req.top_k, ef)
+    } else if let Some(quality) = quality_mode {
+        collection.search_with_quality(&req.vector, req.top_k, quality)
     } else {
         collection.search(&req.vector, req.top_k)
     };

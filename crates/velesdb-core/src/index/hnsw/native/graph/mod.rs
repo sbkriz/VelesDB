@@ -15,13 +15,22 @@ mod neighbors;
 mod reorder;
 pub(crate) mod safety_counters;
 mod search;
+mod search_pipeline;
 
+use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
 use crate::perf_optimizations::ContiguousVectors;
 use locking::{record_lock_acquire, record_lock_release, LockRank};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+/// Sentinel value for [`NativeHnsw::entry_point`]: indicates no entry point exists.
+///
+/// Using `usize::MAX` instead of `Option<NodeId>` behind an `RwLock` allows
+/// lock-free reads on the search hot path (`Ordering::Acquire` load) while
+/// writes remain serialized via `entry_point_promote_lock` (Issue #422).
+pub const NO_ENTRY_POINT: usize = usize::MAX;
 
 /// Native HNSW index implementation.
 ///
@@ -36,8 +45,15 @@ pub struct NativeHnsw<D: DistanceEngine> {
     pub(in crate::index::hnsw::native) vectors: RwLock<Option<ContiguousVectors>>,
     /// Hierarchical layers (layer 0 = bottom, dense connections)
     pub(in crate::index::hnsw::native) layers: RwLock<Vec<Layer>>,
-    /// Entry point for search (highest layer node)
-    pub(in crate::index::hnsw::native) entry_point: RwLock<Option<NodeId>>,
+    /// Entry point for search (highest layer node).
+    ///
+    /// Stores `NO_ENTRY_POINT` (`usize::MAX`) when the index is empty.
+    /// Read with `Ordering::Acquire`, written under `entry_point_promote_lock`
+    /// with `Ordering::Release` (Issue #422).
+    pub(in crate::index::hnsw::native) entry_point: AtomicUsize,
+    /// Serializes entry-point promotions so that `entry_point` and `max_layer`
+    /// are updated atomically with respect to each other.
+    pub(in crate::index::hnsw::native) entry_point_promote_lock: Mutex<()>,
     /// Maximum layer for entry point
     pub(in crate::index::hnsw::native) max_layer: AtomicUsize,
     /// Number of elements in the index
@@ -61,6 +77,11 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// to skip the write lock when the insert falls within the pre-allocated range.
     /// Transient: not serialized to disk.
     pub(in crate::index::hnsw::native) pre_allocated_capacity: AtomicUsize,
+    /// PDX block-columnar layout for SIMD-parallel distance computation.
+    ///
+    /// Built automatically after BFS reordering (`reorder_for_locality()`).
+    /// Lock rank 15 (between vectors=10 and layers=20).
+    pub(in crate::index::hnsw::native) columnar: RwLock<Option<ColumnarVectors>>,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -144,7 +165,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             distance,
             vectors: RwLock::new(vectors),
             layers: RwLock::new(vec![Layer::new(max_elements)]),
-            entry_point: RwLock::new(None),
+            entry_point: AtomicUsize::new(NO_ENTRY_POINT),
+            entry_point_promote_lock: Mutex::new(()),
             max_layer: AtomicUsize::new(0),
             count: AtomicUsize::new(0),
             rng_state: AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
@@ -155,6 +177,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             alpha,
             stagnation_limit: ef_construction / 4,
             pre_allocated_capacity: AtomicUsize::new(0),
+            columnar: RwLock::new(None),
         }
     }
 
@@ -176,7 +199,13 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.len() == 0
     }
 
-    /// Computes the distance between two vectors using this index's distance engine.
+    /// Computes the raw distance between two vectors using this index's distance engine.
+    ///
+    /// **Note:** For `CachedSimdDistance` with Euclidean metric, this returns
+    /// **squared L2** (no sqrt). Pass the result through [`transform_score`]
+    /// to obtain actual Euclidean distance.
+    ///
+    /// [`transform_score`]: super::backend_adapter::NativeHnsw::transform_score
     #[inline]
     #[must_use]
     pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {

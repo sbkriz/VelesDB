@@ -36,7 +36,7 @@ pyo3::create_exception!(
 ///     >>> parsed = VelesQL.parse("SELECT * FROM docs LIMIT 10")
 ///     >>> print(parsed.table_name)
 ///     'docs'
-#[pyclass]
+#[pyclass(frozen)]
 pub struct VelesQL;
 
 #[pymethods]
@@ -94,7 +94,7 @@ impl VelesQL {
 ///     ['id', 'name']
 ///     >>> print(parsed.has_where_clause())
 ///     True
-#[pyclass]
+#[pyclass(frozen)]
 pub struct ParsedStatement {
     inner: CoreQuery,
 }

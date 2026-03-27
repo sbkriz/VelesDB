@@ -380,3 +380,65 @@ fn test_hamming_exact_count_none_set() {
         "hamming at dim={dim}: expected 0, got {result}"
     );
 }
+
+// =============================================================================
+// Binary Hamming (packed u64) — SIMD dispatch tests
+// =============================================================================
+
+use super::dispatch::hamming_binary_native;
+
+/// Reference scalar binary hamming for regression testing.
+fn binary_hamming_scalar_ref(a: &[u64], b: &[u64]) -> u32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x ^ y).count_ones())
+        .sum()
+}
+
+#[test]
+fn test_binary_hamming_native_matches_scalar() {
+    // Test across dimensions that exercise different SIMD paths:
+    // <4 words = scalar, 4-7 = AVX2, >=8 = AVX-512(F or VPOPCNTDQ)
+    for num_words in [1, 2, 3, 4, 7, 8, 12, 16, 32, 64] {
+        let a: Vec<u64> = (0..num_words)
+            .map(|i| (i as u64).wrapping_mul(0x517c_c1b7_2722_0a95))
+            .collect();
+        let b: Vec<u64> = (0..num_words)
+            .map(|i| (i as u64).wrapping_mul(0x6c62_272e_07bb_0142))
+            .collect();
+
+        let native = hamming_binary_native(&a, &b);
+        let reference = binary_hamming_scalar_ref(&a, &b);
+
+        assert_eq!(
+            native, reference,
+            "binary hamming mismatch at num_words={num_words}: native={native}, scalar={reference}"
+        );
+    }
+}
+
+#[test]
+fn test_binary_hamming_native_identical_is_zero() {
+    for num_words in [1, 4, 8, 16] {
+        let a: Vec<u64> = vec![0xDEAD_BEEF_CAFE_BABEu64; num_words];
+        let result = hamming_binary_native(&a, &a);
+        assert_eq!(
+            result, 0,
+            "identical vectors should have zero Hamming distance (num_words={num_words})"
+        );
+    }
+}
+
+#[test]
+fn test_binary_hamming_native_all_differ() {
+    for num_words in [1, 4, 8, 16] {
+        let a: Vec<u64> = vec![u64::MAX; num_words];
+        let b: Vec<u64> = vec![0u64; num_words];
+        let result = hamming_binary_native(&a, &b);
+        let expected = (num_words * 64) as u32;
+        assert_eq!(
+            result, expected,
+            "all-ones vs all-zeros: expected {expected}, got {result} (num_words={num_words})"
+        );
+    }
+}

@@ -11,7 +11,7 @@ fn encode_vector(store: &mut VectorStore, vector: &[f32]) {
         StorageMode::Full => {
             store.data.extend_from_slice(vector);
         }
-        StorageMode::SQ8 | StorageMode::ProductQuantization => {
+        StorageMode::SQ8 | StorageMode::ProductQuantization | StorageMode::RaBitQ => {
             encode_sq8(store, vector);
         }
         StorageMode::Binary => {
@@ -96,8 +96,8 @@ pub fn remove_at_index(store: &mut VectorStore, idx: usize) {
             let end = start + store.dimension;
             store.data.drain(start..end);
         }
-        // ProductQuantization uses SQ8 path as fallback in WASM context
-        StorageMode::SQ8 | StorageMode::ProductQuantization => {
+        // ProductQuantization/RaBitQ use SQ8 path as fallback in WASM context
+        StorageMode::SQ8 | StorageMode::ProductQuantization | StorageMode::RaBitQ => {
             store.sq8_mins.swap_remove(idx);
             store.sq8_scales.swap_remove(idx);
             let start = idx * store.dimension;

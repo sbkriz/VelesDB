@@ -19,6 +19,7 @@ mod pq;
 pub(crate) mod pq_kmeans;
 pub(crate) mod pq_opq;
 mod rabitq;
+pub(crate) mod rabitq_store;
 mod scalar;
 
 // Re-export binary quantization
@@ -30,7 +31,9 @@ pub use pq::{PQCodebook, PQVector, ProductQuantizer};
 pub use pq_opq::train_opq;
 
 // Re-export RaBitQ quantization
+pub(crate) use rabitq::PreparedQuery;
 pub use rabitq::{RaBitQCorrection, RaBitQIndex, RaBitQVector};
+pub(crate) use rabitq_store::RaBitQVectorStore;
 
 // Re-export scalar quantization
 pub use scalar::{

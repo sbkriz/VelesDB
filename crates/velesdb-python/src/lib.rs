@@ -59,7 +59,7 @@ use velesdb_core::{
 ///     >>> strategy = FusionStrategy.rrf()
 ///     >>> # Weighted fusion
 ///     >>> strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
-#[pyclass]
+#[pyclass(frozen)]
 #[derive(Clone)]
 pub struct FusionStrategy {
     inner: CoreFusionStrategy,
@@ -301,7 +301,7 @@ impl Database {
             .get_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
-        Ok(Collection::new(Arc::new(collection), name.to_string()))
+        Ok(Collection::new(collection, name.to_string()))
     }
 
     /// Get an existing collection by name.
@@ -318,10 +318,7 @@ impl Database {
     #[allow(deprecated)]
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
         match self.inner.get_collection(name) {
-            Some(collection) => Ok(Some(Collection::new(
-                Arc::new(collection),
-                name.to_string(),
-            ))),
+            Some(collection) => Ok(Some(Collection::new(collection, name.to_string()))),
             None => Ok(None),
         }
     }
@@ -383,7 +380,7 @@ impl Database {
             .get_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
-        Ok(Collection::new(Arc::new(collection), name.to_string()))
+        Ok(Collection::new(collection, name.to_string()))
     }
 
     /// Create an AgentMemory instance for AI agent workflows.
@@ -649,7 +646,7 @@ impl Database {
 }
 
 /// Search result from a vector query.
-#[pyclass]
+#[pyclass(frozen)]
 pub struct SearchResult {
     #[pyo3(get)]
     id: u64,

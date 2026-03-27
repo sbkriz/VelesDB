@@ -472,3 +472,79 @@ async fn test_stream_delta_rebuild_no_data_loss() {
 
     ingester.shutdown().await;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// try_send_batch (#416)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn try_send_batch_sends_all_points() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size: 10,
+        flush_interval_ms: 50,
+    };
+    let coll_clone = coll.clone();
+    let ingester = StreamIngester::new(coll, config);
+
+    let points: Vec<Point> = (1..=5).map(|i| make_point(i, 4)).collect();
+    let sent = ingester.try_send_batch(points).expect("batch send ok");
+    assert_eq!(sent, 5);
+
+    // Poll until all 5 points are flushed (max 5s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = coll_clone.get(&[1, 2, 3, 4, 5]).iter().flatten().count();
+        if found == 5 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for batch flush (found {found}/5)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+async fn try_send_batch_empty_vec_returns_zero() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig::default();
+    let ingester = StreamIngester::new(coll, config);
+
+    let sent = ingester.try_send_batch(Vec::new()).expect("empty batch ok");
+    assert_eq!(sent, 0);
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+async fn try_send_batch_partial_on_buffer_full() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 3,
+        batch_size: 1000,          // huge -- won't auto-flush by batch
+        flush_interval_ms: 60_000, // huge -- won't auto-flush by timer
+    };
+    let ingester = StreamIngester::new(coll, config);
+
+    let points: Vec<Point> = (1..=10).map(|i| make_point(i, 4)).collect();
+    let result = ingester.try_send_batch(points);
+
+    // Should get a BufferFull error because we tried to send 10 into a 3-slot channel.
+    match result {
+        Err(BackpressureError::BufferFull) => {
+            // Expected: some points were sent before the channel was full.
+        }
+        Ok(sent) => {
+            // If the drain consumed some between sends, we might succeed.
+            assert!(sent <= 10);
+        }
+        Err(other) => panic!("expected BufferFull or Ok, got: {other}"),
+    }
+
+    ingester.shutdown().await;
+}

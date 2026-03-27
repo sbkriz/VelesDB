@@ -68,6 +68,23 @@ impl VectorCollection {
         self.inner.search_with_ef(query, k, ef_search)
     }
 
+    /// Performs kNN search with a specific [`SearchQuality`] profile.
+    ///
+    /// Use this instead of [`search_with_ef`] when you want named quality
+    /// modes like [`SearchQuality::AutoTune`] that compute ef dynamically.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    pub fn search_with_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.search_with_quality(query, k, quality)
+    }
+
     /// Performs kNN search with a metadata filter applied post-retrieval.
     ///
     /// # Errors
@@ -371,6 +388,23 @@ impl VectorCollection {
         point: crate::point::Point,
     ) -> std::result::Result<(), crate::collection::streaming::BackpressureError> {
         self.inner.stream_insert(point)
+    }
+
+    /// Sends a batch of points into the streaming ingestion channel.
+    ///
+    /// Acquires the ingester lock once for the entire batch, eliminating
+    /// per-point lock overhead. Returns the number of points successfully
+    /// queued. See [`Collection::stream_insert_batch`] for details.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackpressureError` on buffer-full, drain-dead, or not-configured.
+    #[cfg(feature = "persistence")]
+    pub fn stream_insert_batch(
+        &self,
+        points: Vec<crate::point::Point>,
+    ) -> std::result::Result<usize, crate::collection::streaming::BackpressureError> {
+        self.inner.stream_insert_batch(points)
     }
 
     /// Pushes `(id, vector)` entries into the delta buffer if it is active.

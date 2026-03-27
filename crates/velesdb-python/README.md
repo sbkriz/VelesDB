@@ -810,14 +810,14 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 |-----------|-------------|------------|
 | Cosine | ~33.1 ns | 23.2 Gelem/s |
 | Euclidean | ~22.5 ns | 34.1 Gelem/s |
-| Dot Product | ~17.6 ns | 43.6 Gelem/s |
+| Dot Product | ~19.8 ns | 38.8 Gelem/s |
 | Hamming | ~35.8 ns | -- |
 
 ### System Benchmarks (Native Rust Engine)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search (10K/768D)** | **54.6 µs** (k=10, Balanced mode) |
+| **HNSW Search (10K/768D)** | **47.0 µs** (k=10, Balanced mode) |
 | **Recall@10 (Accurate)** | **100%** |
 | **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors) |
 

@@ -91,6 +91,12 @@ impl ProceduralMemory {
         &self.collection_name
     }
 
+    /// Returns the embedding dimension for this collection.
+    #[must_use]
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
     /// Creates or opens procedural memory.
     ///
     /// # Errors

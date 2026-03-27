@@ -288,6 +288,12 @@ pub struct Collection {
     /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
     pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
 
+    /// Tracks inserts since the last HNSW index save (Issue #423 Component 3).
+    ///
+    /// When this counter exceeds `HNSW_SAVE_THRESHOLD`, `flush()` saves the
+    /// HNSW graph as a safety measure. `flush_full()` always saves and resets.
+    pub(crate) inserts_since_last_hnsw_save: Arc<std::sync::atomic::AtomicU64>,
+
     /// Streaming ingestion handle (STREAM-01).
     ///
     /// `None` when streaming is not configured. Wrapped in `RwLock` so that
@@ -350,6 +356,25 @@ impl Collection {
         let guard = self.stream_ingester.read();
         match guard.as_ref() {
             Some(ingester) => ingester.try_send(point),
+            None => Err(BackpressureError::NotConfigured),
+        }
+    }
+
+    /// Sends a batch of points into the streaming ingestion channel.
+    ///
+    /// Acquires the ingester read-lock once for the entire batch, eliminating
+    /// per-point lock overhead. Returns the number of points successfully
+    /// queued. If the channel fills mid-batch, returns
+    /// [`BackpressureError::BufferFull`] (points already sent are still queued).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackpressureError`] on buffer-full, drain-dead, or not-configured.
+    #[cfg(feature = "persistence")]
+    pub fn stream_insert_batch(&self, points: Vec<Point>) -> Result<usize, BackpressureError> {
+        let guard = self.stream_ingester.read();
+        match guard.as_ref() {
+            Some(ingester) => ingester.try_send_batch(points),
             None => Err(BackpressureError::NotConfigured),
         }
     }

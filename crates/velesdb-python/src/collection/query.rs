@@ -1,12 +1,39 @@
 //! VelesQL query, match, and explain methods for Collection.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyString};
 use std::collections::HashMap;
 
+use crate::collection_helpers::{core_err, id_score_pairs_to_dicts};
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 
 use super::Collection;
+
+/// Convert a `MatchResult` to a Python dict.
+///
+/// Extracts node_id, depth, path, bindings, score, and projected fields
+/// into a flat Python dict with interned keys.
+fn match_result_to_dict(
+    py: Python<'_>,
+    r: velesdb_core::collection::search::query::match_exec::MatchResult,
+) -> PyObject {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(PyString::intern(py, "node_id"), r.node_id);
+    let _ = dict.set_item(PyString::intern(py, "depth"), r.depth);
+    let _ = dict.set_item(PyString::intern(py, "path"), to_pyobject(py, r.path));
+    let _ = dict.set_item(
+        PyString::intern(py, "bindings"),
+        to_pyobject(py, r.bindings),
+    );
+    let _ = dict.set_item(PyString::intern(py, "score"), r.score);
+    let projected = PyDict::new(py);
+    for (k, v) in r.projected {
+        let _ = projected.set_item(k, json_to_python(py, &v));
+    }
+    let _ = dict.set_item(PyString::intern(py, "projected"), projected);
+    dict.into_any().unbind()
+}
 
 /// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
 fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
@@ -22,11 +49,11 @@ fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
 fn convert_params(
     py: Python<'_>,
     params: Option<HashMap<String, PyObject>>,
-) -> HashMap<String, serde_json::Value> {
+) -> PyResult<HashMap<String, serde_json::Value>> {
     params
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+        .map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
         .collect()
 }
 
@@ -50,20 +77,20 @@ impl Collection {
     #[pyo3(signature = (query_str, params=None))]
     fn query(
         &self,
+        py: Python<'_>,
         query_str: &str,
         params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let parsed = parse_velesql(query_str)?;
-            let rust_params = convert_params(py, params);
+    ) -> PyResult<Vec<PyObject>> {
+        let parsed = parse_velesql(query_str)?;
+        let rust_params = convert_params(py, params)?;
 
-            let results = self
-                .inner
+        let results = py.allow_threads(|| {
+            self.inner
                 .execute_query(&parsed, &rust_params)
-                .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {e}")))?;
+                .map_err(core_err)
+        })?;
 
-            Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
-        })
+        Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
     }
 
     /// Execute a MATCH graph traversal query.
@@ -79,87 +106,72 @@ impl Collection {
     #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
     fn match_query(
         &self,
+        py: Python<'_>,
         query_str: &str,
         params: Option<HashMap<String, PyObject>>,
         vector: Option<PyObject>,
         threshold: f32,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let parsed = parse_velesql(query_str)?;
-            let match_clause = parsed
-                .match_clause
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("Query is not a MATCH query"))?;
+    ) -> PyResult<Vec<PyObject>> {
+        let parsed = parse_velesql(query_str)?;
+        let match_clause = parsed
+            .match_clause
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("Query is not a MATCH query"))?
+            .clone();
 
-            let rust_params = convert_params(py, params);
+        let rust_params = convert_params(py, params)?;
+        let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
 
-            let results = if let Some(vector_obj) = vector {
-                let query_vector = extract_vector(py, &vector_obj)?;
+        let results = py.allow_threads(|| {
+            if let Some(ref qv) = query_vector {
                 self.inner
-                    .execute_match_with_similarity(
-                        match_clause,
-                        &query_vector,
-                        threshold,
-                        &rust_params,
-                    )
-                    .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
+                    .execute_match_with_similarity(&match_clause, qv, threshold, &rust_params)
+                    .map_err(core_err)
             } else {
                 self.inner
-                    .execute_match(match_clause, &rust_params)
-                    .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
-            };
+                    .execute_match(&match_clause, &rust_params)
+                    .map_err(core_err)
+            }
+        })?;
 
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut dict = HashMap::new();
-                    dict.insert("node_id".to_string(), to_pyobject(py, r.node_id));
-                    dict.insert("depth".to_string(), to_pyobject(py, r.depth));
-                    dict.insert("path".to_string(), to_pyobject(py, r.path));
-                    dict.insert("bindings".to_string(), to_pyobject(py, r.bindings));
-                    dict.insert("score".to_string(), to_pyobject(py, r.score));
-                    let projected: HashMap<String, PyObject> = r
-                        .projected
-                        .into_iter()
-                        .map(|(k, v)| (k, json_to_python(py, &v)))
-                        .collect();
-                    dict.insert("projected".to_string(), to_pyobject(py, projected));
-                    dict
-                })
-                .collect();
-            Ok(py_results)
-        })
+        let py_results: Vec<PyObject> = results
+            .into_iter()
+            .map(|r| match_result_to_dict(py, r))
+            .collect();
+        Ok(py_results)
     }
 
     /// Return query execution plan (EXPLAIN).
     #[pyo3(signature = (query_str))]
-    fn explain(&self, query_str: &str) -> PyResult<HashMap<String, PyObject>> {
-        Python::with_gil(|py| {
-            let parsed = parse_velesql(query_str)?;
+    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
+        let parsed = parse_velesql(query_str)?;
 
-            let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
-                let stats = velesdb_core::collection::search::query::match_planner::CollectionStats::default();
-                velesdb_core::velesql::QueryPlan::from_match(match_clause, &stats)
-            } else {
-                velesdb_core::velesql::QueryPlan::from_select(&parsed.select)
-            };
+        let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
+            let stats =
+                velesdb_core::collection::search::query::match_planner::CollectionStats::default();
+            velesdb_core::velesql::QueryPlan::from_match(match_clause, &stats)
+        } else {
+            velesdb_core::velesql::QueryPlan::from_select(&parsed.select)
+        };
 
-            let mut out = HashMap::new();
-            out.insert("tree".to_string(), to_pyobject(py, plan.to_tree()));
-            out.insert(
-                "estimated_cost_ms".to_string(),
-                to_pyobject(py, plan.estimated_cost_ms),
-            );
-            out.insert(
-                "filter_strategy".to_string(),
-                to_pyobject(py, plan.filter_strategy.as_str()),
-            );
-            out.insert(
-                "index_used".to_string(),
-                to_pyobject(py, plan.index_used.map(|i| i.as_str().to_string())),
-            );
-            Ok(out)
-        })
+        let dict = PyDict::new(py);
+        let _ = dict.set_item(
+            PyString::intern(py, "tree"),
+            to_pyobject(py, plan.to_tree()),
+        );
+        let _ = dict.set_item(
+            PyString::intern(py, "estimated_cost_ms"),
+            plan.estimated_cost_ms,
+        );
+        let _ = dict.set_item(
+            PyString::intern(py, "filter_strategy"),
+            plan.filter_strategy.as_str(),
+        );
+        let _ = dict.set_item(
+            PyString::intern(py, "index_used"),
+            plan.index_used.map(|i| i.as_str().to_string()),
+        );
+        Ok(dict.into_any().unbind())
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).
@@ -178,27 +190,20 @@ impl Collection {
     #[pyo3(signature = (velesql, params = None))]
     fn query_ids(
         &self,
+        py: Python<'_>,
         velesql: &str,
         params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
-        Python::with_gil(|py| {
-            let parsed_query = parse_velesql(velesql)?;
-            let json_params = convert_params(py, params);
+    ) -> PyResult<Vec<PyObject>> {
+        let parsed_query = parse_velesql(velesql)?;
+        let json_params = convert_params(py, params)?;
 
-            let results = self
-                .inner
+        let results = py.allow_threads(|| {
+            self.inner
                 .execute_query(&parsed_query, &json_params)
-                .map_err(|e| PyRuntimeError::new_err(format!("Query execution failed: {e}")))?;
+                .map_err(core_err)
+        })?;
 
-            Ok(results
-                .into_iter()
-                .map(|r| {
-                    let mut dict = HashMap::new();
-                    dict.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    dict.insert("score".to_string(), to_pyobject(py, r.score));
-                    dict
-                })
-                .collect())
-        })
+        let tuples: Vec<(u64, f32)> = results.into_iter().map(|r| (r.point.id, r.score)).collect();
+        Ok(id_score_pairs_to_dicts(py, tuples))
     }
 }

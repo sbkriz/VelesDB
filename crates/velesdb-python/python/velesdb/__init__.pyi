@@ -169,13 +169,17 @@ class Collection:
         ids: List[int],
         payloads: Optional[List[Optional[Dict[str, Any]]]] = None,
     ) -> int:
-        """Bulk insert from numpy arrays for maximum throughput.
+        """Bulk insert from numpy arrays for maximum throughput (zero-copy).
 
-        Bypasses Python dict parsing overhead. Vectors are read directly
-        from the numpy array without intermediate Python object conversion.
+        The flat f32 buffer from the numpy array is passed directly to the
+        core engine without per-row Vec<f32> allocation. For 100K vectors
+        at 768D this saves ~293 MB of intermediate copies.
+
+        The numpy array must be C-contiguous (row-major). If not,
+        a ValueError is raised.
 
         Args:
-            vectors: numpy.ndarray of shape (n, dimension), dtype float32
+            vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
             ids: list of int or numpy uint64 array (length n)
             payloads: Optional list of payload dicts (length n)
 

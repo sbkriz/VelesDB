@@ -149,3 +149,31 @@ fn test_batch_parallel_rejects_wrong_dimension() {
     let result = col.search_batch_parallel(&queries, 3);
     assert!(result.is_err(), "should reject wrong dimension");
 }
+
+// -----------------------------------------------------------------------
+// Per-query top_k: separate calls with different k values (#419)
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_batch_with_filters_respects_per_call_k() {
+    let (_dir, col) = setup_batch_collection();
+
+    let q1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0];
+    let q2: Vec<f32> = vec![0.0, 1.0, 0.0, 0.0];
+
+    // Call with k=2: both queries truncated to 2 results.
+    let results_k2 = col
+        .search_batch_with_filters(&[&q1, &q2], 2, &[None, None])
+        .expect("batch k=2");
+    assert!(results_k2[0].len() <= 2, "q1 should have at most 2 results");
+    assert!(results_k2[1].len() <= 2, "q2 should have at most 2 results");
+
+    // Call with k=5: both queries can return up to 5 (collection has 6 points).
+    let results_k5 = col
+        .search_batch_with_filters(&[&q1, &q2], 5, &[None, None])
+        .expect("batch k=5");
+    assert!(
+        results_k5[0].len() > results_k2[0].len(),
+        "k=5 should return more results than k=2"
+    );
+}

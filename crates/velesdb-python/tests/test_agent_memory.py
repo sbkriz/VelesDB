@@ -4,34 +4,18 @@ Agent Memory SDK - comprehensive Python binding tests.
 Covers all three memory subsystems (semantic, episodic, procedural)
 with functional and performance tests.
 
+VELESDB_AVAILABLE / pytestmark / temp_db fixture are provided by conftest.py.
+
 Run with: pytest tests/test_agent_memory.py -v
 """
 
-import tempfile
-import shutil
 import time
 
 import pytest
 
-try:
-    from velesdb import Database
+from conftest import _SKIP_NO_BINDINGS
 
-    VELESDB_AVAILABLE = True
-except ImportError:
-    VELESDB_AVAILABLE = False
-
-pytestmark = pytest.mark.skipif(
-    not VELESDB_AVAILABLE, reason="velesdb not installed"
-)
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    temp_dir = tempfile.mkdtemp()
-    db = Database(temp_dir)
-    yield db
-    shutil.rmtree(temp_dir, ignore_errors=True)
+pytestmark = _SKIP_NO_BINDINGS
 
 
 @pytest.fixture
@@ -181,7 +165,7 @@ class TestProceduralMemory:
         assert len(matches) == 1
         assert matches[0]["name"] == "greet"
         assert matches[0]["steps"] == ["wave", "say hi"]
-        assert abs(matches[0]["confidence"] - 0.8) < 0.01
+        assert matches[0]["confidence"] == pytest.approx(0.8, abs=0.01)
 
     def test_recall_min_confidence_filter(self, memory):
         """recall with min_confidence filters low-confidence procedures."""
@@ -192,19 +176,25 @@ class TestProceduralMemory:
         assert 1 in ids
         assert 2 not in ids
 
-    def test_reinforce_success(self, memory):
-        """reinforce(success=True) increases confidence."""
+    @pytest.mark.parametrize(
+        "success,direction",
+        [(True, "above"), (False, "below")],
+        ids=["reinforce_success", "reinforce_failure"],
+    )
+    def test_reinforce(self, memory, success, direction):
+        """reinforce() changes confidence in the expected direction."""
         memory.procedural.learn(1, "proc", ["s1"], [0.5, 0.5, 0.0, 0.0], 0.5)
-        memory.procedural.reinforce(1, success=True)
+        memory.procedural.reinforce(1, success=success)
         matches = memory.procedural.recall([0.5, 0.5, 0.0, 0.0], top_k=1)
-        assert matches[0]["confidence"] > 0.5
-
-    def test_reinforce_failure(self, memory):
-        """reinforce(success=False) decreases confidence."""
-        memory.procedural.learn(1, "proc", ["s1"], [0.5, 0.5, 0.0, 0.0], 0.5)
-        memory.procedural.reinforce(1, success=False)
-        matches = memory.procedural.recall([0.5, 0.5, 0.0, 0.0], top_k=1)
-        assert matches[0]["confidence"] < 0.5
+        confidence = matches[0]["confidence"]
+        if direction == "above":
+            assert confidence > 0.5, (
+                f"reinforce(success=True) should increase confidence above 0.5, got {confidence}"
+            )
+        else:
+            assert confidence < 0.5, (
+                f"reinforce(success=False) should decrease confidence below 0.5, got {confidence}"
+            )
 
     def test_list_all(self, memory):
         """list_all returns all stored procedures."""

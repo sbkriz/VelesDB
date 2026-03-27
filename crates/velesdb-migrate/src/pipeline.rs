@@ -244,6 +244,7 @@ impl Pipeline {
                 crate::config::StorageMode::SQ8 => velesdb_core::StorageMode::SQ8,
                 crate::config::StorageMode::Binary => velesdb_core::StorageMode::Binary,
                 crate::config::StorageMode::Pq => velesdb_core::StorageMode::ProductQuantization,
+                crate::config::StorageMode::RaBitQ => velesdb_core::StorageMode::RaBitQ,
             };
 
             if db

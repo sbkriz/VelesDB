@@ -10,7 +10,7 @@
 //! `Drop` only performs best-effort sync and must not be relied on as a commit point.
 
 use super::MmapStorage;
-use crate::storage::log_payload::crc32_hash;
+use crate::storage::log_payload::{crc32_hash, DurabilityMode};
 use crate::storage::traits::VectorStorage;
 use crate::storage::vector_bytes::{bytes_to_vector, vector_to_bytes};
 
@@ -24,18 +24,27 @@ use std::sync::atomic::Ordering;
 /// Format: `[op:1][id:8][len:4][data:N][crc32:4]`
 ///
 /// The CRC32 covers `op + id + len + data`.
-fn write_wal_store_entry(wal: &mut io::BufWriter<File>, id: u64, data: &[u8]) -> io::Result<()> {
-    let mut frame = Vec::with_capacity(1 + 8 + 4 + data.len());
-    frame.push(1u8);
-    frame.extend_from_slice(&id.to_le_bytes());
+///
+/// Reuses `buf` to avoid per-call heap allocation in batch mode.
+/// Callers must provide a `Vec<u8>` that will be `clear()`-ed and reused.
+/// Pattern mirrors `LogPayloadStorage::write_store_record`.
+fn write_wal_store_entry(
+    wal: &mut io::BufWriter<File>,
+    id: u64,
+    data: &[u8],
+    buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    buf.clear();
+    buf.push(1u8);
+    buf.extend_from_slice(&id.to_le_bytes());
     // Reason: Vector byte length is dimension * 4. With max dimension 65536,
     // max bytes = 262144 which fits in u32 (max 4,294,967,295).
     #[allow(clippy::cast_possible_truncation)]
     let len_u32 = data.len() as u32;
-    frame.extend_from_slice(&len_u32.to_le_bytes());
-    frame.extend_from_slice(data);
-    let crc = crc32_hash(&frame);
-    wal.write_all(&frame)?;
+    buf.extend_from_slice(&len_u32.to_le_bytes());
+    buf.extend_from_slice(data);
+    let crc = crc32_hash(buf);
+    wal.write_all(buf)?;
     wal.write_all(&crc.to_le_bytes())
 }
 
@@ -44,12 +53,19 @@ fn write_wal_store_entry(wal: &mut io::BufWriter<File>, id: u64, data: &[u8]) ->
 /// Format: `[op:1][id:8][crc32:4]`
 ///
 /// The CRC32 covers `op + id`.
-fn write_wal_delete_entry(wal: &mut io::BufWriter<File>, id: u64) -> io::Result<()> {
-    let mut frame = Vec::with_capacity(1 + 8);
-    frame.push(2u8);
-    frame.extend_from_slice(&id.to_le_bytes());
-    let crc = crc32_hash(&frame);
-    wal.write_all(&frame)?;
+///
+/// Reuses `buf` to avoid per-call heap allocation in batch mode.
+/// Pattern mirrors `write_wal_store_entry`.
+fn write_wal_delete_entry(
+    wal: &mut io::BufWriter<File>,
+    id: u64,
+    buf: &mut Vec<u8>,
+) -> io::Result<()> {
+    buf.clear();
+    buf.push(2u8);
+    buf.extend_from_slice(&id.to_le_bytes());
+    let crc = crc32_hash(buf);
+    wal.write_all(buf)?;
     wal.write_all(&crc.to_le_bytes())
 }
 
@@ -72,9 +88,11 @@ impl VectorStorage for MmapStorage {
         let vector_bytes = vector_to_bytes(vector);
 
         // 1. Write to WAL with CRC32 framing (Issue #317)
-        {
+        // Issue #423: Skip WAL when DurabilityMode::None for bulk imports.
+        if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
-            write_wal_store_entry(&mut wal, id, vector_bytes)?;
+            let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_bytes.len());
+            write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
         }
 
         // 2. Determine offset (EPIC-033/US-004: Use sharded index)
@@ -142,11 +160,15 @@ impl VectorStorage for MmapStorage {
         }
 
         // 3. WAL append with CRC32 framing per entry (Issue #317)
-        {
+        // Issue #423: Allocate WAL frame buffer once and reuse across entries
+        // to avoid per-entry heap allocation (mirrors LogPayloadStorage pattern).
+        // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
+        if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
+            let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_size);
             for &(id, vector) in vectors {
                 let vector_bytes = vector_to_bytes(vector);
-                write_wal_store_entry(&mut wal, id, vector_bytes)?;
+                write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
             }
             // Note: no fsync here, caller controls durability via `flush()`.
         }
@@ -210,9 +232,11 @@ impl VectorStorage for MmapStorage {
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
         // 1. Write to WAL with CRC32 framing (Issue #317)
-        {
+        // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
+        if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
-            write_wal_delete_entry(&mut wal, id)?;
+            let mut buf = Vec::with_capacity(1 + 8);
+            write_wal_delete_entry(&mut wal, id, &mut buf)?;
         }
 
         // 2. Get offset before removing from index (for hole-punch)
@@ -240,32 +264,32 @@ impl VectorStorage for MmapStorage {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        // Explicit durability barrier:
-        // 1) flush mmap bytes, 2) flush+fsync WAL, 3) persist+fsync index file.
-        // Callers requiring durable state across crashes should call this method.
+        // Issue #423: Fast durability barrier — WAL + mmap only, no index file.
+        //
+        // The WAL contains enough information to reconstruct the index on
+        // recovery via `wal_replay::replay_wal_to_index`. Writing `vectors.idx`
+        // on every flush added ~5-10ms (serialize + fsync) that is unnecessary
+        // for crash safety.
+        //
+        // Use `flush_full()` to also persist the index file (e.g., before
+        // shutdown or compaction), or `flush_index()` to write only the index.
+        //
         // 1. Flush Mmap
         self.mmap.write().flush()?;
 
-        // 2. Flush WAL and fsync for durability
-        {
-            let mut wal = self.wal.write();
-            wal.flush()?;
-            wal.get_ref().sync_all()?;
+        // 2. Flush WAL — skip entirely when DurabilityMode::None (Issue #423
+        // Component 4: no WAL writes occurred, nothing to sync).
+        match self.durability {
+            DurabilityMode::Fsync => {
+                let mut wal = self.wal.write();
+                wal.flush()?;
+                wal.get_ref().sync_all()?;
+            }
+            DurabilityMode::FlushOnly => {
+                self.wal.write().flush()?;
+            }
+            DurabilityMode::None => {}
         }
-
-        // 3. Save Index (EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization)
-        // EPIC-069/US-001: fsync index file for crash recovery on Windows
-        let index_path = self.path.join("vectors.idx");
-        let file = File::create(&index_path)?;
-        let mut writer = io::BufWriter::new(file);
-        let flat_index = self.index.to_hashmap();
-        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
-        writer.write_all(&bytes)?;
-        writer.flush()?;
-        writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?
-            .sync_all()?;
 
         Ok(())
     }

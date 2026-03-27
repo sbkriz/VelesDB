@@ -212,6 +212,9 @@ pub enum StorageMode {
     /// Product quantization. High compression with trained codebooks.
     #[serde(alias = "product_quantization")]
     Pq,
+    /// `RaBitQ`: 1-bit with rotation + scalar correction. 32x compression.
+    #[serde(alias = "rabitq")]
+    RaBitQ,
 }
 
 /// Migration options.

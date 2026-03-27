@@ -1,7 +1,7 @@
 # VelesDB Soundness Documentation
 
 > **Purpose**: Enable Rust senior reviewers to audit unsafe code without reading the entire codebase.
-> **Last Updated**: 2026-01-27 (EPIC-022/US-001)
+> **Last Updated**: 2026-03-27 (EPIC-022/US-001 + RaBitQ soundness)
 
 ## Table of Contents
 
@@ -23,9 +23,11 @@ VelesDB uses `unsafe` code in five categories:
 | Category | Purpose | Files |
 |----------|---------|-------|
 | **SIMD** | AVX-512/AVX2/NEON for vector operations | `simd_native.rs`, `simd.rs`, `trigram/simd.rs` |
+| **SIMD (RaBitQ)** | AVX-512 VPOPCNTDQ for binary Hamming distance | `quantization/rabitq/` |
 | **Alloc** | Custom aligned allocations | `perf_optimizations.rs`, `alloc_guard.rs` |
 | **Mmap** | Memory-mapped file I/O | `storage/mmap.rs`, `storage/guard.rs` |
 | **Pointers** | Raw pointer operations for performance | `storage/vector_bytes.rs`, `storage/compaction.rs` |
+| **Prefetch** | Software prefetch hints for HNSW search | `perf_optimizations.rs` |
 | **FFI** | Python (PyO3), WASM, Mobile bindings | `velesdb-python/`, `velesdb-wasm/`, `velesdb-mobile/` |
 
 ---
@@ -91,6 +93,77 @@ unsafe {
 1. Runtime feature detection before unsafe call
 2. Bounds checking: `i + 34 <= len` before 32-byte access
 3. Prefetch addresses are within allocated buffer
+
+### RaBitQ SIMD (Binary Hamming Distance)
+
+**Module**: `crates/velesdb-core/src/quantization/rabitq/` (SIMD kernels)
+
+**Function**: `hamming_binary_avx512_vpopcntdq()`
+
+Uses `_mm512_popcnt_epi64` to compute Hamming distance on 512-bit binary
+vectors. This instruction is available on Ice Lake+ (Intel) and Zen4+ (AMD)
+processors with the AVX-512 VPOPCNTDQ extension.
+
+**Invariants**:
+1. Runtime feature detection via `has_avx512vpopcntdq()` ALWAYS precedes
+   the unsafe call
+2. `#[target_feature(enable = "avx512f,avx512vpopcntdq")]` enforces CPU
+   feature requirement at the function level
+3. Input binary vectors have matching lengths (asserted before unsafe call)
+4. `// SAFETY:` comments present on all unsafe SIMD blocks
+
+**Fallback**: Scalar popcount loop that iterates `u64` words and sums
+`count_ones()`. This path is always safe and requires no CPU feature gates.
+
+**Why It's Sound**:
+```rust
+// Public API checks feature before dispatching
+if has_avx512vpopcntdq() {
+    // SAFETY: Feature detection confirmed AVX-512 VPOPCNTDQ support.
+    // Input slices have equal length (asserted above).
+    unsafe { hamming_binary_avx512_vpopcntdq(a, b) }
+} else {
+    hamming_binary_scalar(a, b)  // Always-safe fallback
+}
+```
+
+**Forbidden Scenarios**:
+- Calling `hamming_binary_avx512_vpopcntdq` without checking
+  `has_avx512vpopcntdq()`
+- Passing binary vectors of different lengths
+
+### Prefetch Instructions
+
+**Module**: `crates/velesdb-core/src/perf_optimizations.rs`
+
+**Function**: `ContiguousVectors::prefetch(node_id)`
+
+Issues software prefetch hints (`_mm_prefetch` with `_MM_HINT_T0`) to bring
+neighbor vector data into L1 cache before it is needed during HNSW search.
+
+**Invariants**:
+1. Prefetch to an invalid or out-of-bounds address is architecturally a
+   no-op on x86 (Intel SDM Vol. 2, Section 4.3 "PREFETCHh": "A PREFETCHh
+   instruction is treated as a NOP if the memory address points to a
+   non-cacheable memory region")
+2. Prefetch count is bounded by the HNSW neighbor list size (M=16..64),
+   so the number of prefetch instructions per search step is small and
+   predictable
+3. No memory faults, no side effects beyond cache line fills
+
+**Why It's Sound**:
+```rust
+// SAFETY: _mm_prefetch is a hint instruction that cannot fault.
+// Even if node_id is out of bounds, the prefetch address is simply
+// ignored by the CPU. No memory access occurs — only a cache hint.
+unsafe {
+    _mm_prefetch(ptr.cast::<i8>(), _MM_HINT_T0);
+}
+```
+
+**Forbidden Scenarios**:
+- None: prefetch is architecturally safe for any address on x86. However,
+  callers should still prefer valid addresses for meaningful cache benefit.
 
 ---
 
@@ -324,6 +397,40 @@ by the previous entry).
 `batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) calls
 `insert_batch_parallel` in Phase 3. The crash recovery implications are
 documented in [CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
+
+### Interior Mutability Invariants: `RaBitQPrecisionHnsw`
+
+**Module**: `crates/velesdb-core/src/index/hnsw/` (RaBitQ integration)
+
+`RaBitQPrecisionHnsw` uses `RwLock` and `Mutex` for interior mutability of
+its quantization state. The following invariants guarantee that no undefined
+behavior or data inconsistency can occur:
+
+**State transition invariants**:
+
+| Field | Invariant |
+|-------|-----------|
+| `rabitq_index` | Transitions from `None` to `Some(Arc<RaBitQIndex>)` exactly once during the lifetime of the struct. Once set, the value is immutable (only read-locked thereafter). |
+| `rabitq_store` | Grows monotonically after training. Only `push` operations occur (append-only). No elements are removed or reordered on the hot path. |
+| `training_buffer` | Accumulates raw vectors before training. After training completes, the buffer is cleared (`clear()`) and deallocated (`shrink_to_fit()`), reducing to zero capacity. |
+
+**Memory safety invariants**:
+- No raw pointer arithmetic exists in the RaBitQ code path. All vector
+  access goes through safe `Vec`, `Arc`, and slice APIs.
+- The double-check locking pattern in `train_rabitq()` prevents duplicate
+  training: the function re-checks `rabitq_index` under a write lock after
+  initially observing `None` under a read lock. This ensures exactly-once
+  training semantics even under concurrent calls.
+- Store-before-index ordering (see [CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#rabitq-interior-mutability))
+  prevents search threads from observing a trained index with an empty store.
+
+**Why It's Sound**:
+- `RwLock`/`Mutex` from `parking_lot` never poison, so lock acquisition
+  cannot fail.
+- The one-time write to `rabitq_index` followed by read-only access is a
+  well-established "initialize once, read many" pattern with no data race.
+- `rabitq_store` serializes writes via `RwLock::write()`, and each write
+  holds the lock for ~10ns (a single `Vec::push`), minimizing contention.
 
 ### Lock Ordering (MobileGraphStore)
 

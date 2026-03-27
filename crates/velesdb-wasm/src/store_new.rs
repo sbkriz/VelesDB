@@ -48,8 +48,8 @@ pub fn create_with_capacity(
             let bytes_per = dimension.div_ceil(8);
             store.data_binary.reserve(capacity * bytes_per);
         }
-        // ProductQuantization falls back to SQ8 in WASM context
-        StorageMode::ProductQuantization => {
+        // ProductQuantization/RaBitQ fall back to SQ8 in WASM context
+        StorageMode::ProductQuantization | StorageMode::RaBitQ => {
             store.data_sq8.reserve(capacity * dimension);
             store.sq8_mins.reserve(capacity);
             store.sq8_scales.reserve(capacity);

@@ -140,6 +140,7 @@ impl NativeHnswIndex {
                 dimension: self.dimension,
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
+                storage_mode: self.inner.read().storage_mode(),
             },
         )?;
 
@@ -168,8 +169,14 @@ impl NativeHnswIndex {
 
         let meta = persistence::load_meta(path)?;
 
-        // Load HNSW graph
-        let inner = NativeHnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
+        // Load HNSW graph (with storage mode for RaBitQ backend support)
+        let inner = NativeHnswInner::file_load_with_storage_mode(
+            path,
+            "native_hnsw",
+            meta.metric,
+            meta.dimension,
+            meta.storage_mode,
+        )?;
 
         // Load mappings
         let mappings_data = persistence::load_mappings(path)?;
@@ -251,9 +258,9 @@ impl NativeHnswIndex {
 
         neighbors
             .into_iter()
-            .filter_map(|n| {
-                self.mappings.get_id(n.d_id).map(|id| {
-                    let score = inner.transform_score(n.distance);
+            .filter_map(|(node_id, raw_dist)| {
+                self.mappings.get_id(node_id).map(|id| {
+                    let score = inner.transform_score(raw_dist);
                     ScoredResult::new(id, score)
                 })
             })
@@ -500,8 +507,12 @@ impl NativeHnswIndex {
             .par_iter()
             .filter_map(|(idx, vec)| {
                 let id = self.mappings.get_id(*idx)?;
-                let distance = inner.compute_distance(query, vec);
-                Some(ScoredResult::new(id, distance))
+                let raw_distance = inner.compute_distance(query, vec);
+                // Reason: compute_distance returns squared L2 for Euclidean
+                // (CachedSimdDistance optimization). Apply transform_score to
+                // restore actual Euclidean distance for user-visible scores.
+                let score = inner.transform_score(raw_distance);
+                Some(ScoredResult::new(id, score))
             })
             .collect();
 

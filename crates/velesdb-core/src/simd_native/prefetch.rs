@@ -103,6 +103,39 @@ pub fn prefetch_vector_from_u16(data: &[u16]) {
     }
 }
 
+/// Prefetches a `u64` slice into L1 cache (cross-platform).
+///
+/// Used by `RaBitQ` vector store to prefetch binary codes before
+/// XOR + popcount distance computation in the graph traversal loop.
+#[inline]
+pub fn prefetch_vector_u64(data: &[u64]) {
+    if data.is_empty() {
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
+        // - Condition 1: The pointer is derived from a valid slice reference.
+        // - Condition 2: Prefetch hints never fault, even with invalid addresses.
+        // Reason: Software prefetching for RaBitQ binary codes before XOR+popcount.
+        unsafe {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            _mm_prefetch(data.as_ptr().cast::<i8>(), _MM_HINT_T0);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::simd_neon_prefetch::prefetch_read_l1(data.as_ptr().cast::<u8>());
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = data;
+    }
+}
+
 /// Prefetches a vector into multiple cache levels for larger vectors.
 ///
 /// Coverage strategy per architecture:

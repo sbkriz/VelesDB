@@ -494,9 +494,9 @@ readinessProbe:
 ## Performance
 
 - **Cosine similarity**: ~33.1 ns per operation (768d)
-- **Dot product**: ~17.6 ns per operation (768d)
-- **Search latency**: 54.6 µs for 10K vectors (768D, Balanced mode)
-- **Throughput**: 43.6 Gelem/s (dot product, 768D)
+- **Dot product**: ~19.8 ns per operation (768d)
+- **Search latency**: 47.0 µs for 10K vectors (768D, Balanced mode)
+- **Throughput**: 38.8 Gelem/s (dot product, 768D)
 
 ## Configuration Reference
 

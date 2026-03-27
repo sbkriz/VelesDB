@@ -226,6 +226,44 @@ fn test_search_quality_serialize_deserialize() {
 }
 
 // =============================================================================
+// AutoTune variant tests
+// =============================================================================
+
+#[test]
+fn test_search_quality_autotune_ef_search_fallback() {
+    // AutoTune falls back to Balanced when ef_search() is called without
+    // collection context (same as Balanced: 128 base, k*4 scaling).
+    assert_eq!(SearchQuality::AutoTune.ef_search(10), 128);
+    assert_eq!(SearchQuality::AutoTune.ef_search(50), 200); // 50 * 4
+}
+
+#[test]
+fn test_search_quality_autotune_is_adaptive() {
+    assert!(SearchQuality::AutoTune.is_adaptive());
+}
+
+#[test]
+fn test_search_quality_autotune_adaptive_max_ef_is_none() {
+    // AutoTune computes max_ef dynamically, so adaptive_max_ef returns None
+    assert_eq!(SearchQuality::AutoTune.adaptive_max_ef(), None);
+}
+
+#[test]
+fn test_search_quality_autotune_serialize_deserialize() {
+    let quality = SearchQuality::AutoTune;
+    let json = serde_json::to_string(&quality).unwrap();
+    let deserialized: SearchQuality = serde_json::from_str(&json).unwrap();
+    assert_eq!(quality, deserialized);
+}
+
+#[test]
+fn test_search_quality_autotune_default_is_not_autotune() {
+    // Default should remain Balanced, not AutoTune
+    assert_eq!(SearchQuality::default(), SearchQuality::Balanced);
+    assert_ne!(SearchQuality::default(), SearchQuality::AutoTune);
+}
+
+// =============================================================================
 // Phase 1: Large-scale optimization tests
 // =============================================================================
 

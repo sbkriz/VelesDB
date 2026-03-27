@@ -4,7 +4,7 @@
 //! checking to prevent deadlocks. The rank system encodes the rule:
 //!
 //! ```text
-//! vectors (rank 10) → layers (rank 20) → neighbors (rank 30)
+//! vectors (rank 10) → columnar (rank 15) → layers (rank 20) → neighbors (rank 30)
 //! ```
 //!
 //! Acquiring a lock with lower-or-equal rank than the highest currently
@@ -21,7 +21,7 @@ use super::safety_counters::HNSW_COUNTERS;
 
 /// Lock rank values — monotonically increasing acquisition order.
 ///
-/// The global lock order is: vectors → layers → neighbors.
+/// The global lock order is: vectors → columnar → layers → neighbors.
 /// Any code path that acquires multiple locks must acquire them
 /// in strictly increasing rank order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,7 +29,9 @@ use super::safety_counters::HNSW_COUNTERS;
 pub(crate) enum LockRank {
     /// `vectors` RwLock — rank 10 (acquired first)
     Vectors = 10,
-    /// `layers` RwLock — rank 20 (acquired second)
+    /// `columnar` RwLock — rank 15 (PDX block-columnar layout)
+    Columnar = 15,
+    /// `layers` RwLock — rank 20 (acquired after vectors/columnar)
     Layers = 20,
     /// Per-node neighbor lists — rank 30 (acquired last)
     Neighbors = 30,

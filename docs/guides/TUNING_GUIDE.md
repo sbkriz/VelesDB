@@ -226,10 +226,62 @@ configuration level.
 | `Accurate` | 512 | Analytics |
 | `Perfect` | exhaustive | Ground truth |
 
+### AutoTune Mode (v1.7.2)
+
+The `AutoTune` variant computes optimal `ef_search` automatically from the
+collection's size and vector dimension, removing the need for manual ef tuning.
+
+Internally it calls `auto_ef_range(count, dimension, k)` which returns a
+`(min_ef, max_ef)` pair used in an adaptive two-phase search (same mechanism
+as `Adaptive`).
+
+**Scaling tiers:**
+
+| Collection Size | Base ef (per k) | Strategy |
+|-----------------|-----------------|----------|
+| <= 1K           | k * 2           | Conservative — small datasets are fast regardless |
+| 1K - 10K        | k * 4           | Moderate |
+| 10K - 100K      | k * 8           | Moderate-aggressive |
+| > 100K          | k * 12          | Aggressive — large datasets need wider exploration |
+
+A dimension factor of **1.5x** is applied for dimensions > 512 (sparser
+neighborhoods require more candidates). The `max_ef` is always `4 * min_ef`,
+giving the second adaptive phase headroom for hard queries.
+
+**REST API:**
+
+```json
+POST /collections/{name}/search
+{
+  "vector": [0.1, 0.2, ...],
+  "top_k": 10,
+  "mode": "autotune"
+}
+```
+
+**Python:**
+
+```python
+results = collection.search_with_quality(vector, "autotune", top_k=10)
+```
+
+**Rust:**
+
+```rust
+use velesdb_core::SearchQuality;
+let results = index.search_with_quality(&query, 10, SearchQuality::AutoTune);
+```
+
+**When to use:** Recommended for applications that want good recall without
+manual ef tuning. AutoTune provides a solid default that scales with your data
+— start with it and only switch to manual `Custom(ef)` or `Adaptive` if you
+need to squeeze out the last microseconds.
+
 ### Choosing Between Them
 
 - Use `SearchMode` when configuring a collection's default search behavior
 - Use `SearchQuality` when you need per-query control or dynamic k-scaling
+- Use `SearchQuality::AutoTune` when you want good recall without manual ef tuning
 
 ---
 
@@ -464,3 +516,51 @@ built-in search handles alignment internally.
    filters before retrieving vectors. For selective filters (<25% pass rate), this
    avoids loading hundreds of KB of unnecessary vector data. The over-fetch factor
    adapts automatically based on estimated filter selectivity.
+
+8. **Software pipelining (v1.7.2)**: Search automatically uses speculative prefetch
+   for vectors whose dimension spans at least 2 cache lines (>= 32 dimensions) and
+   whose dataset exceeds ~8 MB (not fully L3-resident). The pipeline peeks at the
+   next candidate in the min-heap and prefetches its neighbor vectors while computing
+   distances for the current batch, hiding main-memory latency behind ALU work. This
+   is fully automatic and produces identical results to the non-pipelined path — no
+   configuration needed.
+
+9. **PDX columnar layout (v1.7.2)**: After BFS graph reordering
+   (`reorder_for_locality()`), vectors can be transposed into a block-columnar (PDX)
+   layout via `ColumnarVectors`. Each block contains 64 vectors with dimensions
+   interleaved, enabling the SIMD kernel to broadcast `query[d]` once and compute
+   the d-th contribution for all 64 vectors simultaneously. This achieves 64x better
+   register reuse compared to standard array-of-structures layout. The conversion is
+   automatic after reordering for indices above 1000 vectors.
+
+---
+
+## Performance Metrics (v1.7.2)
+
+Reference benchmarks captured on 2026-03-27 with `target-cpu=native`.
+
+**Hardware:** Intel i9-14900KF, 64 GB DDR5, Windows 11
+
+### Rust Core (Criterion)
+
+| Benchmark | Configuration | Result |
+|-----------|---------------|--------|
+| Search top-10 | 5K vectors, 768D, Cosine | ~55 us |
+| Parallel insert | 1K vectors, 768D | ~20.7 ms (48.2K vec/s) |
+| SIMD dot product | 768D (AVX2/AVX-512) | ~21.7 ns |
+
+### Python Bindings (PyO3 + NumPy)
+
+| Benchmark | Configuration | Result |
+|-----------|---------------|--------|
+| Bulk insert | 10K vectors, 384D | ~15.4K vec/s |
+| Search (avg) | 10K vectors, 384D, top-10 | ~630 us |
+
+These numbers include all overhead (lock acquisition, HNSW traversal, result
+conversion). Actual SIMD kernel throughput is higher — the ~21.7 ns dot product
+processes 768 floats at >35 GFLOP/s per core.
+
+**Note:** Micro-benchmarks on Windows have 5-10% noise. Use the numbers above as
+order-of-magnitude references, not exact targets. For reproducible comparisons,
+run `cargo bench` locally with `RUSTFLAGS="-C target-cpu=native"` and compare
+against your own baseline.

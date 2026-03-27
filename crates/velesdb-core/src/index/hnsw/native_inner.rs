@@ -2,23 +2,47 @@
 //!
 //! This module provides `NativeHnswInner`, a drop-in replacement for `HnswInner`
 //! that uses our native HNSW implementation instead of the `hnsw_rs` crate.
+//!
+//! Supports two backends via [`HnswBackend`]:
+//! - **Standard**: Full f32 distances (`NativeHnsw`)
+//! - **`RaBitQ`**: Binary traversal + f32 re-ranking (`RaBitQPrecisionHnsw`)
 
 // Temporarily allow dead_code until integration into HnswIndex
 #![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
 
+use super::native::rabitq_precision::RaBitQPrecisionHnsw;
 use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
-/// Native HNSW index wrapper to handle different distance metrics.
+/// Backend selector for the native HNSW index.
+///
+/// `Standard` uses full f32 distances. `RaBitQ` uses binary graph traversal
+/// (32x compression) with f32 re-ranking for final results.
+// Reason: `Standard` (272 B) is the hot path — boxing it would add pointer
+// indirection on every search call. `RaBitQ` is boxed intentionally to avoid
+// inflating `Standard`-mode layout across cache lines.
+#[allow(clippy::large_enum_variant)]
+enum HnswBackend {
+    /// Standard f32 distance backend.
+    Standard(NativeHnsw<CachedSimdDistance>),
+    /// `RaBitQ` binary traversal + f32 re-ranking backend.
+    ///
+    /// Boxed to keep the enum size equal to `NativeHnsw` (~64 bytes).
+    /// `RaBitQPrecisionHnsw` is ~250 bytes (3 locks + buffers); storing it
+    /// inline would push `Standard`-mode hot fields across cache lines.
+    RaBitQ(Box<RaBitQPrecisionHnsw<CachedSimdDistance>>),
+}
+
+/// Native HNSW index wrapper to handle different distance metrics and backends.
 ///
 /// This is the native equivalent of `HnswInner`, using our own HNSW implementation
 /// instead of `hnsw_rs`. It provides the same API for seamless integration.
 pub struct NativeHnswInner {
-    /// The underlying native HNSW index (cached fn pointers for zero-dispatch)
-    inner: NativeHnsw<CachedSimdDistance>,
-    /// The distance metric used
+    /// The underlying HNSW backend (standard or `RaBitQ`).
+    backend: HnswBackend,
+    /// The distance metric used.
     metric: DistanceMetric,
 }
 
@@ -35,42 +59,134 @@ impl NativeHnswInner {
         ef_construction: usize,
         dimension: usize,
     ) -> crate::error::Result<Self> {
-        let distance = CachedSimdDistance::new(metric, dimension);
-        let inner = if dimension > 0 {
-            NativeHnsw::new_with_dimension(
+        Self::new_with_storage_mode(
+            metric,
+            max_connections,
+            max_elements,
+            ef_construction,
+            dimension,
+            crate::StorageMode::Full,
+        )
+    }
+
+    /// Creates a new `NativeHnswInner` with a specific storage mode.
+    ///
+    /// When `storage_mode` is [`StorageMode::RaBitQ`], the backend uses binary
+    /// graph traversal for 32x bandwidth reduction during search.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    pub fn new_with_storage_mode(
+        metric: DistanceMetric,
+        max_connections: usize,
+        max_elements: usize,
+        ef_construction: usize,
+        dimension: usize,
+        storage_mode: crate::StorageMode,
+    ) -> crate::error::Result<Self> {
+        let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
+            let distance = CachedSimdDistance::new(metric, dimension);
+            let rabitq = RaBitQPrecisionHnsw::new(
                 distance,
+                dimension,
                 max_connections,
                 ef_construction,
                 max_elements,
-                dimension,
-            )?
+            )?;
+            HnswBackend::RaBitQ(Box::new(rabitq))
         } else {
-            NativeHnsw::new(distance, max_connections, ef_construction, max_elements)
+            let distance = CachedSimdDistance::new(metric, dimension);
+            let inner = if dimension > 0 {
+                NativeHnsw::new_with_dimension(
+                    distance,
+                    max_connections,
+                    ef_construction,
+                    max_elements,
+                    dimension,
+                )?
+            } else {
+                NativeHnsw::new(distance, max_connections, ef_construction, max_elements)
+            };
+            HnswBackend::Standard(inner)
         };
 
-        Ok(Self { inner, metric })
+        Ok(Self { backend, metric })
     }
 
-    /// Searches the HNSW graph and returns raw neighbors with distances.
+    /// Returns the storage mode for this backend.
+    #[must_use]
+    pub fn storage_mode(&self) -> crate::StorageMode {
+        match &self.backend {
+            HnswBackend::Standard(_) => crate::StorageMode::Full,
+            HnswBackend::RaBitQ(_) => crate::StorageMode::RaBitQ,
+        }
+    }
+}
+
+// ============================================================================
+// Search methods
+// ============================================================================
+
+impl NativeHnswInner {
+    /// Searches the HNSW graph and returns `(node_id, distance)` tuples.
+    ///
+    /// For **Standard** backend: returns raw distances (caller must call
+    /// [`transform_score`](Self::transform_score)).
+    ///
+    /// For `RaBitQ` backend: returns pre-transformed scores (caller's
+    /// `transform_score` is a no-op identity).
     #[inline]
     #[must_use]
-    pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<NativeNeighbour> {
-        self.inner.search_neighbours(query, k, ef_search)
+    pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.search(query, k, ef_search),
+            HnswBackend::RaBitQ(rabitq) => rabitq.search(query, k, ef_search),
+        }
     }
 
+    /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
+    #[inline]
+    #[must_use]
+    pub fn search_neighbours(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<NativeNeighbour> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.search_neighbours(query, k, ef_search),
+            HnswBackend::RaBitQ(rabitq) => rabitq
+                .search(query, k, ef_search)
+                .into_iter()
+                .map(|(id, dist)| NativeNeighbour {
+                    d_id: id,
+                    distance: dist,
+                })
+                .collect(),
+        }
+    }
+}
+
+// ============================================================================
+// Insert methods
+// ============================================================================
+
+impl NativeHnswInner {
     /// Inserts a single vector into the HNSW graph.
     ///
     /// The caller supplies `(vector, expected_idx)` where `expected_idx` is the
-    /// internal index pre-registered in `ShardedMappings`. The native graph
-    /// auto-assigns sequential node IDs; this method verifies that the assigned
-    /// ID matches the expected index to detect mapping desynchronisation early.
+    /// internal index pre-registered in `ShardedMappings`.
     ///
     /// # Errors
     ///
     /// Returns an error if allocation, insertion, or ID-mapping consistency fails.
     pub fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<usize> {
         let (vector, expected_idx) = data;
-        let assigned_id = self.inner.insert(vector)?;
+        let assigned_id = match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.insert(vector)?,
+            HnswBackend::RaBitQ(rabitq) => rabitq.insert(vector)?,
+        };
         if assigned_id != expected_idx {
             tracing::warn!(
                 "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id} \
@@ -82,34 +198,54 @@ impl NativeHnswInner {
 
     /// Parallel batch insert into the HNSW graph.
     ///
-    /// Returns a vector of graph-assigned node IDs, one per input vector,
-    /// in the same order as `data`. Callers must reconcile these against
-    /// their pre-registered mapping indices.
-    ///
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
     pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
-        self.inner.parallel_insert(data)
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.parallel_insert(data),
+            // RaBitQ: insert sequentially to maintain RaBitQ store consistency
+            HnswBackend::RaBitQ(_) => {
+                let mut ids = Vec::with_capacity(data.len());
+                for &(vector, expected_idx) in data {
+                    ids.push(self.insert((vector, expected_idx))?);
+                }
+                Ok(ids)
+            }
+        }
     }
 
     /// Sets the index to searching mode after bulk insertions.
-    ///
-    /// Note: This is a no-op for our native implementation.
     pub fn set_searching_mode(&mut self, mode: bool) {
-        self.inner.set_searching_mode(mode);
+        match &mut self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.set_searching_mode(mode),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.set_searching_mode(mode),
+        }
     }
+}
 
+// ============================================================================
+// Persistence methods
+// ============================================================================
+
+impl NativeHnswInner {
     /// Dumps the HNSW graph to files for persistence.
     ///
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail.
     pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
-        self.inner.file_dump(path, basename)
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.file_dump(path, basename),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.file_dump(path, basename),
+        }
     }
 
     /// Loads the HNSW graph from files.
+    ///
+    /// When `storage_mode` is [`StorageMode::RaBitQ`], wraps the loaded graph
+    /// in a `RaBitQPrecisionHnsw`. The quantizer trains lazily after enough
+    /// new vectors are inserted.
     ///
     /// # Errors
     ///
@@ -123,32 +259,77 @@ impl NativeHnswInner {
         let distance = CachedSimdDistance::new(metric, dimension);
         let inner = NativeHnsw::file_load(path, basename, distance)?;
 
-        Ok(Self { inner, metric })
+        Ok(Self {
+            backend: HnswBackend::Standard(inner),
+            metric,
+        })
     }
 
-    /// Transforms raw HNSW distance to the appropriate score based on metric type.
+    /// Loads the HNSW graph with a specific storage mode.
     ///
-    /// - **Cosine**: `(1.0 - distance).clamp(0.0, 1.0)` (similarity in `[0,1]`)
-    /// - **Euclidean**/**Hamming**/**Jaccard**: raw distance (lower is better)
-    /// - **`DotProduct`**: `-distance` (negated for consistency)
+    /// # Errors
+    ///
+    /// Returns `io::Error` if file operations fail or data is corrupted.
+    pub fn file_load_with_storage_mode(
+        path: &Path,
+        basename: &str,
+        metric: DistanceMetric,
+        dimension: usize,
+        storage_mode: crate::StorageMode,
+    ) -> std::io::Result<Self> {
+        let distance = CachedSimdDistance::new(metric, dimension);
+        let inner = NativeHnsw::file_load(path, basename, distance)?;
+
+        let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
+            // Wrap loaded graph in RaBitQ backend.
+            // The quantizer is NOT trained yet — it trains lazily from new inserts.
+            let distance = CachedSimdDistance::new(metric, dimension);
+            let rabitq = RaBitQPrecisionHnsw::from_inner(inner, distance, dimension);
+            HnswBackend::RaBitQ(Box::new(rabitq))
+        } else {
+            HnswBackend::Standard(inner)
+        };
+
+        Ok(Self { backend, metric })
+    }
+}
+
+// ============================================================================
+// Score and distance methods
+// ============================================================================
+
+impl NativeHnswInner {
+    /// Transforms raw HNSW distance to the appropriate score.
+    ///
+    /// For **Standard** backend: applies metric-specific transform.
+    /// For `RaBitQ` backend: identity (scores already transformed).
     #[inline]
     #[must_use]
     pub fn transform_score(&self, raw_distance: f32) -> f32 {
-        self.inner.transform_score(raw_distance)
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.transform_score(raw_distance),
+            HnswBackend::RaBitQ(_) => raw_distance,
+        }
     }
 
     /// Returns the number of elements in the index.
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.len(),
+            HnswBackend::RaBitQ(rabitq) => rabitq.len(),
+        }
     }
 
     /// Returns true if the index is empty.
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.is_empty(),
+            HnswBackend::RaBitQ(rabitq) => rabitq.is_empty(),
+        }
     }
 
     /// Returns the distance metric used by this index.
@@ -158,20 +339,17 @@ impl NativeHnswInner {
         self.metric
     }
 
-    /// Computes the distance between two vectors using the index's distance metric.
-    ///
-    /// This is useful for brute-force search where we need to compute distances
-    /// outside of the HNSW graph traversal.
+    /// Computes the raw distance between two vectors.
     #[inline]
     #[must_use]
     pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        self.inner.compute_distance(a, b)
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.compute_distance(a, b),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.compute_distance(a, b),
+        }
     }
 
     /// Executes a closure with zero-copy access to the contiguous vector storage.
-    ///
-    /// F-05: Enables zero-copy reranking by providing direct `&[f32]` slices
-    /// from `ContiguousVectors` instead of cloning via `ShardedVectors::get()`.
     ///
     /// Returns `R::default()` if vector storage is not yet initialized.
     #[inline]
@@ -179,7 +357,10 @@ impl NativeHnswInner {
         &self,
         f: impl FnOnce(&crate::perf_optimizations::ContiguousVectors) -> R,
     ) -> R {
-        self.inner.with_vectors_read(f)
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.with_vectors_read(f),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_read(f),
+        }
     }
 }
 

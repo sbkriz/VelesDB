@@ -9,7 +9,7 @@
 
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
-use super::NativeHnsw;
+use super::{NativeHnsw, NO_ENTRY_POINT};
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 
@@ -38,9 +38,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return Ok(());
         }
 
-        let Some(entry) = *self.entry_point.read() else {
+        let entry = self.entry_point.load(Ordering::Acquire);
+        if entry == NO_ENTRY_POINT {
             return Ok(());
-        };
+        }
 
         let permutation = self.compute_bfs_order(entry, count);
         if permutation.is_empty() {
@@ -108,6 +109,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Applies a permutation to vectors, neighbor lists, and the entry point.
+    ///
+    /// After reordering, builds a PDX columnar layout from the reordered
+    /// vectors for SIMD-parallel distance computation.
     fn apply_permutation(&self, new_order: &[NodeId]) -> crate::error::Result<()> {
         let count = new_order.len();
 
@@ -116,8 +120,21 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.reorder_vectors(new_order)?;
         self.remap_neighbor_ids(&old_to_new);
         self.update_entry_point(&old_to_new, count);
+        self.build_columnar_layout();
 
         Ok(())
+    }
+
+    /// Builds a PDX block-columnar layout from the current vector storage.
+    ///
+    /// This transposes row-major vectors into 64-vector blocks where each
+    /// dimension is contiguous, enabling SIMD-parallel distance computation.
+    fn build_columnar_layout(&self) {
+        let vectors_guard = self.vectors.read();
+        if let Some(vectors) = vectors_guard.as_ref() {
+            let pdx = super::super::columnar_vectors::ColumnarVectors::from_contiguous(vectors);
+            *self.columnar.write() = Some(pdx);
+        }
     }
 
     /// Builds a reverse mapping: `result[old_id] = new_id`.
@@ -150,11 +167,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Updates the entry point to its new ID after permutation.
     fn update_entry_point(&self, old_to_new: &[usize], count: usize) {
-        let mut ep = self.entry_point.write();
-        if let Some(old_ep) = *ep {
-            if old_ep < count {
-                *ep = Some(old_to_new[old_ep]);
-            }
+        let _guard = self.entry_point_promote_lock.lock();
+        let old_ep = self.entry_point.load(Ordering::Relaxed);
+        if old_ep != NO_ENTRY_POINT && old_ep < count {
+            self.entry_point
+                .store(old_to_new[old_ep], Ordering::Release);
         }
     }
 }
@@ -215,9 +232,8 @@ mod tests {
         }
 
         // Verify entry point is still valid
-        let ep = *hnsw.entry_point.read();
-        assert!(ep.is_some(), "Entry point lost after reorder");
-        let ep_id = ep.unwrap();
+        let ep_id = hnsw.entry_point.load(Ordering::Acquire);
+        assert_ne!(ep_id, NO_ENTRY_POINT, "Entry point lost after reorder");
         assert!(
             ep_id < hnsw.count.load(Ordering::Relaxed),
             "Entry point out of bounds"
@@ -233,7 +249,8 @@ mod tests {
     fn bfs_order_covers_all_nodes() {
         let hnsw = build_test_index(1200, 4);
         let count = hnsw.count.load(Ordering::Relaxed);
-        let ep = hnsw.entry_point.read().unwrap();
+        let ep = hnsw.entry_point.load(Ordering::Acquire);
+        assert_ne!(ep, NO_ENTRY_POINT, "entry_point must be set");
         let order = hnsw.compute_bfs_order(ep, count);
 
         assert_eq!(order.len(), count, "BFS order must cover all nodes");

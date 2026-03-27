@@ -2,7 +2,7 @@
 
 use super::super::distance::DistanceEngine;
 use super::super::layer::{Layer, NodeId};
-use super::NativeHnsw;
+use super::{NativeHnsw, NO_ENTRY_POINT};
 use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
@@ -97,8 +97,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let node_layer = self.random_layer();
         self.expand_layers(node_id, node_layer);
 
-        let entry_point = *self.entry_point.read();
-        if let Some(ep) = entry_point {
+        let ep = self.entry_point.load(Ordering::Acquire);
+        if ep != NO_ENTRY_POINT {
             self.insert_with_entry_point(node_id, &query, node_layer, ep);
         }
 
@@ -110,24 +110,23 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Atomically updates the entry point if the index is empty or the node
     /// reaches a higher layer than the current maximum.
     ///
-    /// Reads the true current state under the `entry_point` write lock,
-    /// eliminating the TOCTOU race where two concurrent first-inserts both
-    /// think the index is empty.
+    /// Serializes concurrent promotions via `entry_point_promote_lock` so that
+    /// `entry_point` and `max_layer` are updated together. The mutex is only
+    /// contended during insert (rare); search reads use a lock-free
+    /// `Acquire` load on the `AtomicUsize` (Issue #422).
     pub(in crate::index::hnsw::native) fn promote_entry_point(
         &self,
         node_id: NodeId,
         node_layer: usize,
     ) {
-        // Hold write lock before reading max_layer to serialize concurrent updates.
-        // The lock release provides a happens-before guarantee for the Relaxed
-        // max_layer store, ensuring the next acquirer sees the updated value.
-        let mut ep_guard = self.entry_point.write();
+        let _guard = self.entry_point_promote_lock.lock();
+        let current_ep = self.entry_point.load(Ordering::Relaxed);
         let current_max = self.max_layer.load(Ordering::Relaxed);
-        if ep_guard.is_none() || node_layer > current_max {
-            *ep_guard = Some(node_id);
+        if current_ep == NO_ENTRY_POINT || node_layer > current_max {
             if node_layer > current_max {
                 self.max_layer.store(node_layer, Ordering::Relaxed);
             }
+            self.entry_point.store(node_id, Ordering::Release);
         }
     }
 

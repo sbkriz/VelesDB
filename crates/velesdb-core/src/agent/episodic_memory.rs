@@ -28,6 +28,12 @@ pub struct EpisodicMemory {
 impl EpisodicMemory {
     const COLLECTION_NAME: &'static str = "_episodic_memory";
 
+    /// Returns the embedding dimension for this collection.
+    #[must_use]
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
     /// Creates or opens the episodic memory collection.
     ///
     /// # Errors
