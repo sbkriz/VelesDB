@@ -205,6 +205,8 @@ memory.procedural.delete(1)
 | **Mobile (iOS/Android)** | Yes | No | No | No |
 | **Offline / Local-first** | Yes | Partial | No | No |
 
+> *Competitor latencies are typical ranges from public benchmarks and vendor documentation. Direct comparison is approximate — architectures differ (embedded vs client-server, durable vs in-memory, recall levels). Run your own benchmarks for accurate comparison.*
+
 > **VelesDB's sweet spot:** When you need vector + graph + structured filtering in a single engine, local-first deployment, or a lightweight binary that runs anywhere.
 >
 > **Not the best fit (yet):** If you need a managed cloud service with a multi-node distributed cluster.
@@ -312,7 +314,7 @@ End-to-end numbers on the **complete production path**: WAL durability, payload 
 
 - **Full production path**: measures the real user experience — Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees. Measured with `benchmarks/velesdb_benchmark.py --recall`.
 - **Core engine**: measures the Rust index layer in isolation (Criterion.rs, sequential runs). Useful for architecture comparisons but not representative of end-to-end latency.
-- **Recall@10 >= 96%**: we do NOT sacrifice recall for speed. All production benchmarks use `Balanced` mode (ef_search=128) which guarantees high recall on clustered data.
+- **Recall@10 >= 96%**: measured on synthetic clustered datasets (50 Gaussian clusters, 384D). Real-world recall depends on your data distribution — run the benchmark on your own dataset to verify. We use `Balanced` mode (ef_search=128) which prioritizes recall over raw speed.
 - **WAL ON**: every insert is durable. A crash at any point recovers all committed data.
 - **Reproduce these numbers**: `pip install velesdb numpy && python benchmarks/velesdb_benchmark.py --recall`
 
