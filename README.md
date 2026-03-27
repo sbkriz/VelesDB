@@ -42,7 +42,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
-| **Vector** | Semantic similarity search (HNSW + AVX-512/NEON SIMD) | **47us** search (768D), **19.8ns** dot product |
+| **Vector** | Semantic similarity search (HNSW + AVX2/NEON SIMD) | **571us** p50 end-to-end (384D, WAL ON, recall>=95%) |
 | **Graph** | Knowledge relationships (BFS/DFS, edge properties) | Native **MATCH** clause |
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning |
 
@@ -198,7 +198,7 @@ memory.procedural.delete(1)
 | **Metadata filtering** | **ColumnStore (130x vs JSON)** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
-| **Search latency** | 47us (embedded, 768D) | ~1-5ms | ~1-5ms | ~5-20ms |
+| **Search latency** | **571us** p50 (10K/384D, WAL+recall>=95%) | ~1-5ms | ~1-5ms (in-memory) | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM)** | Yes | No | No | No |
@@ -285,24 +285,49 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
 
-### Performance
+### Performance (v1.7.2)
+
+End-to-end numbers on the **complete production path**: WAL durability, payload storage, HNSW search, result resolution. No shortcuts.
+
+#### Full production path (Python SDK, WAL ON, recall@10 >= 95%)
+
+| Dataset | Bulk insert | Search p50 | Search p99 | Recall@10 | DB size |
+|---------|-------------|-----------|------------|-----------|---------|
+| 10K x 384D | **15K vec/s** | **571 us** | **1.3 ms** | >= 95% | 31 MB |
+| 50K x 384D | **5.8K vec/s** | **1.1 ms** | **2.8 ms** | >= 95% | 162 MB |
+
+#### Core engine (Rust, index-only, no WAL/payload overhead)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search** (10K/768D, k=10) | **47.0 us** |
-| **SIMD Dot Product** (768D) | **19.8 ns** |
-| **Recall@10** (Balanced mode) | **98.8%** |
-| **Recall@10** (Accurate mode) | **100%** |
+| HNSW Search (5K/768D, k=10) | **55 us** |
+| SIMD Dot Product (768D, AVX2) | **21.7 ns** |
+| SIMD Euclidean (768D, AVX2) | **20.1 ns** |
+| Parallel insert (1K/768D) | **48.2K vec/s** |
+| Recall@10 (Balanced) | **98.8%** |
+| Recall@10 (Accurate) | **100%** |
+
+<details>
+<summary>What these numbers mean</summary>
+
+- **Full production path**: measures the real user experience — Python SDK call, WAL write, HNSW search, payload + vector retrieval. This is what your application actually sees.
+- **Core engine**: measures the Rust index layer in isolation (Criterion.rs, sequential runs). Useful for architecture comparisons but not representative of end-to-end latency.
+- **Recall@10 >= 95%**: we do NOT sacrifice recall for speed. All production benchmarks use `Balanced` mode (ef_search=128) which guarantees >= 95% recall.
+- **WAL ON**: every insert is durable. A crash at any point recovers all committed data.
+
+</details>
+
+*Measured 2026-03-27 on i9-14900KF, 64 GB DDR5, Windows 11, Rust 1.92.0, AVX2. [Benchmark script](benchmarks/).*
 
 ### Search quality modes
 
-| Mode | ef_search | Recall@10 | Latency (10K/128D) |
-|------|-----------|-----------|---------------------|
-| Fast | 64 | 92.2% | 36us |
-| Balanced (default) | 128 | 98.8% | 57us |
-| Accurate | 512 | 100% | 130us |
-| Adaptive | 32-512 | 95%+ | ~15-40us (easy queries) |
-| **AutoTune** | auto | 95%+ | auto (scales with collection size) |
+| Mode | ef_search | Recall@10 | Use case |
+|------|-----------|-----------|----------|
+| Fast | 64 | 92.2% | Real-time suggestions, typeahead |
+| Balanced (default) | 128 | 98.8% | Production search, RAG pipelines |
+| Accurate | 512 | 100% | Evaluation, ground truth comparison |
+| **AutoTune** | auto | 95%+ | Adapts to collection size and dimension |
+| Adaptive | 32-512 | 95%+ | Hard-query escalation (two-phase) |
 
 ### Vector search with metadata filter
 
@@ -331,7 +356,7 @@ SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 5
 
 > **Full benchmarks:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
-*Measured March 27, 2026 on i9-14900KF, 64GB DDR5, Rust 1.92.0, AVX2. Criterion.rs, sequential runs on idle machine.*
+*Quantization benchmarks: Criterion.rs, sequential runs on idle machine. Same hardware as above.*
 
 ---
 
