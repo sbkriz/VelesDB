@@ -7,7 +7,7 @@
 export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard';
 
 /** Storage mode for vector quantization */
-export type StorageMode = 'full' | 'sq8' | 'binary';
+export type StorageMode = 'full' | 'sq8' | 'binary' | 'pq' | 'rabitq';
 
 /** Backend type for VelesDB connection */
 export type BackendType = 'wasm' | 'rest';

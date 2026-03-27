@@ -48,7 +48,8 @@ fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
         "sq8" => Ok(StorageMode::SQ8),
         "binary" => Ok(StorageMode::Binary),
         "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
-        _ => Err("Unknown storage mode. Use: full, sq8, binary, pq".to_string()),
+        "rabitq" => Ok(StorageMode::RaBitQ),
+        _ => Err("Unknown storage mode. Use: full, sq8, binary, pq, rabitq".to_string()),
     }
 }
 

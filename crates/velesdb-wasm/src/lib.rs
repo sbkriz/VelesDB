@@ -101,6 +101,10 @@ pub enum StorageMode {
     /// which are unavailable in WASM. This variant uses the SQ8 codepath as a
     /// fallback. For true PQ, use the native `velesdb-core` crate.
     ProductQuantization,
+    /// `RaBitQ`: 1-bit with rotation + scalar correction (32x compression).
+    /// **WASM limitation**: training requires `ndarray`/`persistence`. Falls back
+    /// to Full precision in WASM builds.
+    RaBitQ,
 }
 
 /// A vector store for in-memory vector search.
@@ -186,6 +190,7 @@ impl VectorStore {
             StorageMode::SQ8 => "sq8".to_string(),
             StorageMode::Binary => "binary".to_string(),
             StorageMode::ProductQuantization => "pq".to_string(),
+            StorageMode::RaBitQ => "rabitq".to_string(),
         }
     }
 
@@ -553,7 +558,7 @@ impl VectorStore {
                 id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
             }
             StorageMode::Binary => id_bytes + self.data_binary.len(),
-            StorageMode::ProductQuantization => {
+            StorageMode::ProductQuantization | StorageMode::RaBitQ => {
                 id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
             }
         }

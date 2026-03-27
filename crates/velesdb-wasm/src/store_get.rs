@@ -10,9 +10,9 @@ pub fn get_vector_at_index(store: &VectorStore, idx: usize) -> Vec<f32> {
             let start = idx * store.dimension;
             store.data[start..start + store.dimension].to_vec()
         }
-        // ProductQuantization uses SQ8 path as fallback in WASM context
-        // (PQ codebooks are not available in the lightweight WASM store)
-        StorageMode::SQ8 | StorageMode::ProductQuantization => decode_sq8(
+        // ProductQuantization/RaBitQ use SQ8 path as fallback in WASM context
+        // (PQ codebooks and RaBitQ training are not available in WASM)
+        StorageMode::SQ8 | StorageMode::ProductQuantization | StorageMode::RaBitQ => decode_sq8(
             &store.data_sq8,
             store.sq8_mins[idx],
             store.sq8_scales[idx],

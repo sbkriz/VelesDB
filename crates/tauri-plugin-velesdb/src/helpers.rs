@@ -44,8 +44,9 @@ pub fn parse_storage_mode(mode: &str) -> Result<velesdb_core::StorageMode> {
         "sq8" | "int8" => Ok(StorageMode::SQ8),
         "binary" | "bit" => Ok(StorageMode::Binary),
         "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
+        "rabitq" => Ok(StorageMode::RaBitQ),
         _ => Err(Error::InvalidConfig(format!(
-            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', 'binary', or 'pq'"
+            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', 'binary', 'pq', or 'rabitq'"
         ))),
     }
 }
@@ -59,6 +60,7 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> &'static str {
         StorageMode::SQ8 => "sq8",
         StorageMode::Binary => "binary",
         StorageMode::ProductQuantization => "pq",
+        StorageMode::RaBitQ => "rabitq",
         // Reason: StorageMode is #[non_exhaustive] — future variants default to "unknown".
         _ => "unknown",
     }

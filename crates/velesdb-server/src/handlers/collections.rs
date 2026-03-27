@@ -91,10 +91,11 @@ fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response
         "sq8" | "int8" => Ok(StorageMode::SQ8),
         "binary" | "bit" => Ok(StorageMode::Binary),
         "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
+        "rabitq" => Ok(StorageMode::RaBitQ),
         _ => Err(error_response(
             StatusCode::BAD_REQUEST,
             format!(
-                "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
+                "Invalid storage_mode: {}. Valid: full, sq8, binary, pq, rabitq",
                 raw
             ),
         )),
