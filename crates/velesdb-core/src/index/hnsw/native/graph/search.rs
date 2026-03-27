@@ -1,7 +1,7 @@
 //! HNSW search operations.
 
 use super::super::distance::DistanceEngine;
-use super::super::layer::NodeId;
+use super::super::layer::{Layer, NodeId};
 use super::super::ordered_float::OrderedFloat;
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::perf_optimizations::ContiguousVectors;
@@ -101,7 +101,7 @@ impl BitVecVisited {
 /// Threshold: vector must span at least 2 cache lines (128 bytes = 32 f32 elements).
 /// Below this, prefetch overhead exceeds the benefit.
 #[inline]
-fn should_prefetch(dimension: usize) -> bool {
+pub(super) fn should_prefetch(dimension: usize) -> bool {
     let vector_bytes = dimension * std::mem::size_of::<f32>();
     vector_bytes >= 2 * crate::simd_native::L2_CACHE_LINE_BYTES
 }
@@ -219,10 +219,10 @@ fn release_result_heap(mut heap: ResultHeap) {
 /// [`push_candidate`] and [`evict_furthest`] so that the hot-path
 /// termination check in [`should_terminate`] and the admission test
 /// in [`process_batch_results`] avoid repeated heap peeks.
-struct SearchState {
-    candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>>,
+pub(super) struct SearchState {
+    pub(super) candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>>,
     results: BinaryHeap<(OrderedFloat, NodeId)>,
-    visited: BitVecVisited,
+    pub(super) visited: BitVecVisited,
     stagnation_count: usize,
     /// Cached distance of the furthest (worst) result in the max-heap.
     /// Kept in sync with `results.peek().map(|r| r.0.0)`.
@@ -237,7 +237,7 @@ impl SearchState {
     /// to size the bitset so most inserts avoid reallocation. Candidate
     /// and result heaps are also acquired from thread-local pools to
     /// avoid repeated allocation/deallocation during batch searches.
-    fn new(capacity_hint: usize) -> Self {
+    pub(super) fn new(capacity_hint: usize) -> Self {
         Self {
             candidates: acquire_candidate_heap(),
             results: acquire_result_heap(),
@@ -253,7 +253,7 @@ impl SearchState {
     /// pushed node may become the furthest result. Called only during
     /// entry-point seeding (1-4 calls), so the `peek()` cost is negligible.
     #[inline]
-    fn push_candidate(&mut self, node: NodeId, dist: f32) {
+    pub(super) fn push_candidate(&mut self, node: NodeId, dist: f32) {
         self.candidates.push(Reverse((OrderedFloat(dist), node)));
         self.results.push((OrderedFloat(dist), node));
         self.cached_furthest = self.results.peek().map_or(f32::MAX, |r| r.0 .0);
@@ -270,7 +270,7 @@ impl SearchState {
     /// Uses `cached_furthest` instead of `results.peek()` to avoid a
     /// heap pointer chase on every candidate evaluation (Issue #422).
     #[inline]
-    fn should_terminate(&self, c_dist: f32, ef: usize, stagnation_limit: usize) -> bool {
+    pub(super) fn should_terminate(&self, c_dist: f32, ef: usize, stagnation_limit: usize) -> bool {
         if c_dist > self.cached_furthest && self.results.len() >= ef {
             return true;
         }
@@ -279,7 +279,7 @@ impl SearchState {
 
     /// Updates the stagnation counter: resets on improvement, increments otherwise.
     #[inline]
-    fn update_stagnation(&mut self, improved: bool) {
+    pub(super) fn update_stagnation(&mut self, improved: bool) {
         if improved {
             self.stagnation_count = 0;
         } else {
@@ -295,7 +295,7 @@ impl SearchState {
     ///
     /// The visited set is released back to the thread-local pool by the
     /// [`Drop`] impl when `self` goes out of scope.
-    fn into_sorted_results(mut self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
+    pub(super) fn into_sorted_results(mut self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
         let results = std::mem::take(&mut self.results);
         let mut result_vec: Vec<(NodeId, f32)> =
             results.into_iter().map(|(d, n)| (n, d.0)).collect();
@@ -345,7 +345,7 @@ const GATHER_PREFETCH_AHEAD: usize = 2;
 /// [`GATHER_PREFETCH_AHEAD`] positions ahead to hide memory latency during
 /// the `get_unchecked` calls.
 #[inline]
-fn gather_unvisited_neighbors<'a>(
+pub(super) fn gather_unvisited_neighbors<'a>(
     neighbors: &[NodeId],
     visited: &mut BitVecVisited,
     vectors: &'a ContiguousVectors,
@@ -388,7 +388,7 @@ fn gather_unvisited_neighbors<'a>(
 ///
 /// Returns `true` if any neighbor improved the result set.
 #[inline]
-fn process_batch_results(
+pub(super) fn process_batch_results(
     batch: &[(NodeId, &[f32])],
     distances: &[f32],
     ef: usize,
@@ -695,34 +695,85 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 state.push_candidate(ep, dist);
             }
 
-            // Main search loop
-            while let Some(Reverse((OrderedFloat(c_dist), c_node))) = state.candidates.pop() {
-                if state.should_terminate(c_dist, ef, stagnation_limit) {
-                    break;
-                }
+            // Pipeline only benefits when the dataset is large enough that
+            // neighbor vectors are frequently evicted from L3 cache between
+            // accesses.  For small indices the data stays cache-hot and the
+            // speculative peek overhead dominates.
+            //
+            // Threshold: >= 10 000 vectors.  At 768-dim (3 KB/vec) this
+            // corresponds to ~30 MB — well beyond typical per-core L3
+            // slices.  The constant is platform-agnostic: even CPUs with
+            // large L3 benefit because the HNSW random-access pattern
+            // reduces effective cache residency.
+            let use_pipeline = use_prefetch && vectors.len() >= 10_000;
 
-                let improved = layers[layer]
-                    .with_neighbors(c_node, |neighbors| {
-                        let batch = gather_unvisited_neighbors(
-                            neighbors,
-                            &mut state.visited,
-                            vectors,
-                            use_prefetch,
-                        );
-                        if batch.is_empty() {
-                            return false;
-                        }
-                        let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
-                        let distances = self.distance.batch_distance(query, &vecs);
-                        process_batch_results(&batch, &distances, ef, &mut state)
-                    })
-                    .unwrap_or(false);
-
-                state.update_stagnation(improved);
+            if use_pipeline {
+                // Pipelined path: overlap prefetch of batch[i+1] with
+                // distance computation of batch[i].
+                super::search_pipeline::search_layer_pipelined(
+                    &self.distance,
+                    query,
+                    vectors,
+                    layers,
+                    &mut state,
+                    ef,
+                    layer,
+                    stagnation_limit,
+                );
+            } else {
+                // Non-pipelined path: sequential gather → compute → process.
+                Self::search_loop_sequential(
+                    &self.distance,
+                    query,
+                    vectors,
+                    layers,
+                    &mut state,
+                    ef,
+                    layer,
+                    stagnation_limit,
+                );
             }
         });
 
         state.into_sorted_results(result_limit)
+    }
+
+    /// Non-pipelined search loop (small vectors where prefetch has no benefit).
+    ///
+    /// Sequentially gathers unvisited neighbors, computes distances, and
+    /// processes results for each candidate.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn search_loop_sequential(
+        distance: &D,
+        query: &[f32],
+        vectors: &ContiguousVectors,
+        layers: &[Layer],
+        state: &mut SearchState,
+        ef: usize,
+        layer: usize,
+        stagnation_limit: usize,
+    ) {
+        while let Some(Reverse((OrderedFloat(c_dist), c_node))) = state.candidates.pop() {
+            if state.should_terminate(c_dist, ef, stagnation_limit) {
+                break;
+            }
+
+            let improved = layers[layer]
+                .with_neighbors(c_node, |neighbors| {
+                    let batch =
+                        gather_unvisited_neighbors(neighbors, &mut state.visited, vectors, false);
+                    if batch.is_empty() {
+                        return false;
+                    }
+                    let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
+                    let distances = distance.batch_distance(query, &vecs);
+                    process_batch_results(&batch, &distances, ef, state)
+                })
+                .unwrap_or(false);
+
+            state.update_stagnation(improved);
+        }
     }
 
     /// Prepares a query vector for search or insertion. Returns `Cow::Borrowed`

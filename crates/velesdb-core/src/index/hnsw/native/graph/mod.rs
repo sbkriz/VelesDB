@@ -15,6 +15,7 @@ mod neighbors;
 mod reorder;
 pub(crate) mod safety_counters;
 mod search;
+mod search_pipeline;
 
 use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
