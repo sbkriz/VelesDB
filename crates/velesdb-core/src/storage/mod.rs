@@ -51,6 +51,8 @@ mod loom_tests;
 #[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]
+mod mmap_durability_tests;
+#[cfg(test)]
 mod storage_reliability_tests;
 #[cfg(test)]
 mod tests;

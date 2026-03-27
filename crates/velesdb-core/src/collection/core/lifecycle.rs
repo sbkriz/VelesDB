@@ -97,6 +97,7 @@ impl Collection {
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            inserts_since_last_hnsw_save: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "persistence")]
             stream_ingester: Arc::new(RwLock::new(None)),
             #[cfg(feature = "persistence")]
@@ -639,12 +640,19 @@ impl Collection {
         self.config.read().clone()
     }
 
-    /// Saves the collection configuration and index to disk.
+    /// Issue #423 Component 3: Threshold for periodic HNSW save in `flush()`.
     ///
-    /// If the delta buffer is active (HNSW rebuild in progress), drains
-    /// buffered vectors into the HNSW index before persisting it. This
-    /// ensures graceful shutdown does not lose vectors that were accepted
-    /// during the rebuild window.
+    /// When `inserts_since_last_hnsw_save` exceeds this value, `flush()`
+    /// saves the HNSW graph as a safety measure to limit recovery time.
+    const HNSW_SAVE_THRESHOLD: u64 = 10_000;
+
+    /// Fast durability flush — persists WAL + mmap but defers HNSW save.
+    ///
+    /// Issue #423 Component 3: `index.save()` is skipped unless the insert
+    /// counter exceeds [`Self::HNSW_SAVE_THRESHOLD`]. Gap recovery on
+    /// `Collection::open()` handles missing/stale HNSW data.
+    ///
+    /// Use [`flush_full()`](Self::flush_full) for shutdown or compaction.
     ///
     /// # Errors
     ///
@@ -662,25 +670,53 @@ impl Collection {
         self.drain_delta_into_index();
         // Drain deferred indexer into HNSW (position 11, after delta at 10).
         self.drain_deferred_into_index();
-        self.index.save(&self.path)?;
+        // Issue #423 Component 3: Save HNSW only when insert threshold
+        // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
+        self.save_hnsw_if_threshold_exceeded()?;
         self.flush_secondary_indexes()?;
         self.flush_sparse_indexes()
     }
 
-    /// Full durability flush including `vectors.idx` serialization.
+    /// Full durability flush including HNSW save and `vectors.idx`.
     ///
     /// Issue #423: This is equivalent to the pre-#423 `flush()` behavior.
-    /// Use on graceful shutdown or before compaction to ensure the vector
-    /// index file is up-to-date, avoiding a full WAL replay on the next
-    /// startup.
+    /// Use on graceful shutdown or before compaction to ensure the HNSW
+    /// graph and vector index file are up-to-date, avoiding gap recovery
+    /// and WAL replay on the next startup.
     ///
     /// # Errors
     ///
     /// Returns an error if storage operations fail.
     pub fn flush_full(&self) -> Result<()> {
-        self.flush()?;
+        self.save_config()?;
+        self.vector_storage.write().flush()?;
+        self.payload_storage.write().flush()?;
+        self.drain_delta_into_index();
+        self.drain_deferred_into_index();
+        // Always save HNSW on full flush and reset the counter.
+        self.index.save(&self.path)?;
+        self.inserts_since_last_hnsw_save
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.flush_secondary_indexes()?;
+        self.flush_sparse_indexes()?;
         // Write the deferred vectors.idx after all other flush steps.
         self.vector_storage.read().flush_index()?;
+        Ok(())
+    }
+
+    /// Saves HNSW to disk only when the insert counter exceeds the threshold.
+    ///
+    /// Issue #423 Component 3: periodic safety save to limit crash recovery
+    /// time for high-throughput workloads.
+    fn save_hnsw_if_threshold_exceeded(&self) -> Result<()> {
+        let count = self
+            .inserts_since_last_hnsw_save
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if count > Self::HNSW_SAVE_THRESHOLD {
+            self.index.save(&self.path)?;
+            self.inserts_since_last_hnsw_save
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(())
     }
 

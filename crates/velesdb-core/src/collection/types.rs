@@ -288,6 +288,12 @@ pub struct Collection {
     /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
     pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
 
+    /// Tracks inserts since the last HNSW index save (Issue #423 Component 3).
+    ///
+    /// When this counter exceeds `HNSW_SAVE_THRESHOLD`, `flush()` saves the
+    /// HNSW graph as a safety measure. `flush_full()` always saves and resets.
+    pub(crate) inserts_since_last_hnsw_save: Arc<std::sync::atomic::AtomicU64>,
+
     /// Streaming ingestion handle (STREAM-01).
     ///
     /// `None` when streaming is not configured. Wrapped in `RwLock` so that

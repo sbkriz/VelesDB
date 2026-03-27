@@ -10,7 +10,7 @@
 //! `Drop` only performs best-effort sync and must not be relied on as a commit point.
 
 use super::MmapStorage;
-use crate::storage::log_payload::crc32_hash;
+use crate::storage::log_payload::{crc32_hash, DurabilityMode};
 use crate::storage::traits::VectorStorage;
 use crate::storage::vector_bytes::{bytes_to_vector, vector_to_bytes};
 
@@ -88,7 +88,8 @@ impl VectorStorage for MmapStorage {
         let vector_bytes = vector_to_bytes(vector);
 
         // 1. Write to WAL with CRC32 framing (Issue #317)
-        {
+        // Issue #423: Skip WAL when DurabilityMode::None for bulk imports.
+        if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
             let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_bytes.len());
             write_wal_store_entry(&mut wal, id, vector_bytes, &mut buf)?;
@@ -161,7 +162,8 @@ impl VectorStorage for MmapStorage {
         // 3. WAL append with CRC32 framing per entry (Issue #317)
         // Issue #423: Allocate WAL frame buffer once and reuse across entries
         // to avoid per-entry heap allocation (mirrors LogPayloadStorage pattern).
-        {
+        // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
+        if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
             let mut buf = Vec::with_capacity(1 + 8 + 4 + vector_size);
             for &(id, vector) in vectors {
@@ -230,7 +232,8 @@ impl VectorStorage for MmapStorage {
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
         // 1. Write to WAL with CRC32 framing (Issue #317)
-        {
+        // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
+        if self.durability != DurabilityMode::None {
             let mut wal = self.wal.write();
             let mut buf = Vec::with_capacity(1 + 8);
             write_wal_delete_entry(&mut wal, id, &mut buf)?;
@@ -274,11 +277,18 @@ impl VectorStorage for MmapStorage {
         // 1. Flush Mmap
         self.mmap.write().flush()?;
 
-        // 2. Flush WAL and fsync for durability
-        {
-            let mut wal = self.wal.write();
-            wal.flush()?;
-            wal.get_ref().sync_all()?;
+        // 2. Flush WAL — skip entirely when DurabilityMode::None (Issue #423
+        // Component 4: no WAL writes occurred, nothing to sync).
+        match self.durability {
+            DurabilityMode::Fsync => {
+                let mut wal = self.wal.write();
+                wal.flush()?;
+                wal.get_ref().sync_all()?;
+            }
+            DurabilityMode::FlushOnly => {
+                self.wal.write().flush()?;
+            }
+            DurabilityMode::None => {}
         }
 
         Ok(())

@@ -10,6 +10,8 @@ mod crud;
 mod crud_helpers;
 #[cfg(test)]
 mod crud_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod flush_defer_tests;
 mod graph_api;
 #[cfg(test)]
 mod graph_api_tests;
