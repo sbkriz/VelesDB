@@ -327,8 +327,10 @@ impl Pipeline {
                         stats.loaded += inserted as u64;
                     }
 
+                    // Use flush_full to persist HNSW graph + vectors.idx
+                    // so checkpoint resume finds all previously loaded points.
                     collection
-                        .flush()
+                        .flush_full()
                         .map_err(|e| Error::Loading(e.to_string()))?;
 
                     // Save checkpoint immediately after successful flush, BEFORE
