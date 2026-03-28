@@ -7,6 +7,31 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::velesql::Condition;
 
+/// Converts a JSON number to f32, rejecting out-of-range finite values.
+///
+/// - Finite values within f32 range are truncated.
+/// - Non-finite values (NaN, Inf) pass through as f32.
+/// - Finite values outside f32 range or non-numeric values produce an error.
+fn json_value_to_f32(v: &serde_json::Value, param_name: &str) -> Result<f32> {
+    v.as_f64().and_then(f64_to_f32).ok_or_else(|| {
+        Error::Config(format!(
+            "Invalid vector parameter ${param_name}: value out of f32 range or not a number"
+        ))
+    })
+}
+
+/// Narrows an f64 to f32, returning `None` for finite values outside f32 range.
+#[allow(clippy::cast_possible_truncation)]
+fn f64_to_f32(f: f64) -> Option<f32> {
+    if !f.is_finite() {
+        return Some(f as f32);
+    }
+    if f >= f64::from(f32::MIN) && f <= f64::from(f32::MAX) {
+        return Some(f as f32);
+    }
+    None
+}
+
 impl Collection {
     /// Helper to extract MATCH query from any nested condition.
     pub(crate) fn extract_match_query(condition: &Condition) -> Option<String> {
@@ -168,42 +193,26 @@ impl Collection {
 
         match vector {
             VectorExpr::Literal(v) => Ok(v.clone()),
-            VectorExpr::Parameter(name) => {
-                let val = params
-                    .get(name)
-                    .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
-                if let serde_json::Value::Array(arr) = val {
-                    arr.iter()
-                        .map(|v| {
-                            v.as_f64()
-                                .and_then(|f| {
-                                    if f.is_finite()
-                                        && f >= f64::from(f32::MIN)
-                                        && f <= f64::from(f32::MAX)
-                                    {
-                                        #[allow(clippy::cast_possible_truncation)]
-                                        Some(f as f32)
-                                    } else if f.is_finite() {
-                                        None
-                                    } else {
-                                        #[allow(clippy::cast_possible_truncation)]
-                                        Some(f as f32)
-                                    }
-                                })
-                                .ok_or_else(|| {
-                                    Error::Config(format!(
-                                        "Invalid vector parameter ${name}: value out of f32 range or not a number"
-                                    ))
-                                })
-                        })
-                        .collect::<Result<Vec<f32>>>()
-                } else {
-                    Err(Error::Config(format!(
-                        "Invalid vector parameter ${name}: expected array"
-                    )))
-                }
-            }
+            VectorExpr::Parameter(name) => Self::resolve_vector_parameter(name, params),
         }
+    }
+
+    /// Resolves a named vector parameter from the query params map.
+    fn resolve_vector_parameter(
+        name: &str,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<f32>> {
+        let val = params
+            .get(name)
+            .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
+        let serde_json::Value::Array(arr) = val else {
+            return Err(Error::Config(format!(
+                "Invalid vector parameter ${name}: expected array"
+            )));
+        };
+        arr.iter()
+            .map(|v| json_value_to_f32(v, name))
+            .collect::<Result<Vec<f32>>>()
     }
 
     /// Compute the metric score between two vectors using the collection's configured metric.

@@ -22,11 +22,7 @@ impl Database {
     pub(super) fn ensure_collection_name_available(&self, name: &str) -> Result<()> {
         crate::validation::validate_collection_name(name)?;
 
-        let exists_in_registry = self.collections.read().contains_key(name)
-            || self.vector_colls.read().contains_key(name)
-            || self.graph_colls.read().contains_key(name)
-            || self.metadata_colls.read().contains_key(name);
-        if exists_in_registry {
+        if self.collection_exists_in_registry(name) {
             return Err(Error::CollectionExists(name.to_string()));
         }
 
@@ -36,6 +32,14 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    /// Checks whether a collection name exists in any of the four registries.
+    fn collection_exists_in_registry(&self, name: &str) -> bool {
+        self.collections.read().contains_key(name)
+            || self.vector_colls.read().contains_key(name)
+            || self.graph_colls.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name)
     }
 
     /// Creates a new collection with the specified parameters.
@@ -139,12 +143,7 @@ impl Database {
     pub fn delete_collection(&self, name: &str) -> Result<()> {
         crate::validation::validate_collection_name(name)?;
 
-        let exists = self.collections.read().contains_key(name)
-            || self.vector_colls.read().contains_key(name)
-            || self.graph_colls.read().contains_key(name)
-            || self.metadata_colls.read().contains_key(name);
-
-        if !exists {
+        if !self.collection_exists_in_registry(name) {
             return Err(Error::CollectionNotFound(name.to_string()));
         }
 
@@ -153,11 +152,7 @@ impl Database {
             std::fs::remove_dir_all(&collection_path)?;
         }
 
-        self.collections.write().remove(name);
-        self.vector_colls.write().remove(name);
-        self.graph_colls.write().remove(name);
-        self.metadata_colls.write().remove(name);
-        self.collection_stats.write().remove(name);
+        self.remove_from_all_registries(name);
 
         if let Some(ref obs) = self.observer {
             obs.on_collection_deleted(name);
@@ -167,6 +162,15 @@ impl Database {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
+    }
+
+    /// Removes a collection from all registries and stats cache.
+    fn remove_from_all_registries(&self, name: &str) {
+        self.collections.write().remove(name);
+        self.vector_colls.write().remove(name);
+        self.graph_colls.write().remove(name);
+        self.metadata_colls.write().remove(name);
+        self.collection_stats.write().remove(name);
     }
 
     /// Creates a new collection with a specific type (Vector, Graph, or `MetadataOnly`).

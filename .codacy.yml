@@ -246,6 +246,11 @@ engines:
       # --- LlamaIndex graph retriever (many config params, LlamaIndex convention) ---
       - "integrations/llamaindex/src/llamaindex_velesdb/graph_retriever.py"
 
+      # --- LangChain search ops mixin (many thin search variants following SDK pattern) ---
+      # File hosts 10+ search method wrappers (similarity, hybrid, batch, multi-query)
+      # that share a common structure. Splitting would scatter a cohesive API surface.
+      - "integrations/langchain/src/langchain_velesdb/search_ops.py"
+
   opengrep:
     exclude_paths:
       # Integration memory modules — random.randint used for session-scoped

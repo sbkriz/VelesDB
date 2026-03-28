@@ -380,54 +380,24 @@ impl Collection {
     ///    incremented (never reset), so a cache key built with generation N
     ///    will never be reused once the generation advances past N.
     pub fn open(path: PathBuf) -> Result<Self> {
-        let config_path = path.join("config.json");
-        let config_data = std::fs::read_to_string(&config_path)?;
-        let config: CollectionConfig =
-            serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))?;
+        let mut config = Self::load_config(&path)?;
 
-        // Open persistent storages
         let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
         let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
-
-        // Load HNSW index if it exists, otherwise create new (empty).
-        // When hnsw.bin is absent and config.hnsw_params is set, honour the
-        // persisted custom params so they survive collection reopen.
         let index = Self::load_or_create_hnsw(&path, &config)?;
         let text_index = Arc::new(Bm25Index::new());
 
-        // Rebuild BM25 index from persisted payloads
         Self::rebuild_bm25_index(&payload_storage, &text_index);
 
-        // Load persisted graph/sparse indexes (EPIC-009, EPIC-062)
         let property_index = Self::load_property_index(&path);
         let range_index = Self::load_range_index(&path);
         let edge_store = Self::load_edge_store(&path);
         let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
-        // Reconcile point_count from storage (config.json may be stale if
-        // the previous process exited without calling save_config).
-        let actual_count = if config.metadata_only {
-            payload_storage.read().ids().len()
-        } else {
-            vector_storage.read().len()
-        };
-        let mut config = config;
-        config.point_count = actual_count;
+        config.point_count =
+            Self::reconcile_point_count(&config, &vector_storage, &payload_storage);
 
-        // Crash recovery: detect vectors in storage but not in HNSW (gap from
-        // crash during deferred merge, delta drain, or normal insert).
-        #[cfg(feature = "persistence")]
-        if !config.metadata_only && config.dimension > 0 {
-            let recovered =
-                super::recovery::recover_hnsw_gap(&vector_storage, &index, config.dimension)?;
-            if recovered > 0 {
-                tracing::info!(
-                    collection = %config.name,
-                    recovered,
-                    "Collection gap recovery completed on open"
-                );
-            }
-        }
+        Self::run_crash_recovery(&config, &vector_storage, &index)?;
 
         Ok(Self::assemble(CollectionParts {
             path,
@@ -441,6 +411,59 @@ impl Collection {
             edge_store,
             sparse_indexes,
         }))
+    }
+
+    /// Reads and deserializes the collection config from disk.
+    fn load_config(path: &std::path::Path) -> Result<CollectionConfig> {
+        let config_path = path.join("config.json");
+        let config_data = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))
+    }
+
+    /// Reconciles `point_count` from the actual storage (config.json may be
+    /// stale if the previous process exited without calling `save_config`).
+    fn reconcile_point_count(
+        config: &CollectionConfig,
+        vector_storage: &Arc<RwLock<MmapStorage>>,
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+    ) -> usize {
+        if config.metadata_only {
+            payload_storage.read().ids().len()
+        } else {
+            vector_storage.read().len()
+        }
+    }
+
+    /// Runs crash recovery: detects vectors in storage but not in HNSW (gap
+    /// from crash during deferred merge, delta drain, or normal insert).
+    #[cfg(feature = "persistence")]
+    fn run_crash_recovery(
+        config: &CollectionConfig,
+        vector_storage: &Arc<RwLock<MmapStorage>>,
+        index: &Arc<HnswIndex>,
+    ) -> Result<()> {
+        if config.metadata_only || config.dimension == 0 {
+            return Ok(());
+        }
+        let recovered = super::recovery::recover_hnsw_gap(vector_storage, index, config.dimension)?;
+        if recovered > 0 {
+            tracing::info!(
+                collection = %config.name,
+                recovered,
+                "Collection gap recovery completed on open"
+            );
+        }
+        Ok(())
+    }
+
+    /// No-op stub when persistence is disabled.
+    #[cfg(not(feature = "persistence"))]
+    fn run_crash_recovery(
+        _config: &CollectionConfig,
+        _vector_storage: &Arc<RwLock<MmapStorage>>,
+        _index: &Arc<HnswIndex>,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Creates a new graph collection (with optional node embeddings).
