@@ -32,32 +32,30 @@ impl std::fmt::Display for LicenseTier {
     }
 }
 
-/// Premium feature flags (must match velesdb-premium)
+/// Premium feature flags (must match velesdb-premium).
+///
+/// Only features that require a commercial license belong here.
+/// Features available in the open-source core (Hybrid Search, Advanced Filtering,
+/// GPU Acceleration) were removed in #390 since they ship ungated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum PremiumFeature {
-    HybridSearch,
-    AdvancedFiltering,
     EncryptionAtRest,
     Snapshots,
     MultiTenancy,
     RBAC,
     SSO,
-    GpuAcceleration,
     AuditLogging,
 }
 
 impl std::fmt::Display for PremiumFeature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PremiumFeature::HybridSearch => write!(f, "Hybrid Search"),
-            PremiumFeature::AdvancedFiltering => write!(f, "Advanced Filtering"),
             PremiumFeature::EncryptionAtRest => write!(f, "Encryption at Rest"),
             PremiumFeature::Snapshots => write!(f, "Snapshots & Backups"),
             PremiumFeature::MultiTenancy => write!(f, "Multi-Tenancy"),
             PremiumFeature::RBAC => write!(f, "RBAC"),
             PremiumFeature::SSO => write!(f, "SSO"),
-            PremiumFeature::GpuAcceleration => write!(f, "GPU Acceleration"),
             PremiumFeature::AuditLogging => write!(f, "Audit Logging"),
         }
     }
@@ -76,8 +74,30 @@ pub struct LicenseInfo {
     pub expires_at: u64,
     /// Maximum number of instances (-1 = unlimited)
     pub max_instances: i32,
-    /// Enabled features
+    /// Enabled premium features.
+    ///
+    /// Uses a lenient deserializer that silently skips unknown variants
+    /// (e.g. `"HybridSearch"` from legacy license payloads).
+    #[serde(deserialize_with = "deserialize_features_lenient")]
     pub features: Vec<PremiumFeature>,
+}
+
+/// Deserializes a `Vec<PremiumFeature>` while silently skipping unknown variants.
+///
+/// Legacy license payloads signed by GetAppSuite may contain variants that were
+/// removed in #390 (`HybridSearch`, `AdvancedFiltering`, `GpuAcceleration`).
+/// Rather than rejecting the entire payload, we filter out unrecognized strings.
+fn deserialize_features_lenient<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<PremiumFeature>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<PremiumFeature>(v).ok())
+        .collect())
 }
 
 impl LicenseInfo {
@@ -263,12 +283,83 @@ mod tests {
             organization: "Test Corp".to_string(),
             expires_at: u64::MAX,
             max_instances: 1,
-            features: vec![PremiumFeature::HybridSearch, PremiumFeature::Snapshots],
+            features: vec![PremiumFeature::Snapshots],
         };
 
-        assert!(info.has_feature(PremiumFeature::HybridSearch));
         assert!(info.has_feature(PremiumFeature::Snapshots));
         assert!(!info.has_feature(PremiumFeature::MultiTenancy));
+    }
+
+    #[test]
+    fn test_premium_feature_enum_only_contains_true_premium_variants() {
+        // After #390: HybridSearch, AdvancedFiltering, GpuAcceleration are free
+        // in open-source core and must NOT be in the PremiumFeature enum.
+        // The remaining 6 variants are genuinely premium.
+        let all_premium = [
+            PremiumFeature::EncryptionAtRest,
+            PremiumFeature::Snapshots,
+            PremiumFeature::MultiTenancy,
+            PremiumFeature::RBAC,
+            PremiumFeature::SSO,
+            PremiumFeature::AuditLogging,
+        ];
+
+        // Verify Display works for each remaining variant
+        for feature in &all_premium {
+            let display = feature.to_string();
+            assert!(
+                !display.is_empty(),
+                "Display must be non-empty for {feature:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_premium_feature_display_values() {
+        assert_eq!(
+            PremiumFeature::EncryptionAtRest.to_string(),
+            "Encryption at Rest"
+        );
+        assert_eq!(PremiumFeature::Snapshots.to_string(), "Snapshots & Backups");
+        assert_eq!(PremiumFeature::MultiTenancy.to_string(), "Multi-Tenancy");
+        assert_eq!(PremiumFeature::RBAC.to_string(), "RBAC");
+        assert_eq!(PremiumFeature::SSO.to_string(), "SSO");
+        assert_eq!(PremiumFeature::AuditLogging.to_string(), "Audit Logging");
+    }
+
+    #[test]
+    fn test_premium_feature_serde_roundtrip() {
+        let features = vec![
+            PremiumFeature::EncryptionAtRest,
+            PremiumFeature::Snapshots,
+            PremiumFeature::RBAC,
+        ];
+        let json = serde_json::to_string(&features).unwrap();
+        let deserialized: Vec<PremiumFeature> = serde_json::from_str(&json).unwrap();
+        assert_eq!(features, deserialized);
+    }
+
+    #[test]
+    fn test_legacy_license_with_removed_features_deserializes() {
+        // Existing license payloads signed by GetAppSuite may contain
+        // "HybridSearch", "AdvancedFiltering", or "GpuAcceleration".
+        // These must be silently ignored (the features are now free).
+        let legacy_json = r#"{
+            "key": "LEGACY-KEY",
+            "tier": "Professional",
+            "organization": "Legacy Corp",
+            "expires_at": 9999999999,
+            "max_instances": 5,
+            "features": ["HybridSearch", "Snapshots", "AdvancedFiltering", "GpuAcceleration", "RBAC"]
+        }"#;
+        let info: LicenseInfo = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(
+            info.features.len(),
+            2,
+            "Only Snapshots and RBAC are true premium"
+        );
+        assert!(info.has_feature(PremiumFeature::Snapshots));
+        assert!(info.has_feature(PremiumFeature::RBAC));
     }
 
     #[test]
