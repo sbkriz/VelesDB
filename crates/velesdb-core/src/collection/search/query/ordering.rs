@@ -187,6 +187,10 @@ impl Collection {
                     compare_json_values(val_i, val_j)
                 }
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
+                // Design: Arithmetic ORDER BY uses direct numeric ordering without
+                // distance-metric inversion. Users constructing custom formulas with
+                // Euclidean/Hamming scores should account for lower-is-better semantics
+                // in their expression (e.g., `ORDER BY -1 * vector_score + price ASC`).
                 OrderByExpr::Arithmetic(expr) => {
                     let ctx_i =
                         ScoreContext::new(results[i].score, results[i].point.payload.as_ref());

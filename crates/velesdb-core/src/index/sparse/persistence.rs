@@ -223,14 +223,14 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
     let mut count = 0u64;
 
     while pos < data.len() {
-        let Some((entry_start, total_len)) = read_wal_entry_header(&data, pos) else {
+        let Some((body_start, total_len)) = read_wal_entry_header(&data, pos) else {
             break;
         };
         pos += 4;
 
         if pos + total_len > data.len() {
             tracing::warn!(
-                "Sparse WAL truncated at offset {entry_start}: declared {total_len} bytes but only {} remain",
+                "Sparse WAL truncated at offset {body_start}: declared {total_len} bytes but only {} remain",
                 data.len() - pos
             );
             break;
@@ -239,7 +239,7 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
         let op = data[pos];
         pos += 1;
 
-        let advanced = replay_single_entry(&data, op, pos, entry_start, total_len, index)?;
+        let advanced = replay_single_entry(&data, op, pos, body_start, total_len, index)?;
         if let Some((new_pos, counted)) = advanced {
             pos = new_pos;
             count += counted;
@@ -248,7 +248,7 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
         }
 
         // Ensure pos advances to end of entry in case of internal padding
-        advance_past_entry(&mut pos, entry_start + total_len);
+        advance_past_entry(&mut pos, body_start + total_len);
     }
 
     Ok(count)
@@ -268,13 +268,13 @@ fn replay_single_entry(
     data: &[u8],
     op: u8,
     pos: usize,
-    entry_start: usize,
+    body_start: usize,
     total_len: usize,
     index: &SparseInvertedIndex,
 ) -> Result<Option<(usize, u64)>> {
     match op {
         WAL_OP_UPSERT => {
-            let Some(new_pos) = replay_upsert_entry(data, pos, entry_start, total_len, index)?
+            let Some(new_pos) = replay_upsert_entry(data, pos, body_start, total_len, index)?
             else {
                 return Ok(None);
             };
@@ -286,8 +286,8 @@ fn replay_single_entry(
             Ok(Some((pos + 8, 1)))
         }
         unknown => {
-            tracing::warn!("Sparse WAL unknown op 0x{unknown:02x} at offset {entry_start}");
-            Ok(Some((entry_start + total_len, 0)))
+            tracing::warn!("Sparse WAL unknown op 0x{unknown:02x} at offset {body_start}");
+            Ok(Some((body_start + total_len, 0)))
         }
     }
 }
@@ -317,12 +317,12 @@ fn read_wal_entry_header(data: &[u8], pos: usize) -> Option<(usize, usize)> {
 fn replay_upsert_entry(
     data: &[u8],
     mut pos: usize,
-    entry_start: usize,
+    body_start: usize,
     total_len: usize,
     index: &SparseInvertedIndex,
 ) -> Result<Option<usize>> {
     if total_len < 1 + 8 + 4 {
-        tracing::warn!("Sparse WAL upsert entry too short at offset {entry_start}");
+        tracing::warn!("Sparse WAL upsert entry too short at offset {body_start}");
         return Ok(None);
     }
     let point_id = read_le_u64(data, pos, "WAL entry corrupted: bad point_id bytes")?;
@@ -330,8 +330,8 @@ fn replay_upsert_entry(
     let nnz = read_le_u32(data, pos, "WAL entry corrupted: bad nnz bytes")? as usize;
     pos += 4;
 
-    if entry_start + total_len < pos + nnz * 8 {
-        tracing::warn!("Sparse WAL upsert entry truncated at offset {entry_start}");
+    if body_start + total_len < pos + nnz * 8 {
+        tracing::warn!("Sparse WAL upsert entry truncated at offset {body_start}");
         return Ok(None);
     }
 
