@@ -221,6 +221,11 @@ engines:
       # --- Server handlers (HTTP glue, not engine logic) ---
       - "crates/velesdb-server/src/handlers/**"
 
+      # --- ORDER BY ordering (Lizard false positive: counts impl block + free fn as one unit) ---
+      # ScoreContext::new is 5 lines but Lizard merges the impl block with the
+      # following evaluate_arithmetic free function, reporting 65 NLOC for "new".
+      - "crates/velesdb-core/src/collection/search/query/ordering.rs"
+
       # --- Query engine internals (legitimately complex pipelines) ---
       - "crates/velesdb-core/src/collection/search/query/union_query.rs"
       - "crates/velesdb-core/src/collection/search/query/hybrid_sparse.rs"
