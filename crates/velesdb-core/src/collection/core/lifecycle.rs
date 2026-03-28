@@ -200,11 +200,10 @@ impl Collection {
         config: CollectionConfig,
         hnsw_params: Option<crate::index::hnsw::HnswParams>,
     ) -> Result<Self> {
+        // dimension=0 is valid for metadata-only and graph-without-embedding
         let skip_dimension_check = config.metadata_only
             || (config.graph_schema.is_some() && config.embedding_dimension.is_none());
-        if skip_dimension_check {
-            // dimension=0 is valid for metadata-only and graph-without-embedding
-        } else {
+        if !skip_dimension_check {
             validate_dimension(config.dimension)?;
         }
         std::fs::create_dir_all(&path)?;
