@@ -46,20 +46,22 @@ LIMIT 10
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `vector_score` | f32 | Vector similarity score (0.0 - 1.0 for cosine) |
-| `graph_score` | f32 | Graph relevance score |
-| `fused_score` | f32 | Combined score (default fusion) |
-| `bm25_score` | f32 | BM25 text relevance score |
+| `vector_score` | f32 | Pre-computed search score (vector similarity or fused RRF) |
+| `graph_score` | f32 | Pre-computed search score (alias, same as `vector_score` in v1.9) |
+| `fused_score` | f32 | Pre-computed search score (alias, same as `vector_score` in v1.9) |
+| `bm25_score` | f32 | Pre-computed search score (alias, same as `vector_score` in v1.9) |
+| `similarity` | f32 | Pre-computed search score (alias, same as `vector_score`) |
+
+> **v1.9 limitation**: All score variables (`vector_score`, `graph_score`, `bm25_score`,
+> `fused_score`, `similarity`) resolve to the same pre-computed search score. When a
+> query uses multiple search types (vector + graph, vector + BM25), the score is the
+> fused RRF result. Individual component scores are not yet available separately.
 
 ### Variable Availability
 
-| Query Type | vector_score | graph_score | bm25_score |
-|------------|--------------|-------------|------------|
-| Vector only | ✅ | ❌ | ❌ |
-| Graph only | ❌ | ✅ | ❌ |
-| Hybrid (vector+graph) | ✅ | ✅ | ❌ |
-| Text search | ❌ | ❌ | ✅ |
-| Vector + text | ✅ | ❌ | ✅ |
+All score variables resolve to the pre-computed search score, which is available
+whenever the query includes a vector search (NEAR), similarity predicate, or
+fused search. Variables not matching a built-in name are looked up in the payload.
 
 ---
 
@@ -232,9 +234,12 @@ ORDER BY vector_score / divisor DESC
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Arithmetic expressions | ✅ | +, -, *, / |
-| Score variables | ✅ | vector_score, graph_score, etc. |
+| Score variables | ✅ | vector_score, graph_score, etc. (all resolve to search_score in v1.9) |
 | Column references | ✅ | Payload field values resolved as f32 |
 | Multiple ORDER BY | ✅ | Comma-separated, each with own direction |
+| `similarity()` in arithmetic | ✅ | Bare form only: `0.5 * similarity() + 0.5 * price` |
+| `similarity(field, $vec)` in arithmetic | ❌ | Parameterized form rejected (V008); use bare `similarity()` instead |
+| Individual component scores | ❌ | graph_score, bm25_score resolve to fused score (not separate) |
 | Functions (ABS, SQRT) | ❌ | Not supported |
 | CASE expressions | ❌ | Not supported |
 

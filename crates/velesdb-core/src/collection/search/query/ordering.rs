@@ -253,11 +253,16 @@ impl<'a> ScoreContext<'a> {
 
     /// Resolves a variable name to a numeric value.
     ///
-    /// Built-in names (`vector_score`, `fused_score`, `similarity`) map to the
-    /// pre-computed search score. Other names are looked up in the payload.
+    /// Built-in names (`vector_score`, `graph_score`, `bm25_score`, `fused_score`,
+    /// `similarity`) all map to the pre-computed search score. In v1.9.0, individual
+    /// component scores (graph, BM25) are not available separately -- the search score
+    /// is the fused RRF score when multiple components are present.
+    /// Other names are looked up in the payload.
     fn resolve_variable(&self, name: &str) -> f32 {
         match name {
-            "vector_score" | "fused_score" | "similarity" => self.search_score,
+            "vector_score" | "graph_score" | "bm25_score" | "fused_score" | "similarity" => {
+                self.search_score
+            }
             _ => self
                 .payload
                 .and_then(|p| p.get(name))
@@ -286,6 +291,8 @@ pub(crate) fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>)
             }
         }
         ArithmeticExpr::Variable(name) => ctx.resolve_variable(name),
+        // Only bare similarity() passes validation inside arithmetic expressions.
+        // Parameterized similarity(field, $vec) is rejected at validation time (V008).
         ArithmeticExpr::Similarity(_) => ctx.search_score,
         ArithmeticExpr::BinaryOp { left, op, right } => {
             let l = evaluate_arithmetic(left, ctx);

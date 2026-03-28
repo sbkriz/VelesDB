@@ -4,8 +4,9 @@
 //! VelesQL limitations and provides helpful error messages.
 
 use super::ast::{
-    CompareOp, Comparison, Condition, Query, SelectColumns, SelectStatement, SimilarityCondition,
-    Value, VectorExpr,
+    ArithmeticExpr, ArithmeticOp, CompareOp, Comparison, Condition, OrderByExpr, Query,
+    SelectColumns, SelectOrderBy, SelectStatement, SimilarityCondition, SimilarityOrderBy, Value,
+    VectorExpr,
 };
 use super::error::ParseErrorKind;
 use super::validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};
@@ -975,4 +976,152 @@ fn test_complexity_rejects_graph_expansion_budget() {
         QueryValidator::enforce_query_complexity(&parsed, "MATCH (a)-[*1..5]->(b) RETURN a", &cfg)
             .expect_err("must reject graph expansion");
     assert!(err.message.contains("Graph expansion exceeded"));
+}
+
+// ============================================================================
+// Bug 2 regression: validate_similarity_context recurses into Arithmetic
+// ============================================================================
+
+/// Helper: builds a query with ORDER BY arithmetic expression and optional WHERE.
+fn make_query_with_arithmetic_order_by(
+    where_clause: Option<Condition>,
+    arithmetic_expr: ArithmeticExpr,
+) -> Query {
+    Query {
+        select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: "docs".to_string(),
+            from_alias: vec![],
+            joins: vec![],
+            where_clause,
+            order_by: Some(vec![SelectOrderBy {
+                expr: OrderByExpr::Arithmetic(arithmetic_expr),
+                descending: true,
+            }]),
+            limit: Some(10),
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: None,
+        train: None,
+    }
+}
+
+#[test]
+fn test_validate_bare_similarity_in_arithmetic_without_near_rejected() {
+    // ORDER BY 0.5 * similarity() + 0.5 * price DESC -- no NEAR clause
+    let expr = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Similarity(Box::new(
+                OrderByExpr::SimilarityBare,
+            ))),
+        }),
+        op: ArithmeticOp::Add,
+        right: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("price".to_string())),
+        }),
+    };
+    let query = make_query_with_arithmetic_order_by(None, expr);
+    let result = QueryValidator::validate(&query);
+    assert!(
+        result.is_err(),
+        "bare similarity() in arithmetic without NEAR should fail"
+    );
+    assert_eq!(
+        result.unwrap_err().kind,
+        ValidationErrorKind::SimilarityWithoutContext
+    );
+}
+
+#[test]
+fn test_validate_bare_similarity_in_arithmetic_with_near_passes() {
+    // ORDER BY 0.5 * similarity() + 0.5 * price DESC -- with NEAR clause
+    let expr = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Similarity(Box::new(
+                OrderByExpr::SimilarityBare,
+            ))),
+        }),
+        op: ArithmeticOp::Add,
+        right: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("price".to_string())),
+        }),
+    };
+    let near = Condition::VectorSearch(VectorSearch {
+        vector: VectorExpr::Parameter("v".to_string()),
+    });
+    let query = make_query_with_arithmetic_order_by(Some(near), expr);
+    let result = QueryValidator::validate(&query);
+    assert!(
+        result.is_ok(),
+        "bare similarity() in arithmetic WITH NEAR should pass"
+    );
+}
+
+#[test]
+fn test_validate_parameterized_similarity_in_arithmetic_rejected() {
+    // ORDER BY 0.5 * similarity(field, $v) + 0.5 * price DESC
+    let expr = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Similarity(Box::new(
+                OrderByExpr::Similarity(SimilarityOrderBy {
+                    field: "embedding".to_string(),
+                    vector: VectorExpr::Parameter("v".to_string()),
+                }),
+            ))),
+        }),
+        op: ArithmeticOp::Add,
+        right: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("price".to_string())),
+        }),
+    };
+    let query = make_query_with_arithmetic_order_by(None, expr);
+    let result = QueryValidator::validate(&query);
+    assert!(
+        result.is_err(),
+        "parameterized similarity() in arithmetic should fail"
+    );
+    assert_eq!(
+        result.unwrap_err().kind,
+        ValidationErrorKind::UnsupportedArithmeticSimilarity
+    );
+}
+
+#[test]
+fn test_validate_arithmetic_without_similarity_passes() {
+    // ORDER BY 0.5 * price + 0.5 * rating DESC -- no similarity at all
+    let expr = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("price".to_string())),
+        }),
+        op: ArithmeticOp::Add,
+        right: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.5)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("rating".to_string())),
+        }),
+    };
+    let query = make_query_with_arithmetic_order_by(None, expr);
+    let result = QueryValidator::validate(&query);
+    assert!(result.is_ok(), "arithmetic without similarity should pass");
 }

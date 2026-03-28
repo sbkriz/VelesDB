@@ -74,7 +74,7 @@ impl Parser {
             }
             OrderByExpr::SimilarityBare => "similarity()".to_string(),
             OrderByExpr::Aggregate(a) => format!("{:?}()", a.function_type),
-            OrderByExpr::Arithmetic(expr) => format!("{expr:?}"),
+            OrderByExpr::Arithmetic(expr) => format!("{expr}"),
         }
     }
 

@@ -85,6 +85,7 @@ mod validation;
 mod validation_parity_tests;
 #[cfg(test)]
 mod validation_tests;
+mod validation_types;
 
 #[cfg(test)]
 mod aggregation_params_tests;

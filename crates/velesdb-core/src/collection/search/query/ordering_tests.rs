@@ -169,8 +169,8 @@ mod tests {
 
     #[test]
     fn test_arithmetic_eval_variable_from_payload() {
-        let payload = json!({"bm25_score": 0.65});
-        let expr = ArithmeticExpr::Variable("bm25_score".to_string());
+        let payload = json!({"boost_factor": 0.65});
+        let expr = ArithmeticExpr::Variable("boost_factor".to_string());
         let ctx = ScoreContext::new(0.0, Some(&payload));
         assert!((evaluate_arithmetic(&expr, &ctx) - 0.65).abs() < 1e-5);
     }
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_arithmetic_ordering_weighted_scores() {
-        // 0.7 * vector_score + 0.3 * bm25_score
+        // 0.7 * vector_score + 0.3 * boost_factor (payload field)
         let expr = ArithmeticExpr::BinaryOp {
             left: Box::new(ArithmeticExpr::BinaryOp {
                 left: Box::new(ArithmeticExpr::Literal(0.7)),
@@ -203,11 +203,11 @@ mod tests {
             right: Box::new(ArithmeticExpr::BinaryOp {
                 left: Box::new(ArithmeticExpr::Literal(0.3)),
                 op: ArithmeticOp::Mul,
-                right: Box::new(ArithmeticExpr::Variable("bm25_score".to_string())),
+                right: Box::new(ArithmeticExpr::Variable("boost_factor".to_string())),
             }),
         };
 
-        let payload = json!({"bm25_score": 0.8});
+        let payload = json!({"boost_factor": 0.8});
         let ctx = ScoreContext::new(0.9, Some(&payload));
         // Expected: 0.7 * 0.9 + 0.3 * 0.8 = 0.63 + 0.24 = 0.87
         let result = evaluate_arithmetic(&expr, &ctx);
@@ -253,6 +253,81 @@ mod tests {
         let expr = ArithmeticExpr::Variable("custom_field".to_string());
         let ctx = ScoreContext::new(0.5, None);
         assert!(evaluate_arithmetic(&expr, &ctx).abs() < 1e-9);
+    }
+
+    // ------------------------------------------------------------------
+    // Bug 3 regression: resolve_variable must recognize graph_score and bm25_score
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_variable_graph_score_returns_search_score() {
+        let expr = ArithmeticExpr::Variable("graph_score".to_string());
+        let ctx = ScoreContext::new(0.75, None);
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 0.75).abs() < 1e-5,
+            "graph_score should resolve to search_score (0.75), got {result}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_variable_bm25_score_returns_search_score() {
+        let expr = ArithmeticExpr::Variable("bm25_score".to_string());
+        let ctx = ScoreContext::new(0.60, None);
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 0.60).abs() < 1e-5,
+            "bm25_score should resolve to search_score (0.60), got {result}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_variable_bm25_score_not_shadowed_by_payload() {
+        // Even when payload has a bm25_score field, the built-in should take
+        // precedence to maintain consistent behavior.
+        let payload = serde_json::json!({"bm25_score": 0.99});
+        let expr = ArithmeticExpr::Variable("bm25_score".to_string());
+        let ctx = ScoreContext::new(0.42, Some(&payload));
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 0.42).abs() < 1e-5,
+            "bm25_score built-in should take precedence over payload (0.42), got {result}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Bug 1 regression: evaluate_arithmetic with Similarity(SimilarityBare)
+    // should return search_score, and the bare form is the only supported form
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_arithmetic_eval_similarity_bare_inside_binary_op() {
+        // 0.5 * similarity() + 0.5 * price
+        // similarity() (bare) should resolve to ctx.search_score
+        let expr = ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::BinaryOp {
+                left: Box::new(ArithmeticExpr::Literal(0.5)),
+                op: ArithmeticOp::Mul,
+                right: Box::new(ArithmeticExpr::Similarity(Box::new(
+                    OrderByExpr::SimilarityBare,
+                ))),
+            }),
+            op: ArithmeticOp::Add,
+            right: Box::new(ArithmeticExpr::BinaryOp {
+                left: Box::new(ArithmeticExpr::Literal(0.5)),
+                op: ArithmeticOp::Mul,
+                right: Box::new(ArithmeticExpr::Variable("price".to_string())),
+            }),
+        };
+
+        let payload = serde_json::json!({"price": 0.8});
+        let ctx = ScoreContext::new(0.9, Some(&payload));
+        // Expected: 0.5 * 0.9 + 0.5 * 0.8 = 0.45 + 0.40 = 0.85
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 0.85).abs() < 1e-5,
+            "0.5 * similarity() + 0.5 * price should be 0.85, got {result}"
+        );
     }
 
     // -----------------------------------------------------------------------
