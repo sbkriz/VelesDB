@@ -147,6 +147,9 @@ impl Parser {
             }
         }
         let expr = expr.ok_or_else(|| ParseError::syntax(0, "", "Expected ORDER BY expression"))?;
+        // Design: compound arithmetic expressions (e.g., 0.7 * similarity() + 0.3 * score)
+        // default to ASC when no explicit direction is given, unlike bare similarity() which
+        // defaults to DESC. Users should always specify DESC/ASC for arithmetic ORDER BY.
         Ok(SelectOrderBy {
             expr,
             descending: descending.unwrap_or(is_similarity),

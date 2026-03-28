@@ -282,10 +282,23 @@ impl<'a> ScoreContext<'a> {
     }
 }
 
+/// Maximum recursion depth for arithmetic expression evaluation.
+/// Matches `DEFAULT_MAX_AST_DEPTH` (64) from validation.
+const MAX_ARITHMETIC_DEPTH: u8 = 64;
+
 /// Evaluates an arithmetic expression against a score context (EPIC-042).
 ///
 /// Division by zero returns `0.0` (safe default for sorting).
+/// Recursion depth is capped at [`MAX_ARITHMETIC_DEPTH`] to prevent stack overflow.
 pub(crate) fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>) -> f32 {
+    evaluate_arithmetic_inner(expr, ctx, 0)
+}
+
+/// Inner recursive evaluator with depth tracking.
+fn evaluate_arithmetic_inner(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>, depth: u8) -> f32 {
+    if depth >= MAX_ARITHMETIC_DEPTH {
+        return 0.0;
+    }
     match expr {
         ArithmeticExpr::Literal(v) => {
             #[allow(clippy::cast_possible_truncation)]
@@ -299,8 +312,8 @@ pub(crate) fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>)
         // Parameterized similarity(field, $vec) is rejected at validation time (V008).
         ArithmeticExpr::Similarity(_) => ctx.search_score,
         ArithmeticExpr::BinaryOp { left, op, right } => {
-            let l = evaluate_arithmetic(left, ctx);
-            let r = evaluate_arithmetic(right, ctx);
+            let l = evaluate_arithmetic_inner(left, ctx, depth + 1);
+            let r = evaluate_arithmetic_inner(right, ctx, depth + 1);
             match op {
                 ArithmeticOp::Add => l + r,
                 ArithmeticOp::Sub => l - r,
