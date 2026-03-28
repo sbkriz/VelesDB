@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.9.0">Download v1.9.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.9.1">Download v1.9.1</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -304,7 +304,7 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
 
-### Performance (v1.9.0)
+### Performance (v1.9.1)
 
 End-to-end numbers on the **complete production path**: WAL durability, payload storage, HNSW search, result resolution. No shortcuts.
 

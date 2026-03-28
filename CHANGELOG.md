@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-03-28
+
+### Fixed
+- **Devin review fixes**: Validate parameterized `similarity(field, $vec)` inside arithmetic
+  expressions (new V008 error), recurse into Arithmetic for similarity context validation,
+  add `graph_score`/`bm25_score` as built-in score variables, implement Display for
+  ArithmeticExpr (human-readable output in Python/WASM SDKs)
+- **Codacy complexity refactoring**: Extract 15+ helper functions to reduce cyclomatic
+  complexity across 12 files (split_column_ref 15->5, parse_update_stmt 13->6,
+  lifecycle::open 11->5, find_start_nodes 11->5, wal_append_upsert 11->5, and 7 more)
+- Split `validation_types.rs` from `validation.rs` (508->383+212 NLOC)
+- Split `crud_read_delete.rs` from `crud.rs` (579->321 NLOC)
+
 ## [1.9.0] - 2026-03-28
 
 ### Added
