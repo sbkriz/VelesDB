@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-03-28
+
+### Fixed
+- **Devin review fixes**: Validate parameterized `similarity(field, $vec)` inside arithmetic
+  expressions (new V008 error), recurse into Arithmetic for similarity context validation,
+  add `graph_score`/`bm25_score` as built-in score variables, implement Display for
+  ArithmeticExpr (human-readable output in Python/WASM SDKs)
+- **Codacy complexity refactoring**: Extract 15+ helper functions to reduce cyclomatic
+  complexity across 12 files (split_column_ref 15->5, parse_update_stmt 13->6,
+  lifecycle::open 11->5, find_start_nodes 11->5, wal_append_upsert 11->5, and 7 more)
+- Split `validation_types.rs` from `validation.rs` (508->383+212 NLOC)
+- Split `crud_read_delete.rs` from `crud.rs` (579->321 NLOC)
+
+## [1.9.0] - 2026-03-28
+
+### Added
+- **VelesQL ORDER BY arithmetic expressions** (#442): Support weighted score combinations
+  like `ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC` with proper operator precedence,
+  parenthesized expressions, and score variable resolution
+- New `ArithmeticExpr` and `ArithmeticOp` AST types for ORDER BY expressions
+- Conformance test cases P046-P052 for MATCH text and arithmetic ORDER BY
+- `docs/guides/GRAPH_PATTERNS.md` practical guide for MATCH graph patterns
+
+### Fixed
+- **ORDER BY regression tests** (#443): Added 3 regression tests for ORDER BY on non-existent fields
+- **MATCH text semantics documentation** (#444): Clarified that MATCH + NEAR performs hybrid RRF
+  fusion (boost) rather than strict filtering; documented that MatchCondition.column is parsed but ignored
+- **MATCH graph scope documentation** (#445): Documented single-collection limitation, _labels
+  requirement, and edge store scope for graph pattern matching
+
+### Changed
+- `docs/reference/VELESQL_ORDERBY.md`: Updated score evaluation section to reference actual
+  implementation (ScoreContext + evaluate_arithmetic), fixed feature status table
+- `README.md`: Added clarifying note about MATCH graph operating within single collection
+- Parser DRY refactor: extracted `parse_arithmetic_binary_chain` to eliminate duplication
+  between additive and multiplicative parsing
+
 ## [1.8.0] - 2026-03-27
 
 ### Performance (Papers to Production)

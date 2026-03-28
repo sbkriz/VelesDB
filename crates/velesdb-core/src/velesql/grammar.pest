@@ -127,13 +127,26 @@ join_condition = { column_ref ~ "=" ~ column_ref }
 column_ref = @{ identifier ~ "." ~ identifier }
 
 // ORDER BY clause (EPIC-040 US-002: supports columns, aggregates, similarity)
+// EPIC-042: Extended with arithmetic expressions for custom scoring
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
 order_by_item = { order_by_expr ~ sort_direction? }
-order_by_expr = { order_by_similarity | order_by_similarity_bare | aggregate_function | property_access | identifier }
+order_by_expr = { aggregate_function | property_access | order_by_arithmetic }
 order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
 // similarity() zero-arg in ORDER BY: uses pre-computed search score
 order_by_similarity_bare = { ^"similarity" ~ "(" ~ ")" }
 sort_direction = { ^"DESC" | ^"ASC" }
+
+// Arithmetic expressions for ORDER BY (EPIC-042)
+// Precedence: additive (+, -) < multiplicative (*, /)
+// arithmetic_atom subsumes: float, integer, similarity(), identifier
+order_by_arithmetic = { arithmetic_additive }
+arithmetic_additive = { arithmetic_multiplicative ~ ((add_op | sub_op) ~ arithmetic_multiplicative)* }
+arithmetic_multiplicative = { arithmetic_atom ~ ((mul_op | div_op) ~ arithmetic_atom)* }
+arithmetic_atom = { float | integer | order_by_similarity | order_by_similarity_bare | "(" ~ arithmetic_additive ~ ")" | identifier }
+add_op = { "+" }
+sub_op = { "-" }
+mul_op = { "*" }
+div_op = { "/" }
 
 // WITH clause for query-time configuration overrides
 with_clause = { ^"WITH" ~ "(" ~ with_option_list ~ ")" }

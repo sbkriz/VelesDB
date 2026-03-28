@@ -14,11 +14,13 @@ This guide will help you get VelesDB up and running in just a few minutes.
 The easiest way to get started is with Docker:
 
 ```bash
+# Build from the repository root, then run
+docker build -t velesdb .
 docker run -d \
   --name velesdb \
   -p 8080:8080 \
   -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:latest
+  velesdb
 ```
 
 ### Using Cargo

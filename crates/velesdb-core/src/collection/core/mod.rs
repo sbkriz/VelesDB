@@ -9,6 +9,7 @@
 mod crud;
 mod crud_bulk;
 mod crud_helpers;
+mod crud_read_delete;
 #[cfg(test)]
 mod crud_tests;
 #[cfg(all(test, feature = "persistence"))]

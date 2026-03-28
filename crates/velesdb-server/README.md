@@ -16,7 +16,9 @@ cargo install velesdb-server
 ### Docker
 
 ```bash
-docker run -p 8080:8080 -v ./data:/data ghcr.io/cyberlife-coder/velesdb:latest
+# Build from the repository root
+docker build -t velesdb .
+docker run -p 8080:8080 -v velesdb_data:/data velesdb
 ```
 
 ### From source
@@ -440,7 +442,7 @@ curl http://localhost:8080/health
 Response:
 
 ```json
-{"status": "ok", "version": "1.8.0"}
+{"status": "ok", "version": "1.9.1"}
 ```
 
 ### `GET /ready` -- Readiness Probe
@@ -454,13 +456,13 @@ curl http://localhost:8080/ready
 Response (ready):
 
 ```json
-{"status": "ready", "version": "1.8.0"}
+{"status": "ready", "version": "1.9.1"}
 ```
 
 Response (not ready):
 
 ```json
-{"status": "not_ready", "version": "1.8.0"}
+{"status": "not_ready", "version": "1.9.1"}
 ```
 
 ### Kubernetes Example

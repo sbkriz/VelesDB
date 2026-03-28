@@ -85,6 +85,7 @@ mod validation;
 mod validation_parity_tests;
 #[cfg(test)]
 mod validation_tests;
+mod validation_types;
 
 #[cfg(test)]
 mod aggregation_params_tests;
@@ -114,6 +115,9 @@ pub use ast::{
     AggregateArg,
     AggregateFunction,
     AggregateType,
+    // Arithmetic (EPIC-042)
+    ArithmeticExpr,
+    ArithmeticOp,
     // Conditions (used by server, python, wasm, cli)
     BetweenCondition,
     // SELECT

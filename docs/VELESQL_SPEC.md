@@ -115,9 +115,32 @@ SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3, 0.4]
 SELECT * FROM docs WHERE title LIKE '%database%'
 SELECT * FROM docs WHERE name LIKE 'vec%'
 
--- MATCH for full-text (if supported)
-SELECT * FROM docs WHERE content MATCH 'vector database'
+-- MATCH for full-text search (BM25)
+SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
 ```
+
+#### MATCH Semantics
+
+The `MATCH` operator performs BM25 full-text search against the collection's text index. Its behavior depends on whether it appears alone or combined with `NEAR`:
+
+**MATCH alone** -- returns BM25 text search results ranked by text relevance:
+
+```sql
+-- BM25 full-text search: returns documents matching the query, ranked by BM25 score
+SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
+```
+
+**MATCH + NEAR (hybrid search)** -- triggers Reciprocal Rank Fusion (RRF) between vector similarity and BM25 text relevance. In this mode, `MATCH` acts as a **score boost, not a strict filter**. Results that do not contain the keyword may still appear with lower fused scores:
+
+```sql
+-- Hybrid search: vector similarity fused with BM25 text relevance via RRF
+-- Results may include documents that do NOT contain 'database' (with lower scores)
+SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'database' LIMIT 10
+```
+
+> **Known Limitations (v1.9.0)**:
+> - **No strict text filter**: There is currently no operator that strictly filters results to only those containing the keyword. `MATCH` in hybrid mode boosts but does not filter. A dedicated text filter operator is planned (see issue #446).
+> - **Column parameter ignored**: The syntax `column MATCH 'query'` parses the column name (e.g., `content`) but the execution engine ignores it -- all indexed text fields are searched via the collection's BM25 index regardless of the column specified.
 
 ### NULL Checks
 
@@ -930,7 +953,7 @@ or_expr         = and_expr { "OR" and_expr } ;
 and_expr        = condition { "AND" condition } ;
 condition       = comparison | vector_search | fused_search | sparse_search
                 | similarity_cond | in_cond | between_cond | like_cond
-                | is_null_cond | "(" or_expr ")" ;
+                | match_cond | is_null_cond | "(" or_expr ")" ;
 
 (* Vector operations *)
 vector_search   = identifier "NEAR" vector_expr ;
@@ -951,6 +974,7 @@ compare_op      = "=" | "!=" | "<>" | ">" | ">=" | "<" | "<=" ;
 in_cond         = column [ "NOT" ] "IN" "(" value { "," value } ")" ;
 between_cond    = column "BETWEEN" value "AND" value ;
 like_cond       = column ("LIKE" | "ILIKE") string ;
+match_cond      = column "MATCH" string ;
 is_null_cond    = column "IS" ["NOT"] "NULL" ;
 
 (* GROUP BY and HAVING *)
@@ -1123,6 +1147,26 @@ RETURN incident.solution, service.name
 ORDER BY similarity() DESC
 LIMIT 3
 ```
+
+### Scope and Requirements
+
+**Collection Scope**: MATCH graph patterns operate exclusively within the current collection's internal graph store (`edge_store`). They iterate over the collection's own points and edges. They do NOT traverse edges across different collections. To query a separate `GraphCollection`, use the graph API directly (`get_outgoing()`, `traverse_bfs()`).
+
+**Label Requirement**: For label-based patterns like `(p:Product)`, each point's payload MUST contain a `_labels` array listing the node's labels:
+
+```json
+{
+  "_labels": ["Product"],
+  "name": "Wireless Headphones",
+  "price": 99.99
+}
+```
+
+Points without a `_labels` key in their payload will NOT match any labeled pattern. This means that a query like `MATCH (p:Product)` silently skips all points that lack `"_labels": ["Product"]` in their payload.
+
+**Edge Requirement**: Relationship patterns like `-[:BOUGHT_WITH]->` require edges to exist in the collection's own edge store. Use `collection.add_edge(from_id, to_id, "BOUGHT_WITH", properties)` (Rust/Python) or `POST /collections/{name}/graph/edges` (REST) to create them before running MATCH queries.
+
+> **See also**: [Graph Patterns Guide](guides/GRAPH_PATTERNS.md) for practical setup examples and common pitfalls.
 
 ### Execution Strategies
 

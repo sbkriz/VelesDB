@@ -80,25 +80,10 @@ pub(crate) fn parse_scalar_from_rule(
     pair: &pest::iterators::Pair<'_, Rule>,
 ) -> Result<Value, ParseError> {
     match pair.as_rule() {
-        Rule::integer => {
-            let v = pair
-                .as_str()
-                .parse::<i64>()
-                .map_err(|_| ParseError::syntax(0, pair.as_str(), "Invalid integer"))?;
-            Ok(Value::Integer(v))
-        }
-        Rule::float => {
-            let v = pair
-                .as_str()
-                .parse::<f64>()
-                .map_err(|_| ParseError::syntax(0, pair.as_str(), "Invalid float"))?;
-            Ok(Value::Float(v))
-        }
+        Rule::integer => parse_integer_literal(pair.as_str()),
+        Rule::float => parse_float_literal(pair.as_str()),
         Rule::string => Ok(Value::String(unescape_string_literal(pair.as_str()))),
-        Rule::boolean => {
-            let b = pair.as_str().to_uppercase() == "TRUE";
-            Ok(Value::Boolean(b))
-        }
+        Rule::boolean => Ok(Value::Boolean(pair.as_str().eq_ignore_ascii_case("true"))),
         Rule::null_value => Ok(Value::Null),
         Rule::parameter => {
             let name = pair.as_str().trim_start_matches('$').to_string();
@@ -106,6 +91,20 @@ pub(crate) fn parse_scalar_from_rule(
         }
         _ => Err(ParseError::syntax(0, pair.as_str(), "Unknown value type")),
     }
+}
+
+/// Parses an integer literal string into a [`Value::Integer`].
+fn parse_integer_literal(s: &str) -> Result<Value, ParseError> {
+    s.parse::<i64>()
+        .map(Value::Integer)
+        .map_err(|_| ParseError::syntax(0, s, "Invalid integer"))
+}
+
+/// Parses a float literal string into a [`Value::Float`].
+fn parse_float_literal(s: &str) -> Result<Value, ParseError> {
+    s.parse::<f64>()
+        .map(Value::Float)
+        .map_err(|_| ParseError::syntax(0, s, "Invalid float"))
 }
 
 /// Extracts and parses a `u64` integer from a clause pair (e.g., LIMIT, OFFSET).

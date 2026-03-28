@@ -231,6 +231,41 @@
       "id": "P045",
       "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$v1] LIMIT 10",
       "should_parse": true
+    },
+    {
+      "id": "P046",
+      "query": "SELECT * FROM docs WHERE content MATCH 'database' LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P047",
+      "query": "SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'database' LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P048",
+      "query": "SELECT * FROM docs WHERE vector NEAR $v AND title MATCH 'vector database' AND category = 'tech' LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P049",
+      "query": "SELECT * FROM docs ORDER BY 0.7 * vector_score + 0.3 * graph_score DESC LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P050",
+      "query": "SELECT * FROM docs ORDER BY (vector_score + graph_score) / 2 DESC LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P051",
+      "query": "SELECT * FROM docs WHERE vector NEAR $v ORDER BY 0.5 * similarity() + 0.5 * bm25_score DESC LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P052",
+      "query": "SELECT * FROM docs ORDER BY score * 2 + 1 ASC LIMIT 10",
+      "should_parse": true
     }
   ]
 }

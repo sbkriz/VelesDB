@@ -157,26 +157,7 @@ impl ColumnStore {
             return Vec::new();
         }
 
-        if ids.len() > 16 {
-            let id_set: rustc_hash::FxHashSet<StringId> = ids.into_iter().collect();
-            col.iter()
-                .enumerate()
-                .filter_map(|(idx, v)| match v {
-                    Some(id) if id_set.contains(id) && !self.deleted_rows.contains(&idx) => {
-                        Some(idx)
-                    }
-                    _ => None,
-                })
-                .collect()
-        } else {
-            col.iter()
-                .enumerate()
-                .filter_map(|(idx, v)| match v {
-                    Some(id) if ids.contains(id) && !self.deleted_rows.contains(&idx) => Some(idx),
-                    _ => None,
-                })
-                .collect()
-        }
+        self.scan_string_column_in(col, &ids)
     }
 
     /// Counts rows matching equality on an integer column.
@@ -262,5 +243,32 @@ impl ColumnStore {
     #[must_use]
     pub fn bitmap_or(a: &RoaringBitmap, b: &RoaringBitmap) -> RoaringBitmap {
         a | b
+    }
+
+    /// Scans a string column for rows whose interned id is in `ids`.
+    ///
+    /// Uses a `FxHashSet` for large id lists (>16) and linear scan for small ones.
+    fn scan_string_column_in(&self, col: &[Option<StringId>], ids: &[StringId]) -> Vec<usize> {
+        if ids.len() > 16 {
+            let id_set: rustc_hash::FxHashSet<StringId> = ids.iter().copied().collect();
+            self.filter_column_by(col, |id| id_set.contains(id))
+        } else {
+            self.filter_column_by(col, |id| ids.contains(id))
+        }
+    }
+
+    /// Filters a string column by a predicate on the interned id, excluding deleted rows.
+    fn filter_column_by(
+        &self,
+        col: &[Option<StringId>],
+        predicate: impl Fn(&StringId) -> bool,
+    ) -> Vec<usize> {
+        col.iter()
+            .enumerate()
+            .filter_map(|(idx, v)| match v {
+                Some(id) if predicate(id) && !self.deleted_rows.contains(&idx) => Some(idx),
+                _ => None,
+            })
+            .collect()
     }
 }

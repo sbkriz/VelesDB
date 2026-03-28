@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.8.0">Download v1.8.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.9.1">Download v1.9.1</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -229,17 +229,34 @@ pip install velesdb
 
 **Docker:**
 ```bash
-docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb/velesdb:latest
+# Build the image locally
+git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
+docker build -t velesdb .
+
+# Run with persistent data (named volume)
+docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
+
+# Verify it's running
+curl http://localhost:8080/health
 ```
 
+Data is stored in the `/data` directory inside the container. The named volume `velesdb_data` persists data across container restarts. The built-in health check polls `GET /health` every 30 seconds.
+
 <details>
-<summary>More install options (WASM, Docker Compose, install scripts)</summary>
+<summary>More install options (Docker Compose, WASM, install scripts)</summary>
 
 **Docker Compose:**
 ```bash
-curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/docker-compose.yml
+git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
 docker-compose up -d
 ```
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `VELESDB_DATA_DIR` | `/data` | Data storage directory |
+| `VELESDB_HOST` | `0.0.0.0` | Bind address |
+| `VELESDB_PORT` | `8080` | HTTP port |
+| `RUST_LOG` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
 **WASM (Browser):**
 ```bash
@@ -287,7 +304,7 @@ curl -X POST http://localhost:8080/collections/docs/search \
 
 Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search on commodity hardware.
 
-### Performance (v1.8.0)
+### Performance (v1.9.1)
 
 End-to-end numbers on the **complete production path**: WAL durability, payload storage, HNSW search, result resolution. No shortcuts.
 
@@ -398,6 +415,8 @@ MATCH (product)-[:BOUGHT_TOGETHER]->(related)
 WHERE similarity(product.embedding, $query) > 0.7
 RETURN related.name, related.price
 ```
+
+> **Note**: MATCH operates within a single collection. Labels like `Document` and `Person` are tags stored in each point's `_labels` payload array -- all points and edges live in the same collection. See the [Graph Patterns Guide](docs/guides/GRAPH_PATTERNS.md) for setup details and requirements.
 
 ### Why VelesQL?
 
@@ -537,9 +556,13 @@ INSERT                      INDEX                       SEARCH
 <summary>Docker deployment</summary>
 
 ```bash
-docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb/velesdb:latest
+# Build and run locally
+docker build -t velesdb .
+docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
 curl http://localhost:8080/health
-docker-compose up -d  # With persistence and auto-restart
+
+# Or with docker-compose (builds + auto-restart)
+docker-compose up -d
 ```
 
 | Variable | Default | Description |
@@ -547,6 +570,9 @@ docker-compose up -d  # With persistence and auto-restart
 | `VELESDB_DATA_DIR` | `/data` | Data storage directory |
 | `VELESDB_HOST` | `0.0.0.0` | Bind address |
 | `VELESDB_PORT` | `8080` | HTTP port |
+| `RUST_LOG` | `info` | Log level |
+
+The container runs as a non-root `velesdb` user. Data persists via the named volume `velesdb_data`. A built-in health check (`GET /health`) is configured with a 30-second interval.
 
 </details>
 
@@ -672,6 +698,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Version | Status | Highlights |
 |---------|--------|------------|
+| **v1.9.0** | Released | VelesQL ORDER BY arithmetic expressions, MATCH graph documentation, conformance cases P046-P052 |
 | **v1.8.0** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
 | **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix, Agent Memory SDK |
 | **v1.7.0** | Released | HNSW Upsert, GPU Acceleration, Batch SIMD, Chunked Insertion |
@@ -681,6 +708,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 <details>
 <summary>Detailed release history</summary>
+
+**v1.9.0** — VelesQL ORDER BY arithmetic expressions (#442): weighted score combinations with operator precedence and parenthesized expressions. New ArithmeticExpr/ArithmeticOp AST types. Conformance cases P046-P052. MATCH documentation: clarified hybrid RRF semantics (#444), documented single-collection graph scope (#445). Graph patterns guide. Closes #442, #443, #444, #445.
 
 **v1.8.0** — 6 performance optimization phases from peer-reviewed research: software pipelining (arXiv:2505.07621), RaBitQ 32x compression (arXiv:2405.12497), PDX block-columnar layout (arXiv:2503.04422), SmallVec batch distances, AutoTune adaptive ef, Trigram SIMD fingerprints. Full production wiring: AutoTune via REST/Python, RaBitQ backend (`HnswBackend` enum), PDX auto-build after reordering. Ecosystem propagation to all 8 crates + TypeScript SDK. Bug fixes: bool→int conversion (#412), silent payload data loss (#413). Concurrency fixes: training buffer race, enum cache regression. Closes #404, #408, #410, #412, #413, #416, #417, #421, #422, #425, #430.
 

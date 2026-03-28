@@ -199,6 +199,9 @@ impl ParsedQuery {
                         velesdb_core::velesql::OrderByExpr::Aggregate(agg) => {
                             format!("{:?}", agg.function_type)
                         }
+                        velesdb_core::velesql::OrderByExpr::Arithmetic(expr) => {
+                            format!("{expr}")
+                        }
                     };
                     (col, dir.to_string())
                 })

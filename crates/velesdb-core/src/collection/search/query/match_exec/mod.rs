@@ -350,39 +350,51 @@ impl Collection {
             .first()
             .ok_or_else(|| Error::Config("Pattern must have at least one node".to_string()))?;
 
-        let mut results = Vec::new();
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
+        let needs_payload = !first_node.labels.is_empty() || !first_node.properties.is_empty();
 
-        let has_label_filter = !first_node.labels.is_empty();
-        let has_property_filter = !first_node.properties.is_empty();
-
-        for id in vector_storage.ids() {
-            let payload_opt = if has_label_filter || has_property_filter {
-                payload_storage.retrieve(id).ok().flatten()
-            } else {
-                None
-            };
-
-            if has_label_filter
-                && !Self::node_matches_labels(payload_opt.as_ref(), &first_node.labels)
-            {
-                continue;
-            }
-            if has_property_filter
-                && !Self::node_matches_properties(payload_opt.as_ref(), &first_node.properties)
-            {
-                continue;
-            }
-
-            let mut bindings: HashMap<String, u64> = HashMap::new();
-            if let Some(ref alias) = first_node.alias {
-                bindings.insert(alias.clone(), id);
-            }
-            results.push((id, bindings));
-        }
+        let results = vector_storage
+            .ids()
+            .into_iter()
+            .filter(|id| {
+                Self::node_matches_pattern(*id, first_node, needs_payload, &payload_storage)
+            })
+            .map(|id| Self::build_start_binding(id, first_node))
+            .collect();
 
         Ok(results)
+    }
+
+    /// Returns true if a node matches the label and property filters of a pattern.
+    fn node_matches_pattern(
+        id: u64,
+        node: &crate::velesql::NodePattern,
+        needs_payload: bool,
+        payload_storage: &crate::storage::LogPayloadStorage,
+    ) -> bool {
+        if !needs_payload {
+            return true;
+        }
+        let payload_opt = payload_storage.retrieve(id).ok().flatten();
+        if !node.labels.is_empty() && !Self::node_matches_labels(payload_opt.as_ref(), &node.labels)
+        {
+            return false;
+        }
+        node.properties.is_empty()
+            || Self::node_matches_properties(payload_opt.as_ref(), &node.properties)
+    }
+
+    /// Builds a `(node_id, bindings)` pair for a start node.
+    fn build_start_binding(
+        id: u64,
+        node: &crate::velesql::NodePattern,
+    ) -> (u64, HashMap<String, u64>) {
+        let mut bindings: HashMap<String, u64> = HashMap::new();
+        if let Some(ref alias) = node.alias {
+            bindings.insert(alias.clone(), id);
+        }
+        (id, bindings)
     }
 
     /// Checks if a node's payload matches the required labels.

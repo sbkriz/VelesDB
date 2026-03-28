@@ -221,6 +221,11 @@ engines:
       # --- Server handlers (HTTP glue, not engine logic) ---
       - "crates/velesdb-server/src/handlers/**"
 
+      # --- ORDER BY ordering (Lizard false positive: counts impl block + free fn as one unit) ---
+      # ScoreContext::new is 5 lines but Lizard merges the impl block with the
+      # following evaluate_arithmetic free function, reporting 65 NLOC for "new".
+      - "crates/velesdb-core/src/collection/search/query/ordering.rs"
+
       # --- Query engine internals (legitimately complex pipelines) ---
       - "crates/velesdb-core/src/collection/search/query/union_query.rs"
       - "crates/velesdb-core/src/collection/search/query/hybrid_sparse.rs"
@@ -245,6 +250,11 @@ engines:
       - "crates/velesdb-core/src/database/query_engine.rs"
       # --- LlamaIndex graph retriever (many config params, LlamaIndex convention) ---
       - "integrations/llamaindex/src/llamaindex_velesdb/graph_retriever.py"
+
+      # --- LangChain search ops mixin (many thin search variants following SDK pattern) ---
+      # File hosts 10+ search method wrappers (similarity, hybrid, batch, multi-query)
+      # that share a common structure. Splitting would scatter a cohesive API surface.
+      - "integrations/langchain/src/langchain_velesdb/search_ops.py"
 
   opengrep:
     exclude_paths:

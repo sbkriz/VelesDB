@@ -34,8 +34,10 @@ impl Collection {
                 let column = match &clause.expr {
                     OrderByExpr::Field(name) => name.clone(),
                     OrderByExpr::Aggregate(agg) => Self::aggregation_result_key(agg),
-                    // Similarity ordering not applicable to grouped aggregate rows.
-                    OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => return None,
+                    // Similarity/Arithmetic ordering not applicable to grouped aggregate rows.
+                    OrderByExpr::Similarity(_)
+                    | OrderByExpr::SimilarityBare
+                    | OrderByExpr::Arithmetic(_) => return None,
                 };
                 Some((column, clause.descending))
             })
@@ -46,7 +48,8 @@ impl Collection {
                 let val_a = a.get(column);
                 let val_b = b.get(column);
 
-                let ordering = Self::compare_json_values(val_a, val_b);
+                let ordering =
+                    crate::collection::search::query::ordering::compare_json_values(val_a, val_b);
 
                 let ordering = if *descending {
                     ordering.reverse()
@@ -60,30 +63,6 @@ impl Collection {
             }
             std::cmp::Ordering::Equal
         });
-    }
-
-    /// Compare two optional JSON values for ordering.
-    pub(crate) fn compare_json_values(
-        a: Option<&serde_json::Value>,
-        b: Option<&serde_json::Value>,
-    ) -> std::cmp::Ordering {
-        match (a, b) {
-            (None, None) => std::cmp::Ordering::Equal,
-            (None, Some(_)) => std::cmp::Ordering::Less,
-            (Some(_), None) => std::cmp::Ordering::Greater,
-            (Some(va), Some(vb)) => {
-                // Numeric comparison
-                if let (Some(na), Some(nb)) = (va.as_f64(), vb.as_f64()) {
-                    return na.total_cmp(&nb);
-                }
-                // String comparison
-                if let (Some(sa), Some(sb)) = (va.as_str(), vb.as_str()) {
-                    return sa.cmp(sb);
-                }
-                // Fallback: compare as strings
-                va.to_string().cmp(&vb.to_string())
-            }
-        }
     }
 
     /// Extract group key from payload with pre-computed hash (optimized).

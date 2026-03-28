@@ -120,20 +120,41 @@ pub fn wal_append_upsert(wal_path: &Path, point_id: u64, vector: &SparseVector) 
     let total_len = compute_upsert_entry_len(nnz)?;
 
     let mut w = open_wal_writer(wal_path)?;
+    write_upsert_header(&mut w, total_len, point_id, nnz)?;
+    write_term_value_pairs(&mut w, &vector.indices, &vector.values)?;
+    flush_wal(&mut w)
+}
 
-    wal_write(&mut w, &total_len.to_le_bytes())?;
-    wal_write(&mut w, &[WAL_OP_UPSERT])?;
-    wal_write(&mut w, &point_id.to_le_bytes())?;
-    wal_write(&mut w, &nnz.to_le_bytes())?;
+/// Writes the upsert WAL entry header (length prefix, opcode, point ID, nnz).
+fn write_upsert_header(
+    w: &mut BufWriter<std::fs::File>,
+    total_len: u32,
+    point_id: u64,
+    nnz: u32,
+) -> Result<()> {
+    wal_write(w, &total_len.to_le_bytes())?;
+    wal_write(w, &[WAL_OP_UPSERT])?;
+    wal_write(w, &point_id.to_le_bytes())?;
+    wal_write(w, &nnz.to_le_bytes())
+}
 
-    for (&idx, &val) in vector.indices.iter().zip(vector.values.iter()) {
-        wal_write(&mut w, &idx.to_le_bytes())?;
-        wal_write(&mut w, &val.to_le_bytes())?;
+/// Writes sparse vector term-value pairs to the WAL.
+fn write_term_value_pairs(
+    w: &mut BufWriter<std::fs::File>,
+    indices: &[u32],
+    values: &[f32],
+) -> Result<()> {
+    for (&idx, &val) in indices.iter().zip(values.iter()) {
+        wal_write(w, &idx.to_le_bytes())?;
+        wal_write(w, &val.to_le_bytes())?;
     }
-
-    w.flush()
-        .map_err(|e| Error::SparseIndexError(format!("WAL flush failed: {e}")))?;
     Ok(())
+}
+
+/// Flushes the WAL writer, mapping I/O errors to `SparseIndexError`.
+fn flush_wal(w: &mut BufWriter<std::fs::File>) -> Result<()> {
+    w.flush()
+        .map_err(|e| Error::SparseIndexError(format!("WAL flush failed: {e}")))
 }
 
 /// Computes the total byte length of an upsert WAL entry using checked arithmetic.
@@ -176,16 +197,11 @@ pub fn wal_append_delete(wal_path: &Path, point_id: u64) -> Result<()> {
     // total_len = op(1) + point_id(8) = 9
     let total_len: u32 = 1 + 8;
 
-    // RF-DEDUP: reuse open_wal_writer and wal_write helpers (same as wal_append_upsert)
     let mut w = open_wal_writer(wal_path)?;
-
     wal_write(&mut w, &total_len.to_le_bytes())?;
     wal_write(&mut w, &[WAL_OP_DELETE])?;
     wal_write(&mut w, &point_id.to_le_bytes())?;
-
-    w.flush()
-        .map_err(|e| Error::SparseIndexError(format!("WAL flush failed: {e}")))?;
-    Ok(())
+    flush_wal(&mut w)
 }
 
 /// Replays a sparse WAL into the given index. Returns the number of entries replayed.
@@ -198,24 +214,23 @@ pub fn wal_append_delete(wal_path: &Path, point_id: u64) -> Result<()> {
 /// Returns an error if the WAL file cannot be read (other than not-found), or if
 /// byte sequences that should be exactly 4 or 8 bytes long are corrupt.
 pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
-    let data = match std::fs::read(wal_path) {
-        Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(Error::SparseIndexError(format!("WAL read failed: {e}"))),
+    let data = read_wal_file(wal_path)?;
+    let Some(data) = data else {
+        return Ok(0);
     };
 
     let mut pos = 0usize;
     let mut count = 0u64;
 
     while pos < data.len() {
-        let Some((entry_start, total_len)) = read_wal_entry_header(&data, pos) else {
+        let Some((body_start, total_len)) = read_wal_entry_header(&data, pos) else {
             break;
         };
         pos += 4;
 
         if pos + total_len > data.len() {
             tracing::warn!(
-                "Sparse WAL truncated at offset {entry_start}: declared {total_len} bytes but only {} remain",
+                "Sparse WAL truncated at offset {body_start}: declared {total_len} bytes but only {} remain",
                 data.len() - pos
             );
             break;
@@ -224,35 +239,64 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
         let op = data[pos];
         pos += 1;
 
-        match op {
-            WAL_OP_UPSERT => {
-                let Some(new_pos) = replay_upsert_entry(&data, pos, entry_start, total_len, index)?
-                else {
-                    break;
-                };
-                pos = new_pos;
-                count += 1;
-            }
-            WAL_OP_DELETE => {
-                let point_id = read_le_u64(&data, pos, "WAL entry corrupted: bad point_id bytes")?;
-                pos += 8;
-                index.delete(point_id);
-                count += 1;
-            }
-            unknown => {
-                tracing::warn!("Sparse WAL unknown op 0x{unknown:02x} at offset {entry_start}");
-                pos = entry_start + total_len;
-            }
+        let advanced = replay_single_entry(&data, op, pos, body_start, total_len, index)?;
+        if let Some((new_pos, counted)) = advanced {
+            pos = new_pos;
+            count += counted;
+        } else {
+            break;
         }
 
         // Ensure pos advances to end of entry in case of internal padding
-        let expected_end = entry_start + total_len;
-        if pos < expected_end {
-            pos = expected_end;
-        }
+        advance_past_entry(&mut pos, body_start + total_len);
     }
 
     Ok(count)
+}
+
+/// Reads the WAL file, returning `None` for missing files.
+fn read_wal_file(wal_path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(wal_path) {
+        Ok(d) => Ok(Some(d)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::SparseIndexError(format!("WAL read failed: {e}"))),
+    }
+}
+
+/// Replays a single WAL entry by opcode. Returns `(new_pos, entries_counted)` or `None` to stop.
+fn replay_single_entry(
+    data: &[u8],
+    op: u8,
+    pos: usize,
+    body_start: usize,
+    total_len: usize,
+    index: &SparseInvertedIndex,
+) -> Result<Option<(usize, u64)>> {
+    match op {
+        WAL_OP_UPSERT => {
+            let Some(new_pos) = replay_upsert_entry(data, pos, body_start, total_len, index)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some((new_pos, 1)))
+        }
+        WAL_OP_DELETE => {
+            let point_id = read_le_u64(data, pos, "WAL entry corrupted: bad point_id bytes")?;
+            index.delete(point_id);
+            Ok(Some((pos + 8, 1)))
+        }
+        unknown => {
+            tracing::warn!("Sparse WAL unknown op 0x{unknown:02x} at offset {body_start}");
+            Ok(Some((body_start + total_len, 0)))
+        }
+    }
+}
+
+/// Advances `pos` to at least `expected_end` to skip any internal entry padding.
+fn advance_past_entry(pos: &mut usize, expected_end: usize) {
+    if *pos < expected_end {
+        *pos = expected_end;
+    }
 }
 
 /// Reads the WAL entry length prefix and returns `(body_start, total_len)`, or `None` if truncated.
@@ -273,12 +317,12 @@ fn read_wal_entry_header(data: &[u8], pos: usize) -> Option<(usize, usize)> {
 fn replay_upsert_entry(
     data: &[u8],
     mut pos: usize,
-    entry_start: usize,
+    body_start: usize,
     total_len: usize,
     index: &SparseInvertedIndex,
 ) -> Result<Option<usize>> {
     if total_len < 1 + 8 + 4 {
-        tracing::warn!("Sparse WAL upsert entry too short at offset {entry_start}");
+        tracing::warn!("Sparse WAL upsert entry too short at offset {body_start}");
         return Ok(None);
     }
     let point_id = read_le_u64(data, pos, "WAL entry corrupted: bad point_id bytes")?;
@@ -286,8 +330,8 @@ fn replay_upsert_entry(
     let nnz = read_le_u32(data, pos, "WAL entry corrupted: bad nnz bytes")? as usize;
     pos += 4;
 
-    if entry_start + total_len < pos + nnz * 8 {
-        tracing::warn!("Sparse WAL upsert entry truncated at offset {entry_start}");
+    if body_start + total_len < pos + nnz * 8 {
+        tracing::warn!("Sparse WAL upsert entry truncated at offset {body_start}");
         return Ok(None);
     }
 

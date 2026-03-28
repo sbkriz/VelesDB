@@ -46,20 +46,22 @@ LIMIT 10
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `vector_score` | f32 | Vector similarity score (0.0 - 1.0 for cosine) |
-| `graph_score` | f32 | Graph relevance score |
-| `fused_score` | f32 | Combined score (default fusion) |
-| `bm25_score` | f32 | BM25 text relevance score |
+| `vector_score` | f32 | Pre-computed search score (vector similarity or fused RRF) |
+| `graph_score` | f32 | Pre-computed search score (alias, same as `vector_score` in v1.9) |
+| `fused_score` | f32 | Pre-computed search score (alias, same as `vector_score` in v1.9) |
+| `bm25_score` | f32 | Pre-computed search score (alias, same as `vector_score` in v1.9) |
+| `similarity` | f32 | Pre-computed search score (alias, same as `vector_score`) |
+
+> **v1.9 limitation**: All score variables (`vector_score`, `graph_score`, `bm25_score`,
+> `fused_score`, `similarity`) resolve to the same pre-computed search score. When a
+> query uses multiple search types (vector + graph, vector + BM25), the score is the
+> fused RRF result. Individual component scores are not yet available separately.
 
 ### Variable Availability
 
-| Query Type | vector_score | graph_score | bm25_score |
-|------------|--------------|-------------|------------|
-| Vector only | ✅ | ❌ | ❌ |
-| Graph only | ❌ | ✅ | ❌ |
-| Hybrid (vector+graph) | ✅ | ✅ | ❌ |
-| Text search | ❌ | ❌ | ✅ |
-| Vector + text | ✅ | ❌ | ✅ |
+All score variables resolve to the pre-computed search score, which is available
+whenever the query includes a vector search (NEAR), similarity predicate, or
+fused search. Variables not matching a built-in name are looked up in the payload.
 
 ---
 
@@ -153,19 +155,21 @@ LIMIT 10
 
 ## Score Evaluation
 
-### Engine: `score_eval.rs`
+### Engine: `ordering.rs`
 
-VelesDB uses a dedicated expression evaluator for ORDER BY:
+VelesDB uses a recursive expression evaluator for ORDER BY arithmetic expressions.
+The `ScoreContext` holds the pre-computed search score and optional payload, and
+`evaluate_arithmetic` walks the `ArithmeticExpr` tree:
 
 ```rust
-pub struct ScoreEvaluator {
-    expression: OrderByExpr,
+pub(crate) struct ScoreContext<'a> {
+    search_score: f32,
+    payload: Option<&'a serde_json::Value>,
 }
 
-impl ScoreEvaluator {
-    pub fn evaluate(&self, context: &ScoreContext) -> f32 {
-        // Evaluates arithmetic expression with score variables
-    }
+pub(crate) fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>) -> f32 {
+    // Recursively evaluates arithmetic expression with score variables
+    // Division by zero returns 0.0 (safe default for sorting)
 }
 ```
 
@@ -213,11 +217,14 @@ ORDER BY 0.7 * vector_score + 0.3 * graph_score DESC
 LIMIT 10
 ```
 
-### 4. Avoid Division by Zero
+### 4. Division by Zero is Safe
+
+Division by zero in ORDER BY arithmetic expressions returns `0.0` automatically.
+No special handling is needed:
 
 ```sql
--- Safe: check for zero
-ORDER BY vector_score / COALESCE(NULLIF(divisor, 0), 1) DESC
+-- Safe: returns 0.0 if divisor is zero
+ORDER BY vector_score / divisor DESC
 ```
 
 ---
@@ -227,39 +234,32 @@ ORDER BY vector_score / COALESCE(NULLIF(divisor, 0), 1) DESC
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Arithmetic expressions | ✅ | +, -, *, / |
-| Score variables | ✅ | vector_score, graph_score, etc. |
-| Column references | ⚠️ | Limited support |
-| Functions (ABS, SQRT) | ❌ | Planned for v0.4 |
+| Score variables | ✅ | vector_score, graph_score, etc. (all resolve to search_score in v1.9) |
+| Column references | ✅ | Payload field values resolved as f32 |
+| Multiple ORDER BY | ✅ | Comma-separated, each with own direction |
+| `similarity()` in arithmetic | ✅ | Bare form only: `0.5 * similarity() + 0.5 * price` |
+| `similarity(field, $vec)` in arithmetic | ❌ | Parameterized form rejected (V008); use bare `similarity()` instead |
+| Individual component scores | ❌ | graph_score, bm25_score resolve to fused score (not separate) |
+| Functions (ABS, SQRT) | ❌ | Not supported |
 | CASE expressions | ❌ | Not supported |
-| Multiple ORDER BY | ❌ | Single expression only |
 
 ---
 
 ## Troubleshooting
 
-### "Unknown score variable"
+### Unknown score variable resolves to 0.0
 
-```
-Error: Unknown variable 'unknown_score' in ORDER BY
-```
+Unknown variable names (not a built-in like `vector_score` and not present in the
+payload) silently resolve to `0.0`. This means misspelled variable names will not
+produce errors but will effectively contribute nothing to the combined score.
 
-**Solution**: Use valid score variables: `vector_score`, `graph_score`, `fused_score`, `bm25_score`.
+**Tip**: Use valid built-in names (`vector_score`, `fused_score`, `similarity`) or
+ensure the variable corresponds to a numeric payload field.
 
-### "Score variable not available"
+### Division by zero returns 0.0
 
-```
-Warning: 'graph_score' not available for vector-only query
-```
-
-**Solution**: Ensure your query produces the required score type.
-
-### "Division by zero"
-
-```
-Error: Division by zero in ORDER BY expression
-```
-
-**Solution**: Add null checks or use COALESCE.
+Division by zero in arithmetic expressions returns `0.0` (safe default for sorting).
+No error is raised.
 
 ---
 
