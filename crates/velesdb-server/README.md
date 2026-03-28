@@ -16,7 +16,9 @@ cargo install velesdb-server
 ### Docker
 
 ```bash
-docker run -p 8080:8080 -v ./data:/data ghcr.io/cyberlife-coder/velesdb:latest
+# Build from the repository root
+docker build -t velesdb .
+docker run -p 8080:8080 -v velesdb_data:/data velesdb
 ```
 
 ### From source

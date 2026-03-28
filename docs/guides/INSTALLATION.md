@@ -13,7 +13,7 @@ Complete installation instructions for all platforms and deployment methods.
 | **Python** | `pip` | [PyPI](https://pypi.org/project/velesdb/) ✅ |
 | **Rust** | `cargo` | [crates.io](https://crates.io/crates/velesdb-core) ✅ |
 | **npm** | WASM/SDK | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
-| **Docker** | Container | [ghcr.io](https://ghcr.io/cyberlife-coder/velesdb) |
+| **Docker** | Container | [Build from source](#-docker-installation) |
 | **iOS** | XCFramework | [Build from source](#-mobile-iosandroid) |
 | **Android** | AAR/SO | [Build from source](#-mobile-iosandroid) |
 
@@ -178,38 +178,74 @@ cargo install velesdb-server
 ## 🐳 Docker Installation
 
 ```bash
-# Run with persistent data
+# Clone and build the image locally
+git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
+docker build -t velesdb .
+
+# Run with persistent data (named volume)
 docker run -d \
   --name velesdb \
   -p 8080:8080 \
   -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:latest
+  velesdb
 
-# With custom data directory
+# With a custom host directory for data
 docker run -d \
+  --name velesdb \
   -p 8080:8080 \
   -v /path/to/data:/data \
-  ghcr.io/cyberlife-coder/velesdb:latest
+  velesdb
+
+# Verify it's running
+curl http://localhost:8080/health
 ```
 
+The container runs as a non-root `velesdb` user. Data is stored in `/data` inside the container and persists across restarts via the named volume. A built-in health check polls `GET /health` every 30 seconds.
+
 ### Docker Compose
+
+From the repository root:
+
+```bash
+docker-compose up -d
+```
+
+This uses the `docker-compose.yml` included in the repository, which builds the image locally and configures persistent storage with auto-restart:
 
 ```yaml
 version: '3.8'
 services:
   velesdb:
-    image: ghcr.io/cyberlife-coder/velesdb:latest
+    build: .
+    container_name: velesdb
     ports:
       - "8080:8080"
     volumes:
       - velesdb_data:/data
     environment:
       - RUST_LOG=info
+      - VELESDB_DATA_DIR=/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
 volumes:
   velesdb_data:
+    driver: local
 ```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `VELESDB_DATA_DIR` | `/data` | Data storage directory |
+| `VELESDB_HOST` | `0.0.0.0` | Bind address |
+| `VELESDB_PORT` | `8080` | HTTP port |
+| `RUST_LOG` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
 ---
 
@@ -382,9 +418,9 @@ kill <PID>
 
 ### Docker: Data not persisting
 
-Ensure you're using a volume:
+Ensure you're using a named volume:
 ```bash
-docker run -v velesdb_data:/data ghcr.io/cyberlife-coder/velesdb:latest
+docker run -v velesdb_data:/data velesdb
 ```
 
 ---

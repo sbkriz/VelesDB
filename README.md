@@ -229,17 +229,34 @@ pip install velesdb
 
 **Docker:**
 ```bash
-docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb/velesdb:latest
+# Build the image locally
+git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
+docker build -t velesdb .
+
+# Run with persistent data (named volume)
+docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
+
+# Verify it's running
+curl http://localhost:8080/health
 ```
 
+Data is stored in the `/data` directory inside the container. The named volume `velesdb_data` persists data across container restarts. The built-in health check polls `GET /health` every 30 seconds.
+
 <details>
-<summary>More install options (WASM, Docker Compose, install scripts)</summary>
+<summary>More install options (Docker Compose, WASM, install scripts)</summary>
 
 **Docker Compose:**
 ```bash
-curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/docker-compose.yml
+git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
 docker-compose up -d
 ```
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `VELESDB_DATA_DIR` | `/data` | Data storage directory |
+| `VELESDB_HOST` | `0.0.0.0` | Bind address |
+| `VELESDB_PORT` | `8080` | HTTP port |
+| `RUST_LOG` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
 **WASM (Browser):**
 ```bash
@@ -539,9 +556,13 @@ INSERT                      INDEX                       SEARCH
 <summary>Docker deployment</summary>
 
 ```bash
-docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb/velesdb:latest
+# Build and run locally
+docker build -t velesdb .
+docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
 curl http://localhost:8080/health
-docker-compose up -d  # With persistence and auto-restart
+
+# Or with docker-compose (builds + auto-restart)
+docker-compose up -d
 ```
 
 | Variable | Default | Description |
@@ -549,6 +570,9 @@ docker-compose up -d  # With persistence and auto-restart
 | `VELESDB_DATA_DIR` | `/data` | Data storage directory |
 | `VELESDB_HOST` | `0.0.0.0` | Bind address |
 | `VELESDB_PORT` | `8080` | HTTP port |
+| `RUST_LOG` | `info` | Log level |
+
+The container runs as a non-root `velesdb` user. Data persists via the named volume `velesdb_data`. A built-in health check (`GET /health`) is configured with a 30-second interval.
 
 </details>
 
