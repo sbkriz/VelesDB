@@ -138,7 +138,7 @@ SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
 SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'database' LIMIT 10
 ```
 
-> **Known Limitations (v1.8.0)**:
+> **Known Limitations (v1.9.0)**:
 > - **No strict text filter**: There is currently no operator that strictly filters results to only those containing the keyword. `MATCH` in hybrid mode boosts but does not filter. A dedicated text filter operator is planned (see issue #446).
 > - **Column parameter ignored**: The syntax `column MATCH 'query'` parses the column name (e.g., `content`) but the execution engine ignores it -- all indexed text fields are searched via the collection's BM25 index regardless of the column specified.
 
