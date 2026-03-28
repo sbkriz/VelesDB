@@ -3,8 +3,8 @@
 use super::super::{extract_identifier, Rule};
 use super::validation;
 use crate::velesql::ast::{
-    AggregateFunction, CompareOp, GroupByClause, HavingClause, HavingCondition, OrderByExpr,
-    SelectOrderBy, SimilarityOrderBy, Value,
+    AggregateFunction, ArithmeticExpr, ArithmeticOp, CompareOp, GroupByClause, HavingClause,
+    HavingCondition, OrderByExpr, SelectOrderBy, SimilarityOrderBy, Value,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -158,14 +158,8 @@ impl Parser {
     ) -> Result<(OrderByExpr, bool), ParseError> {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
-                Rule::order_by_similarity => {
-                    return Ok((
-                        OrderByExpr::Similarity(Self::parse_order_by_similarity(inner_pair)?),
-                        true,
-                    ));
-                }
-                Rule::order_by_similarity_bare => {
-                    return Ok((OrderByExpr::SimilarityBare, true));
+                Rule::order_by_arithmetic => {
+                    return Self::parse_order_by_arithmetic(inner_pair);
                 }
                 Rule::aggregate_function => {
                     return Ok((
@@ -176,13 +170,144 @@ impl Parser {
                 Rule::property_access => {
                     return Ok((OrderByExpr::Field(inner_pair.as_str().to_string()), false))
                 }
-                Rule::identifier => {
-                    return Ok((OrderByExpr::Field(extract_identifier(&inner_pair)), false))
-                }
                 _ => {}
             }
         }
         Err(ParseError::syntax(0, "", "Invalid ORDER BY expression"))
+    }
+
+    /// Parses `order_by_arithmetic` and collapses trivial atoms to legacy types.
+    ///
+    /// A single identifier atom becomes `OrderByExpr::Field` for backward compat.
+    /// A bare `similarity()` atom becomes `OrderByExpr::SimilarityBare`.
+    /// A `similarity(field, vec)` atom becomes `OrderByExpr::Similarity`.
+    fn parse_order_by_arithmetic(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(OrderByExpr, bool), ParseError> {
+        // order_by_arithmetic = { arithmetic_additive }
+        let additive = pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Empty arithmetic expression"))?;
+        let expr = Self::parse_arithmetic_additive(additive)?;
+        Ok(Self::collapse_arithmetic_expr(expr))
+    }
+
+    /// Collapses a trivial `ArithmeticExpr` back to legacy `OrderByExpr` variants.
+    fn collapse_arithmetic_expr(expr: ArithmeticExpr) -> (OrderByExpr, bool) {
+        match expr {
+            ArithmeticExpr::Variable(name) => (OrderByExpr::Field(name), false),
+            ArithmeticExpr::Similarity(inner) => (*inner, true),
+            _ => (OrderByExpr::Arithmetic(expr), false),
+        }
+    }
+
+    /// Parses `arithmetic_additive`: handles `+` and `-` (left-associative).
+    fn parse_arithmetic_additive(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<ArithmeticExpr, ParseError> {
+        Self::parse_arithmetic_binary_chain(pair, "additive", Self::parse_arithmetic_multiplicative)
+    }
+
+    /// Parses `arithmetic_multiplicative`: handles `*` and `/` (left-associative).
+    fn parse_arithmetic_multiplicative(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<ArithmeticExpr, ParseError> {
+        Self::parse_arithmetic_binary_chain(pair, "multiplicative", Self::parse_arithmetic_atom)
+    }
+
+    /// Shared left-associative binary operator chain parser.
+    ///
+    /// Both additive (`+`, `-`) and multiplicative (`*`, `/`) levels follow the
+    /// same pattern: parse operands separated by operator tokens.  The `parse_operand`
+    /// closure dispatches to the next-lower precedence level.
+    fn parse_arithmetic_binary_chain(
+        pair: pest::iterators::Pair<Rule>,
+        level_name: &str,
+        parse_operand: fn(pest::iterators::Pair<Rule>) -> Result<ArithmeticExpr, ParseError>,
+    ) -> Result<ArithmeticExpr, ParseError> {
+        let mut parts: Vec<pest::iterators::Pair<Rule>> = pair.into_inner().collect();
+        if parts.is_empty() {
+            return Err(ParseError::syntax(
+                0,
+                "",
+                format!("Empty {level_name} expression"),
+            ));
+        }
+        let first = parts.remove(0);
+        let mut left = parse_operand(first)?;
+        let mut i = 0;
+        while i < parts.len() {
+            let op = Self::parse_arithmetic_op(&parts[i])?;
+            i += 1;
+            if i >= parts.len() {
+                return Err(ParseError::syntax(0, "", "Missing right operand"));
+            }
+            let right = parse_operand(parts[i].clone())?;
+            i += 1;
+            left = ArithmeticExpr::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    /// Parses an `arithmetic_atom`: literal, similarity, identifier, or parenthesized.
+    fn parse_arithmetic_atom(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<ArithmeticExpr, ParseError> {
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::float => {
+                    let val: f64 = inner.as_str().parse().map_err(|_| {
+                        ParseError::syntax(0, inner.as_str(), "Invalid float literal")
+                    })?;
+                    return Ok(ArithmeticExpr::Literal(val));
+                }
+                Rule::integer => {
+                    let val: f64 = inner.as_str().parse().map_err(|_| {
+                        ParseError::syntax(0, inner.as_str(), "Invalid integer literal")
+                    })?;
+                    return Ok(ArithmeticExpr::Literal(val));
+                }
+                Rule::order_by_similarity => {
+                    let sim = Self::parse_order_by_similarity(inner)?;
+                    return Ok(ArithmeticExpr::Similarity(Box::new(
+                        OrderByExpr::Similarity(sim),
+                    )));
+                }
+                Rule::order_by_similarity_bare => {
+                    return Ok(ArithmeticExpr::Similarity(Box::new(
+                        OrderByExpr::SimilarityBare,
+                    )));
+                }
+                Rule::arithmetic_additive => {
+                    return Self::parse_arithmetic_additive(inner);
+                }
+                Rule::identifier => {
+                    return Ok(ArithmeticExpr::Variable(extract_identifier(&inner)));
+                }
+                _ => {}
+            }
+        }
+        Err(ParseError::syntax(0, "", "Invalid arithmetic atom"))
+    }
+
+    /// Converts an operator rule (`add_op`, `sub_op`, `mul_op`, `div_op`) to `ArithmeticOp`.
+    fn parse_arithmetic_op(pair: &pest::iterators::Pair<Rule>) -> Result<ArithmeticOp, ParseError> {
+        match pair.as_rule() {
+            Rule::add_op => Ok(ArithmeticOp::Add),
+            Rule::sub_op => Ok(ArithmeticOp::Sub),
+            Rule::mul_op => Ok(ArithmeticOp::Mul),
+            Rule::div_op => Ok(ArithmeticOp::Div),
+            _ => Err(ParseError::syntax(
+                0,
+                pair.as_str(),
+                "Expected arithmetic operator",
+            )),
+        }
     }
 
     pub(crate) fn parse_order_by_similarity(

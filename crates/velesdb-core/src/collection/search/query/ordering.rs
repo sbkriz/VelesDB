@@ -3,11 +3,13 @@
 //! Handles multi-column sorting with support for:
 //! - Metadata field sorting (ASC/DESC)
 //! - similarity() function sorting
+//! - Arithmetic expression sorting (EPIC-042)
 //! - Mixed type JSON value comparison with total ordering
 
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
+use crate::velesql::{ArithmeticExpr, ArithmeticOp};
 use std::cmp::Ordering;
 
 /// Compare two JSON values for sorting with total ordering.
@@ -150,7 +152,7 @@ impl Collection {
                     let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
                     map.insert(idx, scores);
                 }
-                OrderByExpr::Field(_) | OrderByExpr::Aggregate(_) => {}
+                OrderByExpr::Field(_) | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_) => {}
             }
         }
         Ok(map)
@@ -185,6 +187,15 @@ impl Collection {
                     compare_json_values(val_i, val_j)
                 }
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
+                OrderByExpr::Arithmetic(expr) => {
+                    let ctx_i =
+                        ScoreContext::new(results[i].score, results[i].point.payload.as_ref());
+                    let ctx_j =
+                        ScoreContext::new(results[j].score, results[j].point.payload.as_ref());
+                    let val_i = evaluate_arithmetic(expr, &ctx_i);
+                    let val_j = evaluate_arithmetic(expr, &ctx_j);
+                    val_i.total_cmp(&val_j)
+                }
             };
 
             let is_similarity = matches!(
@@ -217,6 +228,80 @@ impl Collection {
             cmp.reverse()
         } else {
             cmp
+        }
+    }
+}
+
+/// Context for evaluating arithmetic ORDER BY expressions (EPIC-042).
+///
+/// Holds the pre-computed search score and optional payload for variable resolution.
+pub(crate) struct ScoreContext<'a> {
+    /// Pre-computed search score (vector similarity or fused score).
+    search_score: f32,
+    /// Payload fields for variable resolution.
+    payload: Option<&'a serde_json::Value>,
+}
+
+impl<'a> ScoreContext<'a> {
+    /// Creates a new score context from a search result.
+    pub(crate) fn new(search_score: f32, payload: Option<&'a serde_json::Value>) -> Self {
+        Self {
+            search_score,
+            payload,
+        }
+    }
+
+    /// Resolves a variable name to a numeric value.
+    ///
+    /// Built-in names (`vector_score`, `fused_score`, `similarity`) map to the
+    /// pre-computed search score. Other names are looked up in the payload.
+    fn resolve_variable(&self, name: &str) -> f32 {
+        match name {
+            "vector_score" | "fused_score" | "similarity" => self.search_score,
+            _ => self
+                .payload
+                .and_then(|p| p.get(name))
+                .and_then(serde_json::Value::as_f64)
+                .map_or(0.0, |v| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    // Reason: payload values are user-defined scores; f64→f32 precision loss is acceptable.
+                    {
+                        v as f32
+                    }
+                }),
+        }
+    }
+}
+
+/// Evaluates an arithmetic expression against a score context (EPIC-042).
+///
+/// Division by zero returns `0.0` (safe default for sorting).
+pub(crate) fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>) -> f32 {
+    match expr {
+        ArithmeticExpr::Literal(v) => {
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: arithmetic literals are user-defined weights; f64→f32 precision loss is acceptable.
+            {
+                *v as f32
+            }
+        }
+        ArithmeticExpr::Variable(name) => ctx.resolve_variable(name),
+        ArithmeticExpr::Similarity(_) => ctx.search_score,
+        ArithmeticExpr::BinaryOp { left, op, right } => {
+            let l = evaluate_arithmetic(left, ctx);
+            let r = evaluate_arithmetic(right, ctx);
+            match op {
+                ArithmeticOp::Add => l + r,
+                ArithmeticOp::Sub => l - r,
+                ArithmeticOp::Mul => l * r,
+                ArithmeticOp::Div => {
+                    if r.abs() > f32::EPSILON {
+                        l / r
+                    } else {
+                        0.0
+                    }
+                }
+            }
         }
     }
 }

@@ -142,6 +142,46 @@ pub enum OrderByExpr {
     SimilarityBare,
     /// Aggregate function.
     Aggregate(AggregateFunction),
+    /// Arithmetic expression combining scores (EPIC-042).
+    ///
+    /// Example: `0.7 * vector_score + 0.3 * graph_score`
+    Arithmetic(ArithmeticExpr),
+}
+
+/// Arithmetic expression for ORDER BY custom scoring (EPIC-042).
+///
+/// Supports binary operations (+, -, *, /) with numeric literals,
+/// variables (field references), and similarity() function calls.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ArithmeticExpr {
+    /// Numeric literal (e.g., `0.7`, `2`).
+    Literal(f64),
+    /// Score variable or field reference (e.g., `vector_score`, `price`).
+    Variable(String),
+    /// Similarity function call (zero-arg or with field+vector).
+    Similarity(Box<OrderByExpr>),
+    /// Binary operation with operator precedence.
+    BinaryOp {
+        /// Left operand.
+        left: Box<ArithmeticExpr>,
+        /// Arithmetic operator.
+        op: ArithmeticOp,
+        /// Right operand.
+        right: Box<ArithmeticExpr>,
+    },
+}
+
+/// Arithmetic operators for ORDER BY expressions (EPIC-042).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArithmeticOp {
+    /// Addition (`+`).
+    Add,
+    /// Subtraction (`-`).
+    Sub,
+    /// Multiplication (`*`).
+    Mul,
+    /// Division (`/`).
+    Div,
 }
 
 /// Similarity expression for ORDER BY.

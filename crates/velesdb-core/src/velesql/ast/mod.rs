@@ -28,8 +28,8 @@ pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
-    Column, DistinctMode, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement,
-    SimilarityOrderBy, SimilarityScoreExpr,
+    ArithmeticExpr, ArithmeticOp, Column, DistinctMode, OrderByExpr, SelectColumns, SelectOrderBy,
+    SelectStatement, SimilarityOrderBy, SimilarityScoreExpr,
 };
 pub use train::TrainStatement;
 pub use values::{

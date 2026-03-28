@@ -34,8 +34,10 @@ impl Collection {
                 let column = match &clause.expr {
                     OrderByExpr::Field(name) => name.clone(),
                     OrderByExpr::Aggregate(agg) => Self::aggregation_result_key(agg),
-                    // Similarity ordering not applicable to grouped aggregate rows.
-                    OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => return None,
+                    // Similarity/Arithmetic ordering not applicable to grouped aggregate rows.
+                    OrderByExpr::Similarity(_)
+                    | OrderByExpr::SimilarityBare
+                    | OrderByExpr::Arithmetic(_) => return None,
                 };
                 Some((column, clause.descending))
             })

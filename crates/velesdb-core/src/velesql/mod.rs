@@ -114,6 +114,9 @@ pub use ast::{
     AggregateArg,
     AggregateFunction,
     AggregateType,
+    // Arithmetic (EPIC-042)
+    ArithmeticExpr,
+    ArithmeticOp,
     // Conditions (used by server, python, wasm, cli)
     BetweenCondition,
     // SELECT

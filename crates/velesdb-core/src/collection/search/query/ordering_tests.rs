@@ -2,7 +2,10 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::collection::search::query::ordering::compare_json_values;
+    use crate::collection::search::query::ordering::{
+        compare_json_values, evaluate_arithmetic, ScoreContext,
+    };
+    use crate::velesql::{ArithmeticExpr, ArithmeticOp, OrderByExpr};
     use serde_json::json;
 
     // -----------------------------------------------------------------------
@@ -143,6 +146,116 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // EPIC-042: Arithmetic expression evaluator
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_arithmetic_eval_literal() {
+        let expr = ArithmeticExpr::Literal(2.75);
+        let ctx = ScoreContext::new(0.0, None);
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 2.75).abs() < 1e-5,
+            "Literal should evaluate to its value"
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_eval_variable_search_score() {
+        let expr = ArithmeticExpr::Variable("vector_score".to_string());
+        let ctx = ScoreContext::new(0.85, None);
+        assert!((evaluate_arithmetic(&expr, &ctx) - 0.85).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_arithmetic_eval_variable_from_payload() {
+        let payload = json!({"bm25_score": 0.65});
+        let expr = ArithmeticExpr::Variable("bm25_score".to_string());
+        let ctx = ScoreContext::new(0.0, Some(&payload));
+        assert!((evaluate_arithmetic(&expr, &ctx) - 0.65).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_arithmetic_eval_missing_variable_returns_zero() {
+        let payload = json!({"other": 10});
+        let expr = ArithmeticExpr::Variable("missing_field".to_string());
+        let ctx = ScoreContext::new(0.5, Some(&payload));
+        assert!((evaluate_arithmetic(&expr, &ctx)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_arithmetic_eval_similarity_returns_search_score() {
+        let expr = ArithmeticExpr::Similarity(Box::new(OrderByExpr::SimilarityBare));
+        let ctx = ScoreContext::new(0.92, None);
+        assert!((evaluate_arithmetic(&expr, &ctx) - 0.92).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_arithmetic_ordering_weighted_scores() {
+        // 0.7 * vector_score + 0.3 * bm25_score
+        let expr = ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::BinaryOp {
+                left: Box::new(ArithmeticExpr::Literal(0.7)),
+                op: ArithmeticOp::Mul,
+                right: Box::new(ArithmeticExpr::Variable("vector_score".to_string())),
+            }),
+            op: ArithmeticOp::Add,
+            right: Box::new(ArithmeticExpr::BinaryOp {
+                left: Box::new(ArithmeticExpr::Literal(0.3)),
+                op: ArithmeticOp::Mul,
+                right: Box::new(ArithmeticExpr::Variable("bm25_score".to_string())),
+            }),
+        };
+
+        let payload = json!({"bm25_score": 0.8});
+        let ctx = ScoreContext::new(0.9, Some(&payload));
+        // Expected: 0.7 * 0.9 + 0.3 * 0.8 = 0.63 + 0.24 = 0.87
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 0.87).abs() < 1e-5,
+            "Weighted score should be 0.87, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_ordering_division_by_zero() {
+        let expr = ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(1.0)),
+            op: ArithmeticOp::Div,
+            right: Box::new(ArithmeticExpr::Literal(0.0)),
+        };
+        let ctx = ScoreContext::new(0.0, None);
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            result.abs() < 1e-9,
+            "Division by zero should return 0.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_eval_subtraction() {
+        let expr = ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Variable("vector_score".to_string())),
+            op: ArithmeticOp::Sub,
+            right: Box::new(ArithmeticExpr::Literal(0.1)),
+        };
+        let ctx = ScoreContext::new(0.95, None);
+        let result = evaluate_arithmetic(&expr, &ctx);
+        assert!(
+            (result - 0.85).abs() < 1e-5,
+            "0.95 - 0.1 = 0.85, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_eval_no_payload() {
+        // When payload is None, all variable lookups return 0.0 except built-ins.
+        let expr = ArithmeticExpr::Variable("custom_field".to_string());
+        let ctx = ScoreContext::new(0.5, None);
+        assert!(evaluate_arithmetic(&expr, &ctx).abs() < 1e-9);
+    }
+
+    // -----------------------------------------------------------------------
     // Integration: ORDER BY field via VelesQL
     // -----------------------------------------------------------------------
 
@@ -247,6 +360,178 @@ mod tests {
                     .unwrap_or("");
                 assert!(n0 >= n1, "name should be descending: {} >= {}", n0, n1);
             }
+        }
+
+        /// Regression test for bug #443: ORDER BY on a non-existent payload field
+        /// must NOT drop results. The query should return the same number of
+        /// results as the equivalent query without ORDER BY.
+        #[test]
+        fn test_order_by_nonexistent_field_preserves_results() {
+            let (_dir, col) = setup_ordered_collection();
+            let params = HashMap::new();
+
+            // Baseline: no ORDER BY → expect 3 results.
+            let baseline_query = "SELECT * FROM test LIMIT 10";
+            let baseline_parsed = Parser::parse(baseline_query).expect("parse baseline");
+            let baseline = col
+                .execute_query(&baseline_parsed, &params)
+                .expect("execute baseline");
+            assert_eq!(baseline.len(), 3, "baseline should return all 3 points");
+
+            // Bug query: ORDER BY a field that does not exist in any payload.
+            let bug_query = "SELECT * FROM test ORDER BY nonexistent_field DESC LIMIT 10";
+            let bug_parsed = Parser::parse(bug_query).expect("parse bug query");
+            let results = col
+                .execute_query(&bug_parsed, &params)
+                .expect("execute bug query");
+
+            assert_eq!(
+                results.len(),
+                baseline.len(),
+                "ORDER BY on non-existent field must not drop results \
+                 (got {} but expected {})",
+                results.len(),
+                baseline.len()
+            );
+        }
+
+        /// Regression test for bug #443 with vector NEAR: ORDER BY a non-existent
+        /// field after vector search must preserve the result count.
+        #[test]
+        fn test_order_by_nonexistent_field_with_near_preserves_results() {
+            let (_dir, col) = setup_ordered_collection();
+            let mut params = HashMap::new();
+            params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+
+            // Baseline: NEAR without ORDER BY.
+            let baseline_query = "SELECT * FROM test WHERE vector NEAR $v LIMIT 5";
+            let baseline_parsed = Parser::parse(baseline_query).expect("parse baseline");
+            let baseline = col
+                .execute_query(&baseline_parsed, &params)
+                .expect("execute baseline");
+            assert!(
+                !baseline.is_empty(),
+                "NEAR query should return at least one result"
+            );
+
+            // Bug query: NEAR + ORDER BY non-existent field.
+            let bug_query =
+                "SELECT * FROM test WHERE vector NEAR $v ORDER BY fused_score DESC LIMIT 5";
+            let bug_parsed = Parser::parse(bug_query).expect("parse bug query");
+            let results = col
+                .execute_query(&bug_parsed, &params)
+                .expect("execute bug query");
+
+            assert_eq!(
+                results.len(),
+                baseline.len(),
+                "ORDER BY non-existent field after NEAR must not drop results \
+                 (got {} but expected {})",
+                results.len(),
+                baseline.len()
+            );
+        }
+
+        /// Regression test for bug #443 at scale: 50 points to exercise the
+        /// HNSW index path (not just brute-force).
+        #[test]
+        fn test_order_by_nonexistent_field_at_scale_preserves_results() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
+                .expect("create collection");
+
+            // Insert 50 points so HNSW index is built.
+            let points: Vec<crate::point::Point> = (0_u32..50)
+                .map(|i| {
+                    let f = f64::from(i) / 50.0;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let v = vec![f as f32, (1.0 - f) as f32, 0.0, 0.0];
+                    crate::point::Point {
+                        id: u64::from(i),
+                        vector: v,
+                        payload: Some(serde_json::json!({
+                            "category": format!("cat_{}", i % 5),
+                            "priority": i % 10,
+                        })),
+                        sparse_vectors: None,
+                    }
+                })
+                .collect();
+            col.upsert(points).expect("upsert 50 points");
+
+            let mut params = HashMap::new();
+            params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.0, 0.0]));
+
+            // Baseline: NEAR without ORDER BY.
+            let baseline_query = "SELECT * FROM products WHERE vector NEAR $v LIMIT 10";
+            let baseline_parsed = Parser::parse(baseline_query).expect("parse baseline");
+            let baseline = col
+                .execute_query(&baseline_parsed, &params)
+                .expect("execute baseline");
+            assert_eq!(baseline.len(), 10, "baseline should return 10 results");
+
+            // Bug query: NEAR + ORDER BY non-existent field.
+            let bug_query =
+                "SELECT * FROM products WHERE vector NEAR $v ORDER BY fused_score DESC LIMIT 10";
+            let bug_parsed = Parser::parse(bug_query).expect("parse bug query");
+            let results = col
+                .execute_query(&bug_parsed, &params)
+                .expect("execute bug query");
+
+            assert_eq!(
+                results.len(),
+                baseline.len(),
+                "ORDER BY non-existent field after NEAR must not drop results \
+                 (got {} but expected {})",
+                results.len(),
+                baseline.len()
+            );
+        }
+
+        /// EPIC-042: Integration test for arithmetic ORDER BY with execute_query.
+        /// Verifies that `ORDER BY 0.7 * similarity() + 0.3 * priority DESC`
+        /// returns results sorted by the weighted combination.
+        #[test]
+        fn test_order_by_arithmetic_weighted_with_near() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
+                .expect("create collection");
+
+            let points = vec![
+                Point {
+                    id: 1,
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"priority": 0.1})),
+                    sparse_vectors: None,
+                },
+                Point {
+                    id: 2,
+                    vector: vec![0.9, 0.1, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"priority": 0.9})),
+                    sparse_vectors: None,
+                },
+                Point {
+                    id: 3,
+                    vector: vec![0.5, 0.5, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"priority": 0.5})),
+                    sparse_vectors: None,
+                },
+            ];
+            col.upsert(points).expect("upsert");
+
+            let mut params = HashMap::new();
+            params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+
+            // Use arithmetic ORDER BY with weighted scoring.
+            let query = "SELECT * FROM test WHERE vector NEAR $v \
+                         ORDER BY 0.5 * similarity() + 0.5 * priority DESC LIMIT 10";
+            let parsed = Parser::parse(query).expect("parse");
+            let results = col.execute_query(&parsed, &params).expect("execute");
+
+            assert!(
+                results.len() >= 2,
+                "Should have at least 2 results for ordering verification"
+            );
         }
     }
 }
