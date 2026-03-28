@@ -399,6 +399,8 @@ WHERE similarity(product.embedding, $query) > 0.7
 RETURN related.name, related.price
 ```
 
+> **Note**: MATCH operates within a single collection. Labels like `Document` and `Person` are tags stored in each point's `_labels` payload array -- all points and edges live in the same collection. See the [Graph Patterns Guide](docs/guides/GRAPH_PATTERNS.md) for setup details and requirements.
+
 ### Why VelesQL?
 
 | Task | REST API | VelesQL |

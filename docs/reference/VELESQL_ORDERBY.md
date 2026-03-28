@@ -153,19 +153,21 @@ LIMIT 10
 
 ## Score Evaluation
 
-### Engine: `score_eval.rs`
+### Engine: `ordering.rs`
 
-VelesDB uses a dedicated expression evaluator for ORDER BY:
+VelesDB uses a recursive expression evaluator for ORDER BY arithmetic expressions.
+The `ScoreContext` holds the pre-computed search score and optional payload, and
+`evaluate_arithmetic` walks the `ArithmeticExpr` tree:
 
 ```rust
-pub struct ScoreEvaluator {
-    expression: OrderByExpr,
+pub(crate) struct ScoreContext<'a> {
+    search_score: f32,
+    payload: Option<&'a serde_json::Value>,
 }
 
-impl ScoreEvaluator {
-    pub fn evaluate(&self, context: &ScoreContext) -> f32 {
-        // Evaluates arithmetic expression with score variables
-    }
+pub(crate) fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>) -> f32 {
+    // Recursively evaluates arithmetic expression with score variables
+    // Division by zero returns 0.0 (safe default for sorting)
 }
 ```
 
@@ -213,11 +215,14 @@ ORDER BY 0.7 * vector_score + 0.3 * graph_score DESC
 LIMIT 10
 ```
 
-### 4. Avoid Division by Zero
+### 4. Division by Zero is Safe
+
+Division by zero in ORDER BY arithmetic expressions returns `0.0` automatically.
+No special handling is needed:
 
 ```sql
--- Safe: check for zero
-ORDER BY vector_score / COALESCE(NULLIF(divisor, 0), 1) DESC
+-- Safe: returns 0.0 if divisor is zero
+ORDER BY vector_score / divisor DESC
 ```
 
 ---
@@ -228,38 +233,28 @@ ORDER BY vector_score / COALESCE(NULLIF(divisor, 0), 1) DESC
 |---------|--------|-------|
 | Arithmetic expressions | ✅ | +, -, *, / |
 | Score variables | ✅ | vector_score, graph_score, etc. |
-| Column references | ⚠️ | Limited support |
-| Functions (ABS, SQRT) | ❌ | Planned for v0.4 |
+| Column references | ✅ | Payload field values resolved as f32 |
+| Multiple ORDER BY | ✅ | Comma-separated, each with own direction |
+| Functions (ABS, SQRT) | ❌ | Not supported |
 | CASE expressions | ❌ | Not supported |
-| Multiple ORDER BY | ❌ | Single expression only |
 
 ---
 
 ## Troubleshooting
 
-### "Unknown score variable"
+### Unknown score variable resolves to 0.0
 
-```
-Error: Unknown variable 'unknown_score' in ORDER BY
-```
+Unknown variable names (not a built-in like `vector_score` and not present in the
+payload) silently resolve to `0.0`. This means misspelled variable names will not
+produce errors but will effectively contribute nothing to the combined score.
 
-**Solution**: Use valid score variables: `vector_score`, `graph_score`, `fused_score`, `bm25_score`.
+**Tip**: Use valid built-in names (`vector_score`, `fused_score`, `similarity`) or
+ensure the variable corresponds to a numeric payload field.
 
-### "Score variable not available"
+### Division by zero returns 0.0
 
-```
-Warning: 'graph_score' not available for vector-only query
-```
-
-**Solution**: Ensure your query produces the required score type.
-
-### "Division by zero"
-
-```
-Error: Division by zero in ORDER BY expression
-```
-
-**Solution**: Add null checks or use COALESCE.
+Division by zero in arithmetic expressions returns `0.0` (safe default for sorting).
+No error is raised.
 
 ---
 
