@@ -518,5 +518,3 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 - [Rustonomicon](https://doc.rust-lang.org/nomicon/)
 - [Rust Unsafe Code Guidelines](https://rust-lang.github.io/unsafe-code-guidelines/)
-- [EPIC-032: Unsafe Audit](../.epics/EPIC-032-unsafe-audit/)
-- [EPIC-022: Unsafe Auditability](../.epics/EPIC-022-unsafe-auditability/)

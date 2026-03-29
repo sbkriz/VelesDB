@@ -898,5 +898,5 @@ Filter strategy: post-filtering (low selectivity)
 ## See Also
 
 - [API Reference](./api-reference.md)
-- [Benchmarks](./BENCHMARKS.md)
+- [Benchmarks](../BENCHMARKS.md)
 - [REST API Documentation](./api-reference.md)

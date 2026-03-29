@@ -63,6 +63,7 @@ lcov-*.info
 
 # Benchmarks
 /benches/results/
+/benchmarks/phase_results/
 
 # Documentation build
 /docs/build/
@@ -96,6 +97,7 @@ __pycache__/
 *.pyc
 *.pyd
 *.so
+*.pdb
 
 # Node modules (TypeScript SDK)
 node_modules/

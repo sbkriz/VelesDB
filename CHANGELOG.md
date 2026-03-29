@@ -2615,7 +2615,7 @@ This change ensures VelesDB remains freely available while protecting against cl
   - Tauri RAG example included
 
 #### Documentation
-- **[INSTALLATION.md](docs/INSTALLATION.md)** - Complete installation guide
+- **[INSTALLATION.md](docs/guides/INSTALLATION.md)** - Complete installation guide
   - All platforms: Windows, Linux, Docker, Python, Rust, WASM
   - Configuration options and environment variables
   - Data persistence explained
