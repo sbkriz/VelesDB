@@ -544,8 +544,8 @@ async fn test_pipeline_qdrant_429_fails_pipeline() {
     assert!(result.is_err(), "pipeline must fail on HTTP 429");
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("429") || err_msg.contains("scroll failed"),
-        "error should be an Extraction error mentioning 429, got: {err_msg}"
+        err_msg.contains("Rate limit"),
+        "HTTP 429 should surface as RateLimit error, got: {err_msg}"
     );
 }
 
