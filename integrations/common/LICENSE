@@ -23,5 +23,5 @@ SOFTWARE.
 ---
 
 Note: This MIT license applies to the velesdb-common integration code only.
-VelesDB Core itself is licensed under the Elastic License 2.0 (ELv2).
+VelesDB Core itself is licensed under the VelesDB Core License 1.0 (based on ELv2).
 See https://github.com/cyberlife-coder/VelesDB for VelesDB Core licensing.
