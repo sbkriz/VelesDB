@@ -425,18 +425,25 @@ pub async fn query<R: Runtime>(
     let parsed = velesdb_core::velesql::Parser::parse(&request.query)
         .map_err(|e| Error::InvalidConfig(format!("VelesQL parse error: {}", e.message)))?;
 
+    // MATCH queries are not supported through this endpoint.
+    if parsed.is_match_query() {
+        return Err(CommandError::from(Error::InvalidConfig(
+            "MATCH queries are not supported through the query endpoint. \
+             Use graph-specific commands instead."
+                .to_string(),
+        )));
+    }
+
     let collection_name = &parsed.select.from;
 
-    // Detect aggregation queries (GROUP BY, COUNT, SUM, etc.).
-    let is_aggregation = {
-        let has_aggs = match &parsed.select.columns {
-            velesdb_core::velesql::SelectColumns::Aggregations(_) => true,
-            velesdb_core::velesql::SelectColumns::Mixed { aggregations, .. } => {
-                !aggregations.is_empty()
-            }
-            _ => false,
-        };
-        has_aggs || parsed.select.group_by.is_some()
+    // Detect aggregation queries: require actual aggregation functions in SELECT.
+    // GROUP BY alone (without COUNT/SUM/etc.) is processed by execute_query().
+    let is_aggregation = match &parsed.select.columns {
+        velesdb_core::velesql::SelectColumns::Aggregations(_) => true,
+        velesdb_core::velesql::SelectColumns::Mixed { aggregations, .. } => {
+            !aggregations.is_empty()
+        }
+        _ => false,
     };
 
     if is_aggregation {

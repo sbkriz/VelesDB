@@ -88,7 +88,6 @@ struct EarlyReturnCtx<'a> {
     params: &'a std::collections::HashMap<String, serde_json::Value>,
     cond: &'a crate::velesql::Condition,
     has_graph_predicates: bool,
-    limit: usize,
     ctx: &'a crate::guardrails::QueryContext,
 }
 
@@ -193,8 +192,7 @@ impl Collection {
         // can skip `offset` rows and still return `limit` results.
         let offset_val = stmt
             .offset
-            .map(|o| usize::try_from(o).unwrap_or(MAX_LIMIT))
-            .unwrap_or(0);
+            .map_or(0, |o| usize::try_from(o).unwrap_or(MAX_LIMIT));
         let fetch_limit = limit.saturating_add(offset_val).min(MAX_LIMIT);
 
         let extracted = self.extract_query_components(stmt, params)?;
@@ -328,7 +326,6 @@ impl Collection {
             params,
             cond,
             has_graph_predicates,
-            limit,
             ctx,
         };
 

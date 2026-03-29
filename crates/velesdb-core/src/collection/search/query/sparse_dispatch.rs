@@ -32,7 +32,7 @@ impl Collection {
         }
 
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.finalize_sparse_results(stmt, params, results, limit)
+        self.finalize_sparse_results(stmt, params, results)
     }
 
     /// Executes either a sparse-only or hybrid dense+sparse search.
@@ -87,7 +87,6 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         mut results: Vec<SearchResult>,
-        limit: usize,
     ) -> Result<Vec<SearchResult>> {
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct::apply_distinct(results, &stmt.columns);
