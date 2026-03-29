@@ -410,8 +410,10 @@ class TestStorageMode:
             ("full", "full"),
             ("sq8", "sq8"),
             ("binary", "binary"),
+            ("pq", "pq"),
+            ("rabitq", "rabitq"),
         ],
-        ids=["full", "sq8", "binary"],
+        ids=["full", "sq8", "binary", "pq", "rabitq"],
     )
     def test_create_collection_storage_modes(self, temp_db, mode, expected_mode):
         """Test creating collections with each storage quantization mode."""
@@ -423,7 +425,7 @@ class TestStorageMode:
 
     def test_storage_mode_search_accuracy(self, temp_db):
         """Test that search works correctly with different storage modes."""
-        for mode in ["full", "sq8", "binary"]:
+        for mode in ["full", "sq8", "binary", "pq", "rabitq"]:
             collection = temp_db.create_collection(f"mode_{mode}", dimension=4, storage_mode=mode)
 
             collection.upsert([

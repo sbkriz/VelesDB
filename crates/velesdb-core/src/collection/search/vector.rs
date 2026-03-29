@@ -11,6 +11,18 @@ use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
+/// Tags each `SearchResult` with a `vector_score` component equal to its score.
+///
+/// For pure vector search, the HNSW/PQ score IS the vector component.
+fn tag_vector_component_scores(results: &mut [SearchResult]) {
+    for result in results {
+        result.component_scores = Some(smallvec::smallvec![(
+            "vector_score".to_string(),
+            result.score
+        ),]);
+    }
+}
+
 impl Collection {
     fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         let config = self.config.read();
@@ -170,11 +182,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Performs vector similarity search with custom `ef_search` parameter.
@@ -211,11 +222,10 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Performs vector similarity search with a specific [`SearchQuality`] profile.
@@ -243,11 +253,104 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(resolve::resolve_scored_results(
-            &index_results,
-            &*vector_storage,
-            &*payload_storage,
-        ))
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
+    }
+
+    /// Routes vector search through `QuerySearchOptions` from a WITH clause.
+    ///
+    /// Priority: `quality` (from `mode`) > `ef_search` > default `search()`.
+    /// When `force_rerank` is `Some(true)`, applies explicit SIMD reranking
+    /// regardless of quality mode. When `Some(false)`, suppresses automatic
+    /// reranking even if the quality mode would enable it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub(crate) fn search_with_opts(
+        &self,
+        query: &[f32],
+        k: usize,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        // When no options are set, fall back to default search.
+        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
+            return self.search(query, k);
+        }
+
+        // Resolve the search quality: explicit mode > ef_search bracket > default.
+        let quality = opts.quality.unwrap_or_else(|| {
+            opts.ef_search
+                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
+                    0..=64 => crate::SearchQuality::Fast,
+                    65..=128 => crate::SearchQuality::Balanced,
+                    129..=512 => crate::SearchQuality::Accurate,
+                    _ => crate::SearchQuality::Perfect,
+                })
+        });
+
+        match opts.force_rerank {
+            Some(true) => self.search_with_forced_rerank(query, k, quality),
+            Some(false) => self.search_with_quality_no_rerank(query, k, quality),
+            None => self.search_with_quality(query, k, quality),
+        }
+    }
+
+    /// Searches with forced SIMD reranking regardless of quality mode.
+    fn search_with_forced_rerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let metric = config.metric;
+        drop(config);
+
+        let rerank_k = k.saturating_mul(4).max(k + 32);
+        let index_results = self
+            .index
+            .search_with_rerank_quality(query, k, rerank_k, quality);
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
+    }
+
+    /// Searches with a quality profile but suppresses two-stage reranking.
+    ///
+    /// Uses `search_hnsw_only` via the ef_search derived from the quality profile,
+    /// skipping the automatic reranking that `search_with_quality` would enable.
+    fn search_with_quality_no_rerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let metric = config.metric;
+        drop(config);
+
+        let ef_search = quality.ef_search(k);
+        let index_results = self.index.search_hnsw_only(query, k, ef_search);
+        let index_results = self.merge_delta(index_results, query, k, metric);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let mut results =
+            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
@@ -314,14 +417,83 @@ impl Collection {
         let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
         let index_results = self.search_ids_with_adc_if_pq(query, candidates_k);
 
+        Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
+    }
+
+    /// Searches with metadata filtering AND quality options from a WITH clause.
+    ///
+    /// Combines the candidate-retrieval strategy of [`search_with_opts`] with the
+    /// post-filtering of [`search_with_filter`]. When quality options are present,
+    /// uses quality-aware HNSW search (higher ef_search) for candidates before
+    /// applying the metadata filter. Falls back to [`search_with_filter`] when no
+    /// quality options are set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub(crate) fn search_with_filter_and_opts(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        // No quality options: delegate to the standard filter path.
+        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
+            return self.search_with_filter(query, k, filter);
+        }
+
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, query.len())?;
+        let higher_is_better = config.metric.higher_is_better();
+        let metric = config.metric;
+        drop(config);
+
+        let quality = opts.quality.unwrap_or_else(|| {
+            opts.ef_search
+                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
+                    0..=64 => crate::SearchQuality::Fast,
+                    65..=128 => crate::SearchQuality::Balanced,
+                    129..=512 => crate::SearchQuality::Accurate,
+                    _ => crate::SearchQuality::Perfect,
+                })
+        });
+
+        // Over-fetch for filtering: retrieve more candidates than needed.
+        let selectivity = estimate_filter_selectivity(filter);
+        // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
+        #[allow(clippy::cast_precision_loss)]
+        let k_f64 = k as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let lower = (k + 10) as f64;
+        // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
+
+        let index_results = self.index.search_with_quality(query, candidates_k, quality);
+        let index_results = self.merge_delta(index_results, query, candidates_k, metric);
+
+        let results = self.filter_and_hydrate(index_results, filter, k, higher_is_better);
+        Ok(results)
+    }
+
+    /// Filters scored results by metadata and hydrates matching points.
+    ///
+    /// Shared logic for `search_with_filter` and `search_with_filter_and_opts`
+    /// to avoid duplicating the filter-then-hydrate pipeline.
+    fn filter_and_hydrate(
+        &self,
+        index_results: Vec<ScoredResult>,
+        filter: &crate::filter::Filter,
+        k: usize,
+        higher_is_better: bool,
+    ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|sr| {
-                // Filter-then-hydrate: test payload filter BEFORE retrieving the vector
-                // to avoid expensive vector reads for non-matching candidates.
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
@@ -345,7 +517,8 @@ impl Collection {
 
         resolve::sort_results_by_metric(&mut results, higher_is_better);
         results.truncate(k);
-        Ok(results)
+        tag_vector_component_scores(&mut results);
+        results
     }
 }
 

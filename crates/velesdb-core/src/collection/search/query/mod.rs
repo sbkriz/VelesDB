@@ -20,6 +20,8 @@
 #![allow(clippy::implicit_hasher)] // HashSet hasher genericity adds noise for internal APIs.
 
 mod aggregation;
+#[cfg(test)]
+mod component_scores_tests;
 pub(crate) mod condition_tree;
 mod distinct;
 #[cfg(test)]
@@ -34,6 +36,8 @@ mod hybrid_sparse_tests;
 pub mod join;
 #[cfg(test)]
 mod join_tests;
+#[cfg(test)]
+mod let_execution_tests;
 pub mod match_exec;
 #[cfg(test)]
 mod match_exec_tests;
@@ -66,6 +70,8 @@ mod sparse_dispatch;
 mod union_query;
 mod validation;
 mod where_eval;
+#[cfg(test)]
+mod with_options_tests;
 
 // Re-export for potential external use
 #[allow(unused_imports)]
@@ -81,6 +87,65 @@ use std::collections::HashSet;
 
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 const MAX_LIMIT: usize = 100_000;
+
+/// Query-time search options extracted from the WITH clause.
+///
+/// Consolidates `mode`, `ef_search`, `rerank`, and `fusion_clause` into a single
+/// struct that flows through all dispatch paths. When no WITH clause is present,
+/// all fields are `None` and the default behavior is preserved.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct QuerySearchOptions {
+    /// Search quality profile parsed from `WITH (mode='...')`.
+    pub quality: Option<crate::SearchQuality>,
+    /// Explicit ef_search override from `WITH (ef_search=N)`.
+    pub ef_search: Option<usize>,
+    /// Force reranking on (`true`) or off (`false`) from `WITH (rerank=...)`.
+    pub force_rerank: Option<bool>,
+    /// Fusion clause from `USING FUSION (...)`.
+    pub fusion_clause: Option<crate::velesql::FusionClause>,
+}
+
+impl QuerySearchOptions {
+    /// Extracts search options from an optional WITH clause and fusion clause.
+    ///
+    /// Maps `mode` string to [`SearchQuality`](crate::SearchQuality) using the
+    /// same parsing logic as `mode_to_search_quality()`. Invalid mode strings
+    /// are silently ignored (quality remains `None`).
+    #[must_use]
+    pub(crate) fn from_with_clause(with: Option<&crate::velesql::WithClause>) -> Self {
+        let Some(with) = with else {
+            return Self::default();
+        };
+
+        let quality = with.get_mode().and_then(parse_mode_to_quality);
+
+        let ef_search = with.get_ef_search();
+        let force_rerank = with.get_rerank();
+
+        Self {
+            quality,
+            ef_search,
+            force_rerank,
+            fusion_clause: None,
+        }
+    }
+
+    /// Creates options with a fusion clause attached.
+    #[must_use]
+    pub(crate) fn with_fusion(mut self, fusion: Option<crate::velesql::FusionClause>) -> Self {
+        self.fusion_clause = fusion;
+        self
+    }
+}
+
+/// Maps a mode string from `WITH (mode='...')` to a [`SearchQuality`](crate::SearchQuality).
+///
+/// Delegates to [`crate::api_types::mode_to_search_quality`] which also handles
+/// advanced modes (`custom:<ef>`, `adaptive:<min>:<max>`).
+#[cfg(feature = "persistence")]
+fn parse_mode_to_quality(mode: &str) -> Option<crate::SearchQuality> {
+    crate::api_types::mode_to_search_quality(mode)
+}
 
 /// Context for early-return query paths (NOT-similarity, union).
 struct EarlyReturnCtx<'a> {
@@ -172,19 +237,20 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         client_id: &str,
     ) -> Result<Vec<SearchResult>> {
-        // Guard-rail pre-checks: circuit breaker + rate limiting (EPIC-048).
-        self.guard_rails
-            .pre_check(client_id)
-            .map_err(crate::error::Error::from)?;
-
-        // Create per-query execution context for timeout + cardinality tracking.
-        let ctx = self.guard_rails.create_context();
-
-        crate::velesql::QueryValidator::validate(query)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        // Phase 1: Pre-checks and context setup.
+        let ctx = self.prepare_query_context(query, client_id)?;
 
         // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
         if let Some(match_clause) = query.match_clause.as_ref() {
+            // LET bindings are not yet supported with MATCH queries (v1.10).
+            // MATCH results are MatchResult, not SearchResult, so the LET
+            // evaluation pipeline does not apply. Return an explicit error
+            // instead of silently discarding the bindings.
+            if !query.let_bindings.is_empty() {
+                return Err(crate::error::Error::Query(
+                    "LET bindings are not supported with MATCH queries in this version".to_string(),
+                ));
+            }
             return self.dispatch_match_query(match_clause, params, &ctx);
         }
 
@@ -203,23 +269,100 @@ impl Collection {
         let extracted = self.extract_query_components(stmt, params)?;
 
         // Early-return paths for special query shapes.
-        if let Some(results) =
-            self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
-        {
-            return Ok(results);
+        // LET bindings require finalize_query_results() which early-return paths bypass.
+        if query.let_bindings.is_empty() {
+            if let Some(results) =
+                self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
+            {
+                return Ok(results);
+            }
+        } else {
+            // Guard: LET + unsupported query shapes → explicit error (not silent fallthrough).
+            let unsupported = if extracted.sparse_vector_search.is_some() {
+                Some("SPARSE_NEAR")
+            } else if extracted.is_not_similarity_query {
+                Some("NOT similarity()")
+            } else if extracted.is_union_query {
+                Some("OR/union")
+            } else {
+                None
+            };
+            if let Some(shape) = unsupported {
+                return Err(crate::error::Error::Query(format!(
+                    "LET bindings are not supported with {shape} queries in this version"
+                )));
+            }
         }
 
-        // Main vector/similarity/metadata dispatch path.
+        // Phase 2: Main dispatch.
         let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
 
-        // JOIN pushdown analysis (EPIC-031 US-006).
+        // Phase 3: Post-processing and finalization (includes LET evaluation).
+        self.finalize_query_results(
+            stmt,
+            &mut results,
+            params,
+            limit,
+            &extracted,
+            &ctx,
+            &query.let_bindings,
+        )?;
+        Ok(results)
+    }
+
+    /// Phase 1: Guard-rail pre-checks, context creation, and query validation.
+    ///
+    /// Creates a [`QueryContext`](crate::guardrails::QueryContext) with optional
+    /// timeout override from `WITH (timeout_ms=N)`.
+    fn prepare_query_context(
+        &self,
+        query: &crate::velesql::Query,
+        client_id: &str,
+    ) -> Result<crate::guardrails::QueryContext> {
+        self.guard_rails
+            .pre_check(client_id)
+            .map_err(crate::error::Error::from)?;
+
+        let mut ctx = self.guard_rails.create_context();
+
+        // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
+        if let Some(override_ms) = query
+            .select
+            .with_clause
+            .as_ref()
+            .and_then(crate::velesql::WithClause::get_timeout_ms)
+        {
+            ctx.limits.timeout_ms = override_ms;
+        }
+
+        crate::velesql::QueryValidator::validate(query)
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+
+        Ok(ctx)
+    }
+
+    /// Phase 3: Join analysis, guard-rail checks, post-processing, and stats update.
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_query_results(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        results: &mut Vec<SearchResult>,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        limit: usize,
+        extracted: &ExtractedComponents,
+        ctx: &crate::guardrails::QueryContext,
+        let_bindings: &[crate::velesql::LetBinding],
+    ) -> Result<()> {
         self.analyze_join_pushdown(stmt);
+        self.check_guardrails_and_record(ctx, results.len())?;
 
-        // Final guard-rail checks (EPIC-048).
-        self.check_guardrails_and_record(&ctx, results.len())?;
-
-        // Post-processing: DISTINCT, ORDER BY, LIMIT.
-        results = self.apply_select_postprocessing(stmt, results, params, limit)?;
+        *results = self.apply_select_postprocessing(
+            stmt,
+            std::mem::take(results),
+            params,
+            limit,
+            let_bindings,
+        )?;
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if extracted.vector_search.is_some() {
@@ -231,7 +374,7 @@ impl Collection {
                 .update_vector_latency(vector_latency_us);
         }
         self.guard_rails.circuit_breaker.record_success();
-        Ok(results)
+        Ok(())
     }
 
     /// Extracts all query components from the SELECT statement's WHERE clause.

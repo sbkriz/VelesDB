@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-03-29
+
+### Fixed
+- **WITH options silently ignored** — `WITH (mode='accurate')`, `WITH (timeout_ms=5000)`,
+  and `WITH (rerank=true)` were parsed but never executed. Now all WITH options are wired
+  to their respective execution paths via new `QuerySearchOptions` struct
+- **USING FUSION ignored for NEAR+text MATCH** — Hybrid vector+text queries always used
+  hardcoded RRF k=60 with equal weights. `USING FUSION (strategy='rrf', k=10, vector_weight=0.8)`
+  now configures both k parameter and weights in the text hybrid path
+- **WITH options ignored on NEAR+metadata filter path** — `search_with_filter()` bypassed
+  quality mode. New `search_with_filter_and_opts()` applies quality-aware HNSW search
+  with post-filtering when both filter and mode/ef_search are present
+- **LET bindings silently discarded for MATCH queries** — `LET x = 0.5 MATCH ...` now
+  returns a clear error instead of silently ignoring the bindings
+
+### Added
+- **Component scores in SearchResult** — `SearchResult.component_scores` tracks individual
+  `vector_score`, `bm25_score`, `graph_score`, `sparse_score` independently. Enables
+  `ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC` with real per-component values
+  instead of all variables resolving to the same fused score
+- **Hybrid search preserves component contributions** — `hybrid_search()` now records
+  individual vector RRF and BM25 RRF contributions alongside the fused score
+- **LET clause for named score bindings** — `LET hybrid = 0.7 * vector_score + 0.3 * bm25_score`
+  defines reusable score variables available in SELECT and ORDER BY. Supports arithmetic
+  expressions, chained bindings, and all score variables. Grammar rule, AST, parser,
+  and execution fully wired. 7 conformance cases (P053-P059)
+- **Agent Memory VelesQL bridge** — `AgentMemory::query_semantic()`, `query_episodic()`,
+  `query_procedural()` enable VelesQL queries on agent memory collections. All three
+  subsystems (`_semantic_memory`, `_episodic_memory`, `_procedural_memory`) are queryable
+  with standard VelesQL: vector NEAR, payload filters (timestamp, confidence), ORDER BY,
+  WITH options. Thin delegation to Collection::execute_query_str()
+
+### Refactored
+- **Split Phase: execute_query_with_client()** — CC reduced from 12 to 8 by extracting
+  `prepare_query_context()` (pre-checks, timeout override, validation) and
+  `finalize_query_results()` (guardrails, post-processing, stats update)
+- **Replace Parameter with Object** — All search dispatch functions now accept
+  `&QuerySearchOptions` instead of individual `ef_search: Option<usize>` parameter,
+  enabling mode/rerank/fusion to flow through all 5 dispatch paths
+- **DRY: component score tagging** — `tag_vector_component_scores()` and
+  `attach_rrf_components()` centralize score tagging across all search paths
+
 ## [1.9.3] - 2026-03-29
 
 ### Fixed

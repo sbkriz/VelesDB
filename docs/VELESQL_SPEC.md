@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 3.1.0 | **Last Updated**: 2026-03-25
+**Version**: 3.2.0 | **Last Updated**: 2026-03-29
 
 ## Overview
 
@@ -30,6 +30,9 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | NEAR_FUSED multi-vector fusion | ✅ Stable | 2.2 |
 | FUSE BY fusion clause | 🔜 Planned | - |
 | TRAIN QUANTIZER command | ✅ Stable | 2.2 |
+| ORDER BY arithmetic scoring | ✅ Stable | 3.0 |
+| LET score bindings | ✅ Stable | 3.2 |
+| Agent Memory VelesQL queries | ✅ Stable | 3.2 |
 | Table aliases | 🔜 Planned | - |
 
 ### REST Contract Notes
@@ -425,6 +428,36 @@ ORDER BY similarity(vector, $v) DESC, created_at DESC
 LIMIT 20
 ```
 
+### Arithmetic Scoring (v3.2+)
+
+Combine multiple score components with arithmetic expressions:
+
+```sql
+-- Weighted hybrid scoring: 70% vector + 30% text relevance
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'machine learning'
+ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC
+LIMIT 10
+```
+
+#### Available Score Variables
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `vector_score` | HNSW search | Vector similarity score from the nearest-neighbor index |
+| `bm25_score` | BM25 text search | Text relevance score from the inverted index |
+| `graph_score` | Graph traversal | Graph distance/relevance score from MATCH patterns |
+| `sparse_score` | Sparse vector search | Sparse vector inner-product score |
+| `fused_score` | Fusion pipeline | Combined score after RRF/weighted fusion (same as `similarity()`) |
+| `similarity()` | Pre-computed | Primary search score (zero-arg form uses pre-computed value) |
+
+Component scores are populated independently by each search path. In hybrid queries
+(NEAR + MATCH text), `vector_score` and `bm25_score` have different values reflecting
+each component's individual contribution before fusion.
+
+For non-hybrid queries, only the relevant component is populated (e.g., pure NEAR
+populates `vector_score` only). Unset components fall back to the primary fused score.
+
 ### Direction
 
 | Direction | Description |
@@ -729,6 +762,43 @@ SELECT * FROM docs LIMIT 10
 SELECT * FROM docs LIMIT 10 OFFSET 20
 ```
 
+## LET Clause (Score Bindings, v3.2+)
+
+Define named score bindings evaluated once and reusable in SELECT and ORDER BY:
+
+```sql
+LET vec_score = similarity(embedding, $q)
+LET hybrid = 0.7 * vec_score + 0.3 * bm25_score
+SELECT *, hybrid FROM docs
+WHERE vector NEAR $q AND content MATCH 'machine learning'
+ORDER BY hybrid DESC
+LIMIT 10
+```
+
+### Rules
+
+- LET clauses appear **before** the SELECT statement
+- Each binding has a name and an arithmetic expression
+- Bindings can reference earlier bindings (forward references are invalid)
+- Available in ORDER BY (SELECT projection support planned for v1.11)
+- NOT available in WHERE (WHERE runs before scores exist)
+- LET names take **highest priority** in variable resolution (overrides component scores)
+- Case-insensitive keyword (`LET`, `let`, `Let` all work)
+
+### Expression Support
+
+LET expressions support the same arithmetic as ORDER BY:
+
+```sql
+LET boost = 1.5
+LET weighted = 0.7 * vector_score + 0.3 * bm25_score
+LET final_score = weighted * boost
+LET sim = similarity()
+```
+
+Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`,
+`fused_score`, `similarity()`, numeric literals, and earlier LET bindings.
+
 ## WITH Clause (Search Options)
 
 Control search behavior with the `WITH` clause:
@@ -742,10 +812,10 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | Search mode preset |
-| `ef_search` | integer | 16-4096 | HNSW ef_search parameter |
-| `timeout_ms` | integer | >=100 | Query timeout in milliseconds |
-| `rerank` | boolean | `true`/`false` | Enable reranking for quantized vectors |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset — maps to ef_search values (64/128/512/4096/auto). Applied to all search paths including NEAR+filter and NEAR+MATCH. |
+| `ef_search` | integer | 16-4096 | HNSW ef_search parameter (overrides mode). Applied to all vector search paths. |
+| `timeout_ms` | integer | >=100 | Per-query timeout in milliseconds. Overrides collection-level timeout for this query only. |
+| `rerank` | boolean | `true`/`false` | Force two-stage SIMD reranking on (`true`) or off (`false`). When `true`, retrieves 4x candidates then re-ranks with exact distance. |
 
 ### Examples
 
@@ -1189,6 +1259,63 @@ Content-Type: application/json
   "params": { "v": [0.1, 0.2, ...] }
 }
 ```
+
+## Agent Memory VelesQL Queries (v3.2+)
+
+The Agent Memory SDK creates three internal collections that are fully queryable via VelesQL:
+
+### Semantic Memory (`_semantic_memory`)
+
+```sql
+-- Similarity search on stored knowledge
+SELECT * FROM _semantic_memory
+WHERE vector NEAR $query_embedding
+LIMIT 10 WITH (mode='accurate')
+```
+
+Payload fields: `content` (string).
+
+### Episodic Memory (`_episodic_memory`)
+
+```sql
+-- Recent events (last 24h)
+SELECT * FROM _episodic_memory
+WHERE timestamp > 1711234567
+ORDER BY timestamp DESC
+LIMIT 20
+
+-- Similarity search on events with embeddings
+SELECT * FROM _episodic_memory
+WHERE vector NEAR $query_embedding
+LIMIT 5
+```
+
+Payload fields: `description` (string), `timestamp` (integer, Unix epoch).
+
+### Procedural Memory (`_procedural_memory`)
+
+```sql
+-- High-confidence procedures
+SELECT * FROM _procedural_memory
+WHERE confidence > 0.7
+ORDER BY confidence DESC
+LIMIT 10
+```
+
+Payload fields: `name` (string), `steps` (array), `confidence` (float),
+`usage_count` (integer), `created_at` (integer), `last_used_at` (integer).
+
+### Convenience API (Rust/Python)
+
+```rust
+let results = agent_memory.query_semantic(
+    "SELECT * FROM _semantic_memory WHERE vector NEAR $v LIMIT 5",
+    &params,
+)?;
+```
+
+All three subsystems support: vector NEAR, payload filters, ORDER BY, LIMIT/OFFSET,
+WITH options, LET bindings, and USING FUSION.
 
 ## TRAIN QUANTIZER Command (v2.2+)
 

@@ -26,6 +26,7 @@ from llamaindex_velesdb.security import (
     validate_collection_name,
     validate_sparse_vector,
 )
+from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.search_ops import SearchOpsMixin
@@ -117,7 +118,7 @@ def _build_stream_points(
     return points
 
 
-class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore):
+class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore):
     """VelesDB vector store for LlamaIndex.
 
     A high-performance vector store backed by VelesDB, designed for
@@ -144,7 +145,7 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         path: Path to the VelesDB database directory.
         collection_name: Name of the collection to use.
         metric: Distance metric (cosine, euclidean, dot).
-        storage_mode: Vector storage mode (full, sq8, binary).
+        storage_mode: Vector storage mode (full, sq8, binary, pq, rabitq) or alias (f32, int8, bit, product_quantization, product-quantization).
     """
 
     stores_text: bool = True
@@ -180,10 +181,17 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
                 - "dot": Dot product (inner product)
                 - "hamming": Hamming distance (for binary vectors)
                 - "jaccard": Jaccard similarity (for binary vectors)
-            storage_mode: Storage mode ("full", "sq8", "binary").
-                - "full": Full f32 precision (default)
-                - "sq8": 8-bit scalar quantization (4x memory reduction)
-                - "binary": 1-bit binary quantization (32x memory reduction)
+            storage_mode: Storage mode — canonical name or alias (case-insensitive).
+                Canonical names:
+
+                - "full": Full f32 precision (default). Alias: "f32".
+                - "sq8": 8-bit scalar quantization (4x memory reduction). Alias: "int8".
+                - "binary": 1-bit binary quantization (32x memory reduction). Alias: "bit".
+                - "pq": Product quantization (8-32x compression, best for large-scale
+                  datasets). Aliases: "product_quantization", "product-quantization".
+                - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
+
+                Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.
             **kwargs: Additional arguments.
 
         Raises:
@@ -500,40 +508,3 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, BasePydanticVectorStore)
         """Check if the collection is empty."""
         return self._collection is None or self._collection.is_empty()
 
-    def create_metadata_collection(self, name: str) -> None:
-        """Create a metadata-only collection (no vectors).
-
-        Useful for storing reference data that can be JOINed with
-        vector collections (VelesDB Premium feature).
-
-        Args:
-            name: Collection name.
-        """
-        db = self._get_db()
-        db.create_metadata_collection(name)
-
-    def is_metadata_only(self) -> bool:
-        """Check if the current collection is metadata-only.
-
-        Returns:
-            True if metadata-only, False if vector collection.
-        """
-        if self._collection is None:
-            return False
-        return self._collection.is_metadata_only()
-
-    def train_pq(self, m: int = 8, k: int = 256, opq: bool = False) -> str:
-        """Train Product Quantization on the collection.
-
-        PQ training is a Database-level operation (not Collection-level)
-        because TRAIN QUANTIZER requires Database-level VelesQL execution.
-
-        Args:
-            m: Number of subspaces. Defaults to 8.
-            k: Number of centroids per subspace. Defaults to 256.
-            opq: Enable Optimized PQ pre-rotation. Defaults to False.
-
-        Returns:
-            Training result message.
-        """
-        return self._get_db().train_pq(self.collection_name, m=m, k=k, opq=opq)
