@@ -126,6 +126,7 @@ impl Collection {
         let left_results = if query.compound.is_some() {
             let mut left_query = query.clone();
             left_query.select.limit = compound_limit;
+            left_query.select.offset = None; // OFFSET applies to combined result, not operands.
             left_query.compound = None;
             self.execute_query_with_client(&left_query, params, "default")?
         } else {
@@ -143,7 +144,11 @@ impl Collection {
                 accumulated =
                     set_operations::apply_set_operation(accumulated, right_results, *operator);
             }
-            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
+            // SQL-standard: OFFSET then LIMIT on the combined result.
+            if let Some(offset) = query.select.offset {
+                let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+                accumulated = accumulated.into_iter().skip(skip).collect();
+            }
             if let Some(limit) = query.select.limit {
                 accumulated.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
             }
