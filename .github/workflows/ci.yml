@@ -275,7 +275,8 @@ jobs:
           cargo llvm-cov --features persistence,gpu,update-check --workspace \
             --exclude velesdb-python \
             --fail-under-lines 70 \
-            --lcov --output-path lcov.info
+            --lcov --output-path lcov.info \
+            -- --test-threads=1
 
       - uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
         continue-on-error: true

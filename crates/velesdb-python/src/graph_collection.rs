@@ -399,9 +399,7 @@ impl PyGraphCollection {
                 .map_err(core_err)
         })?;
 
-        Ok(crate::collection_helpers::search_results_to_multimodel_dicts(
-            py, results,
-        ))
+        Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
     }
 
     /// Execute a MATCH graph traversal query.
@@ -435,9 +433,7 @@ impl PyGraphCollection {
         let match_clause = parsed
             .match_clause
             .as_ref()
-            .ok_or_else(|| {
-                pyo3::exceptions::PyValueError::new_err("Query is not a MATCH query")
-            })?
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Query is not a MATCH query"))?
             .clone();
 
         let rust_params = convert_params(py, params)?;
@@ -446,12 +442,7 @@ impl PyGraphCollection {
         let results = py.allow_threads(|| {
             if let Some(ref qv) = query_vector {
                 self.inner
-                    .execute_match_with_similarity(
-                        &match_clause,
-                        qv,
-                        threshold,
-                        &rust_params,
-                    )
+                    .execute_match_with_similarity(&match_clause, qv, threshold, &rust_params)
                     .map_err(core_err)
             } else {
                 self.inner
