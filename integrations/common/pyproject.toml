@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "velesdb-common"
 version = "1.9.3"
 description = "Shared utilities for VelesDB Python integrations (internal use)"
+readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "VelesDB Team", email = "contact@wiscale.fr"}
