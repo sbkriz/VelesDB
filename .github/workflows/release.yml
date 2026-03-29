@@ -509,6 +509,7 @@ jobs:
           echo "| Binaries | ${{ needs.build.result == 'success' && '✅' || (needs.build.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| crates.io | ${{ needs.publish-crates.result == 'success' && '✅' || (needs.publish-crates.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| PyPI wheels | ${{ needs.publish-pypi-wheels.result == 'success' && '✅' || (needs.publish-pypi-wheels.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyPI common | ${{ needs.publish-pypi-common.result == 'success' && '✅' || (needs.publish-pypi-common.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| PyPI pure | ${{ needs.publish-pypi-pure.result == 'success' && '✅' || (needs.publish-pypi-pure.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| npm | ${{ needs.publish-npm.result == 'success' && '✅' || (needs.publish-npm.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || (needs.github-release.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
