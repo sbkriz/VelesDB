@@ -95,7 +95,15 @@ impl Collection {
         if let Some(ref order_by) = stmt.order_by {
             self.apply_order_by(&mut results, order_by, params)?;
         }
-        results.truncate(limit);
+        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
+        if let Some(offset) = stmt.offset {
+            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+            results = results.into_iter().skip(skip).collect();
+        }
+        let final_limit = usize::try_from(stmt.limit.unwrap_or(10))
+            .unwrap_or(MAX_LIMIT)
+            .min(MAX_LIMIT);
+        results.truncate(final_limit);
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }

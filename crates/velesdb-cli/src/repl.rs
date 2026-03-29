@@ -154,12 +154,17 @@ pub fn execute_query(
     let parsed = velesdb_core::velesql::Parser::parse(query)
         .map_err(|e| anyhow::anyhow!("Parse error: {}", e.message))?;
 
-    // Check if there's a vector search requiring parameters
+    // Check if there's a vector search requiring parameters (SELECT or MATCH WHERE).
     let has_param_vector = parsed
         .select
         .where_clause
         .as_ref()
-        .is_some_and(contains_param_vector);
+        .is_some_and(contains_param_vector)
+        || parsed
+            .match_clause
+            .as_ref()
+            .and_then(|m| m.where_clause.as_ref())
+            .is_some_and(contains_param_vector);
 
     if has_param_vector {
         // Vector search with parameter requires external input
