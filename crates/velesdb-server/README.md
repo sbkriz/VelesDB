@@ -327,6 +327,40 @@ curl "http://localhost:8080/collections/documents/graph/traverse/stream?start_no
 curl http://localhost:8080/collections/documents/graph/nodes/1/degree
 ```
 
+### MATCH Query API (Cypher-like graph pattern matching)
+
+```bash
+# Execute a MATCH graph traversal query
+curl -X POST http://localhost:8080/collections/documents/match \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name LIMIT 10"
+  }'
+
+# MATCH with vector similarity scoring
+curl -X POST http://localhost:8080/collections/documents/match \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 10",
+    "vector": [0.1, 0.2, 0.3],
+    "threshold": 0.5
+  }'
+```
+
+Response format:
+```json
+[
+  {
+    "node_id": 20,
+    "depth": 1,
+    "path": [1],
+    "bindings": {"a": 10, "b": 20},
+    "score": 0.85,
+    "projected": {"a.name": "Alice", "b.name": "Bob"}
+  }
+]
+```
+
 ### Index API
 
 ```bash

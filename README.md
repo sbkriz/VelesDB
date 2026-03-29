@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.9.1">Download v1.9.1</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.9.3">Download v1.9.3</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -698,6 +698,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Version | Status | Highlights |
 |---------|--------|------------|
+| **v1.9.3** | Released | VelesQL ecosystem completion — OFFSET fix, MATCH propagation to Python/CLI/tauri/mobile, aggregation routing, DRY refactoring |
 | **v1.9.0** | Released | VelesQL ORDER BY arithmetic expressions, MATCH graph documentation, conformance cases P046-P052 |
 | **v1.8.0** | Released | 6 perf optimization phases (software pipelining, RaBitQ, PDX layout, SmallVec, AutoTune, Trigram SIMD) + production wiring across 8 crates. **x55 insert, x4 search vs v0.8.10** |
 | **v1.7.2** | Released | Partial sort search, batch insert fast-path, upsert lock contention fix, Agent Memory SDK |
@@ -708,6 +709,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 <details>
 <summary>Detailed release history</summary>
+
+**v1.9.3** — VelesQL ecosystem completion: OFFSET clause now executed (was parsed-only), MATCH start-node discovery includes graph-only nodes, CLI routes MATCH via active collection, tauri-plugin aggregation results preserved, mobile SDK returns payloads. Python GraphCollection gains 4 VelesQL methods (query, match_query, explain, query_ids). DRY refactoring: shared query helpers. 11 new integration tests.
 
 **v1.9.0** — VelesQL ORDER BY arithmetic expressions (#442): weighted score combinations with operator precedence and parenthesized expressions. New ArithmeticExpr/ArithmeticOp AST types. Conformance cases P046-P052. MATCH documentation: clarified hybrid RRF semantics (#444), documented single-collection graph scope (#445). Graph patterns guide. Closes #442, #443, #444, #445.
 

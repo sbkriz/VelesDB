@@ -88,7 +88,6 @@ struct EarlyReturnCtx<'a> {
     params: &'a std::collections::HashMap<String, serde_json::Value>,
     cond: &'a crate::velesql::Condition,
     has_graph_predicates: bool,
-    limit: usize,
     ctx: &'a crate::guardrails::QueryContext,
 }
 
@@ -127,6 +126,7 @@ impl Collection {
         let left_results = if query.compound.is_some() {
             let mut left_query = query.clone();
             left_query.select.limit = compound_limit;
+            left_query.select.offset = None; // OFFSET applies to combined result, not operands.
             left_query.compound = None;
             self.execute_query_with_client(&left_query, params, "default")?
         } else {
@@ -144,7 +144,11 @@ impl Collection {
                 accumulated =
                     set_operations::apply_set_operation(accumulated, right_results, *operator);
             }
-            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
+            // SQL-standard: OFFSET then LIMIT on the combined result.
+            if let Some(offset) = query.select.offset {
+                let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+                accumulated = accumulated.into_iter().skip(skip).collect();
+            }
             if let Some(limit) = query.select.limit {
                 accumulated.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
             }
@@ -189,15 +193,25 @@ impl Collection {
             .unwrap_or(MAX_LIMIT)
             .min(MAX_LIMIT);
 
+        // When OFFSET is present, fetch limit+offset rows so post-processing
+        // can skip `offset` rows and still return `limit` results.
+        let offset_val = stmt
+            .offset
+            .map_or(0, |o| usize::try_from(o).unwrap_or(MAX_LIMIT));
+        let fetch_limit = limit.saturating_add(offset_val).min(MAX_LIMIT);
+
         let extracted = self.extract_query_components(stmt, params)?;
 
         // Early-return paths for special query shapes.
-        if let Some(results) = self.try_early_return_path(stmt, params, &extracted, limit, &ctx)? {
+        if let Some(results) =
+            self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
+        {
             return Ok(results);
         }
 
         // Main vector/similarity/metadata dispatch path.
-        let mut results = self.dispatch_main_select(stmt, params, &extracted, limit, &ctx)?;
+        let mut results =
+            self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
 
         // JOIN pushdown analysis (EPIC-031 US-006).
         self.analyze_join_pushdown(stmt);
@@ -317,7 +331,6 @@ impl Collection {
             params,
             cond,
             has_graph_predicates,
-            limit,
             ctx,
         };
 
@@ -360,7 +373,15 @@ impl Collection {
             self.apply_order_by(&mut results, order_by, early.params)
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         }
-        results.truncate(early.limit);
+        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
+        if let Some(offset) = early.stmt.offset {
+            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+            results = results.into_iter().skip(skip).collect();
+        }
+        let final_limit = usize::try_from(early.stmt.limit.unwrap_or(10))
+            .unwrap_or(MAX_LIMIT)
+            .min(MAX_LIMIT);
+        results.truncate(final_limit);
         self.check_guardrails_and_record(early.ctx, results.len())?;
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)

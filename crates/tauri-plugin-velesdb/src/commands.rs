@@ -410,11 +410,9 @@ pub async fn hybrid_search<R: Runtime>(
 /// Executes a `VelesQL` query (EPIC-031 US-012).
 ///
 /// Supports SELECT-style `VelesQL` queries with vector similarity search.
-/// Returns results in `HybridResult` format for forward compatibility.
-///
-/// Note: Currently supports SELECT syntax only. MATCH/graph traversal
-/// syntax is planned for a future release (see EPIC-010). For SELECT
-/// queries, `graph_score` and `column_data` will be None.
+/// Aggregation queries (GROUP BY, COUNT, etc.) are auto-detected and routed
+/// to `execute_aggregate()`. MATCH queries are not yet supported through
+/// this endpoint. Returns results in `HybridResult` format.
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,
@@ -427,7 +425,53 @@ pub async fn query<R: Runtime>(
     let parsed = velesdb_core::velesql::Parser::parse(&request.query)
         .map_err(|e| Error::InvalidConfig(format!("VelesQL parse error: {}", e.message)))?;
 
+    // MATCH queries are not supported through this endpoint.
+    if parsed.is_match_query() {
+        return Err(CommandError::from(Error::InvalidConfig(
+            "MATCH queries are not supported through the query endpoint. \
+             Use graph-specific commands instead."
+                .to_string(),
+        )));
+    }
+
     let collection_name = &parsed.select.from;
+
+    // Detect aggregation queries: require actual aggregation functions in SELECT.
+    // GROUP BY alone (without COUNT/SUM/etc.) is processed by execute_query().
+    let is_aggregation = match &parsed.select.columns {
+        velesdb_core::velesql::SelectColumns::Aggregations(_) => true,
+        velesdb_core::velesql::SelectColumns::Mixed { aggregations, .. } => {
+            !aggregations.is_empty()
+        }
+        _ => false,
+    };
+
+    if is_aggregation {
+        // Aggregation path: returns JSON result instead of HybridResult rows.
+        let agg_json = state
+            .with_db(|db| {
+                let coll = db
+                    .get_collection(collection_name)
+                    .ok_or_else(|| Error::CollectionNotFound(collection_name.clone()))?;
+                coll.execute_aggregate(&parsed, &request.params)
+                    .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
+            })
+            .map_err(CommandError::from)?;
+
+        // Wrap aggregation JSON as a single HybridResult with column_data.
+        let results = vec![HybridResult {
+            node_id: 0,
+            vector_score: None,
+            graph_score: None,
+            fused_score: 0.0,
+            bindings: None,
+            column_data: Some(agg_json),
+        }];
+        return Ok(QueryResponse {
+            results,
+            timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+        });
+    }
 
     let results = state
         .with_db(|db| {
@@ -435,12 +479,10 @@ pub async fn query<R: Runtime>(
                 .get_collection(collection_name)
                 .ok_or_else(|| Error::CollectionNotFound(collection_name.clone()))?;
 
-            // Use unified execute_query from Collection
             let search_results = coll
                 .execute_query(&parsed, &request.params)
                 .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
 
-            // Return multi-model HybridResult format
             Ok(search_results
                 .into_iter()
                 .map(|r| HybridResult {

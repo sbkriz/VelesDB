@@ -32,7 +32,7 @@ impl Collection {
         }
 
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.finalize_sparse_results(stmt, params, results, limit)
+        self.finalize_sparse_results(stmt, params, results)
     }
 
     /// Executes either a sparse-only or hybrid dense+sparse search.
@@ -87,7 +87,6 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         mut results: Vec<SearchResult>,
-        limit: usize,
     ) -> Result<Vec<SearchResult>> {
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct::apply_distinct(results, &stmt.columns);
@@ -95,7 +94,15 @@ impl Collection {
         if let Some(ref order_by) = stmt.order_by {
             self.apply_order_by(&mut results, order_by, params)?;
         }
-        results.truncate(limit);
+        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
+        if let Some(offset) = stmt.offset {
+            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+            results = results.into_iter().skip(skip).collect();
+        }
+        let final_limit = usize::try_from(stmt.limit.unwrap_or(10))
+            .unwrap_or(MAX_LIMIT)
+            .min(MAX_LIMIT);
+        results.truncate(final_limit);
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }

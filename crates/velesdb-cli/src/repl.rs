@@ -99,7 +99,7 @@ pub fn run(path: PathBuf) -> Result<()> {
                         }
                     }
                 } else {
-                    match execute_query(&db, line) {
+                    match execute_query(&db, line, config.session.active_collection()) {
                         Ok(result) => {
                             let fmt = match config.format {
                                 OutputFormat::Table => "table",
@@ -140,22 +140,31 @@ pub fn run(path: PathBuf) -> Result<()> {
 
 /// Execute a `VelesQL` query and return results.
 ///
-/// Delegates to [`Database::execute_query`] which handles JOINs, plan caching
-/// and validation centrally -- the CLI no longer calls `Collection::execute_query`
-/// directly.
-pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
+/// Delegates to [`Database::execute_query`] for SELECT/DML/TRAIN queries.
+/// MATCH queries are routed to `Collection::execute_query` on the active
+/// collection (set via `.use collection_name`).
+pub fn execute_query(
+    db: &Database,
+    query: &str,
+    active_collection: Option<&str>,
+) -> Result<QueryResult> {
     let start = Instant::now();
 
     // Parse the query
     let parsed = velesdb_core::velesql::Parser::parse(query)
         .map_err(|e| anyhow::anyhow!("Parse error: {}", e.message))?;
 
-    // Check if there's a vector search requiring parameters
+    // Check if there's a vector search requiring parameters (SELECT or MATCH WHERE).
     let has_param_vector = parsed
         .select
         .where_clause
         .as_ref()
-        .is_some_and(contains_param_vector);
+        .is_some_and(contains_param_vector)
+        || parsed
+            .match_clause
+            .as_ref()
+            .and_then(|m| m.where_clause.as_ref())
+            .is_some_and(contains_param_vector);
 
     if has_param_vector {
         // Vector search with parameter requires external input
@@ -171,11 +180,31 @@ pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
         });
     }
 
-    // Delegate to Database::execute_query which handles JOINs and plan caching
     let params = HashMap::new();
-    let results = db
-        .execute_query(&parsed, &params)
-        .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
+
+    // MATCH queries need a collection context — route via Collection::execute_query.
+    let results = if parsed.is_match_query() {
+        let col_name = active_collection.ok_or_else(|| {
+            anyhow::anyhow!(
+                "MATCH queries require an active collection. Use: .use <collection_name>"
+            )
+        })?;
+        // Try graph collection first (most likely for MATCH), then vector collection.
+        if let Some(graph_col) = db.get_graph_collection(col_name) {
+            graph_col
+                .execute_query(&parsed, &params)
+                .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
+        } else if let Some(vec_col) = db.get_vector_collection(col_name) {
+            vec_col
+                .execute_query(&parsed, &params)
+                .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
+        } else {
+            return Err(anyhow::anyhow!("Collection '{}' not found", col_name));
+        }
+    } else {
+        db.execute_query(&parsed, &params)
+            .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
+    };
 
     // Convert SearchResult to row format
     let rows: Vec<HashMap<String, serde_json::Value>> = results

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.3] - 2026-03-29
+
+### Fixed
+- **OFFSET clause not executed** — `SELECT ... OFFSET N` was parsed but never applied;
+  now applied after ORDER BY, before LIMIT in select_dispatch. Execution fetches
+  `limit + offset` rows so `LIMIT 10 OFFSET 5` correctly returns 10 rows
+- **MATCH start-node discovery** — `find_start_nodes()` only enumerated vector storage
+  IDs, missing graph-only nodes (payload-only); now unions both ID sources
+- **CLI rejected MATCH queries** — `Database::execute_query()` requires a FROM clause
+  that MATCH lacks; CLI now routes MATCH through `Collection::execute_query()` using
+  the active collection context (`.use <name>`)
+- **tauri-plugin lost aggregation results** — `query()` always called `execute_query()`
+  even for GROUP BY/HAVING; now detects aggregation queries and routes to
+  `execute_aggregate()`, populating `column_data` in the response
+- **mobile SDK stripped payloads** — `SearchResult` only had `{id, score}`; added
+  optional `payload` field, populated from `point.payload` in `query()` results
+
+### Added
+- **Python GraphCollection VelesQL methods** — `query()`, `match_query()`, `explain()`,
+  `query_ids()` now available on `GraphCollection` (previously only on `Collection`)
+- **GraphCollection.execute_match() delegates** — Core delegates to inner Collection
+  for both `execute_match()` and `execute_match_with_similarity()`
+- **Python type stubs** — Complete `__init__.pyi` stubs for all GraphCollection methods
+  including VelesQL query, graph operations, and schema management
+- **Python MATCH documentation** — README section with label-based matching, hybrid
+  similarity, and EXPLAIN usage examples
+- **Server MATCH API docs** — README section documenting `POST /collections/{name}/match`
+  endpoint with request/response examples
+- **11 integration tests** — `test_graph_collection_match.py` covers MATCH traversal,
+  label/relationship filtering, result structure, BFS/MATCH agreement
+
+### Refactored
+- **DRY: Python query helpers** — Extracted `build_explain_dict()` and
+  `search_results_to_id_score()` as `pub(crate)` shared helpers, eliminating 53 lines
+  of duplication between Collection and GraphCollection bindings
+
 ## [1.9.2] - 2026-03-28
 
 ### Fixed
