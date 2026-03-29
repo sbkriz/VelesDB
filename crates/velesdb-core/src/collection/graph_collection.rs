@@ -344,6 +344,35 @@ impl GraphCollection {
     ) -> Result<Vec<SearchResult>> {
         self.inner.execute_query_str(sql, params)
     }
+
+    /// Executes a MATCH graph pattern query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed.
+    pub fn execute_match(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
+        self.inner.execute_match(match_clause, params)
+    }
+
+    /// Executes a MATCH query with vector similarity scoring.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on dimension mismatch or execution failure.
+    pub fn execute_match_with_similarity(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        query_vector: &[f32],
+        similarity_threshold: f32,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
+        self.inner
+            .execute_match_with_similarity(match_clause, query_vector, similarity_threshold, params)
+    }
 }
 
 #[cfg(test)]
@@ -398,5 +427,53 @@ mod tests {
         let edge2 = crate::collection::graph::GraphEdge::new(2, 20, 30, "likes").unwrap();
         col.add_edge(edge2).unwrap();
         assert_eq!(col.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_execute_match_finds_edges() {
+        let dir = tempdir().unwrap();
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            None,
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+
+        // Store node payloads with labels
+        col.upsert_node_payload(10, &serde_json::json!({"_labels": ["Person"], "name": "Alice"}))
+            .unwrap();
+        col.upsert_node_payload(20, &serde_json::json!({"_labels": ["Person"], "name": "Bob"}))
+            .unwrap();
+
+        // Add edge: Alice -> Bob
+        let edge = crate::collection::graph::GraphEdge::new(1, 10, 20, "KNOWS").unwrap();
+        col.add_edge(edge).unwrap();
+
+        // MATCH query through the GraphCollection delegate
+        let match_clause = crate::velesql::MatchClause {
+            patterns: vec![crate::velesql::GraphPattern {
+                name: None,
+                nodes: vec![
+                    crate::velesql::NodePattern::new().with_alias("a"),
+                    crate::velesql::NodePattern::new().with_alias("b"),
+                ],
+                relationships: vec![crate::velesql::RelationshipPattern::new(
+                    crate::velesql::Direction::Outgoing,
+                )],
+            }],
+            where_clause: None,
+            return_clause: crate::velesql::ReturnClause {
+                items: vec![],
+                order_by: None,
+                limit: Some(10),
+            },
+        };
+
+        let params = HashMap::new();
+        let results = col.execute_match(&match_clause, &params).unwrap();
+        assert!(!results.is_empty(), "execute_match should find the KNOWS edge");
+        assert_eq!(results[0].node_id, 20, "target should be Bob (id=20)");
     }
 }

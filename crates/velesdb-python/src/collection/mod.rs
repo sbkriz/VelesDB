@@ -12,7 +12,7 @@
 
 mod index;
 mod mutation;
-mod query;
+pub(crate) mod query;
 mod search;
 
 use pyo3::prelude::*;

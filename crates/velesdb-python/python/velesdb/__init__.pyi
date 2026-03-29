@@ -725,7 +725,153 @@ class PyGraphSchema:
 
 class PyGraphCollection:
     """Persistent graph collection with typed nodes, edges, and optional vector search."""
-    ...
+
+    @property
+    def name(self) -> str:
+        """The collection name."""
+        ...
+
+    @property
+    def schema(self) -> "PyGraphSchema":
+        """The graph schema configuration."""
+        ...
+
+    @property
+    def has_embeddings(self) -> bool:
+        """Whether this collection has node embeddings enabled."""
+        ...
+
+    def add_edge(self, edge: Dict[str, Any]) -> None:
+        """Add an edge between two nodes.
+
+        Args:
+            edge: Dict with keys: id (int), source (int), target (int),
+                  label (str), properties (dict, optional)
+        """
+        ...
+
+    def get_edges(self, label: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get edges, optionally filtered by label."""
+        ...
+
+    def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]:
+        """Get outgoing edges from a node."""
+        ...
+
+    def get_incoming(self, node_id: int) -> List[Dict[str, Any]]:
+        """Get incoming edges to a node."""
+        ...
+
+    def edge_count(self) -> int:
+        """Returns the total number of edges."""
+        ...
+
+    def node_degree(self, node_id: int) -> Tuple[int, int]:
+        """Returns (in_degree, out_degree) for a node."""
+        ...
+
+    def store_node_payload(self, node_id: int, payload: Dict[str, Any]) -> None:
+        """Store payload (properties) for a node."""
+        ...
+
+    def get_node_payload(self, node_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve payload for a node."""
+        ...
+
+    def all_node_ids(self) -> List[int]:
+        """Get all node IDs that have a stored payload."""
+        ...
+
+    def traverse_bfs(
+        self,
+        source_id: int,
+        max_depth: Optional[int] = 3,
+        limit: Optional[int] = 100,
+        rel_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform BFS traversal from a source node."""
+        ...
+
+    def traverse_dfs(
+        self,
+        source_id: int,
+        max_depth: Optional[int] = 3,
+        limit: Optional[int] = 100,
+        rel_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform DFS traversal from a source node."""
+        ...
+
+    def search_by_embedding(
+        self,
+        query: List[float],
+        k: Optional[int] = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search for similar nodes by embedding vector."""
+        ...
+
+    def query(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query (SELECT or MATCH).
+
+        Args:
+            query_str: VelesQL query string
+            params: Query parameters (vectors as lists/numpy arrays, scalars)
+
+        Returns:
+            List of result dicts
+        """
+        ...
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+        vector: Optional[List[float]] = None,
+        threshold: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Execute a MATCH graph traversal query.
+
+        Args:
+            query_str: VelesQL MATCH query (Cypher-like syntax)
+            params: Query parameters
+            vector: Optional query vector for similarity scoring
+            threshold: Similarity threshold (default: 0.0)
+
+        Returns:
+            List of dicts with keys: node_id, depth, path, bindings, score, projected
+        """
+        ...
+
+    def explain(self, query_str: str) -> Dict[str, Any]:
+        """Return query execution plan (EXPLAIN).
+
+        Args:
+            query_str: VelesQL query string
+
+        Returns:
+            Dict with tree, estimated_cost_ms, filter_strategy, index_used
+        """
+        ...
+
+    def query_ids(
+        self,
+        velesql: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query returning only IDs and scores.
+
+        Returns:
+            List of dicts with 'id' and 'score' fields
+        """
+        ...
+
+    def flush(self) -> None:
+        """Flush all graph state to disk."""
+        ...
 
 
 # =============================================================================

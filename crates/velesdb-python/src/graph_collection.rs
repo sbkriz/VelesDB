@@ -7,6 +7,10 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
+use crate::collection::query::{
+    build_explain_dict, convert_params, match_result_to_dict, parse_velesql,
+    search_results_to_id_score,
+};
 use crate::collection_helpers::{core_err, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
@@ -357,6 +361,149 @@ impl PyGraphCollection {
             self.name,
             self.inner.has_embeddings(),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VelesQL query methods (parity with Collection)
+// ---------------------------------------------------------------------------
+
+#[pymethods]
+impl PyGraphCollection {
+    /// Execute a VelesQL query (SELECT or MATCH).
+    ///
+    /// Args:
+    ///     query_str: VelesQL query string
+    ///     params: Query parameters (vectors as lists/numpy arrays, scalars)
+    ///
+    /// Returns:
+    ///     List of result dicts
+    ///
+    /// Example:
+    ///     >>> results = graph.query(
+    ///     ...     "SELECT * FROM kg WHERE category = 'person' LIMIT 10"
+    ///     ... )
+    #[pyo3(signature = (query_str, params=None))]
+    fn query(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<PyObject>> {
+        let parsed = parse_velesql(query_str)?;
+        let rust_params = convert_params(py, params)?;
+
+        let results = py.allow_threads(|| {
+            self.inner
+                .execute_query(&parsed, &rust_params)
+                .map_err(core_err)
+        })?;
+
+        Ok(crate::collection_helpers::search_results_to_multimodel_dicts(
+            py, results,
+        ))
+    }
+
+    /// Execute a MATCH graph traversal query.
+    ///
+    /// This is the primary method for Cypher-like graph pattern matching
+    /// in VelesQL. Edges added via `add_edge()` are found by this method.
+    ///
+    /// Args:
+    ///     query_str: VelesQL MATCH query string
+    ///     params: Query parameters (default: empty dict)
+    ///     vector: Optional query vector for similarity scoring
+    ///     threshold: Similarity threshold (default: 0.0)
+    ///
+    /// Returns:
+    ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
+    ///
+    /// Example:
+    ///     >>> results = graph.match_query(
+    ///     ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
+    ///     ... )
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    fn match_query(
+        &self,
+        py: Python<'_>,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+        vector: Option<PyObject>,
+        threshold: f32,
+    ) -> PyResult<Vec<PyObject>> {
+        let parsed = parse_velesql(query_str)?;
+        let match_clause = parsed
+            .match_clause
+            .as_ref()
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("Query is not a MATCH query")
+            })?
+            .clone();
+
+        let rust_params = convert_params(py, params)?;
+        let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
+
+        let results = py.allow_threads(|| {
+            if let Some(ref qv) = query_vector {
+                self.inner
+                    .execute_match_with_similarity(
+                        &match_clause,
+                        qv,
+                        threshold,
+                        &rust_params,
+                    )
+                    .map_err(core_err)
+            } else {
+                self.inner
+                    .execute_match(&match_clause, &rust_params)
+                    .map_err(core_err)
+            }
+        })?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| match_result_to_dict(py, r))
+            .collect())
+    }
+
+    /// Return query execution plan (EXPLAIN).
+    ///
+    /// Args:
+    ///     query_str: VelesQL query string
+    ///
+    /// Returns:
+    ///     Dict with tree, estimated_cost_ms, filter_strategy, index_used
+    #[pyo3(signature = (query_str))]
+    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
+        let parsed = parse_velesql(query_str)?;
+        Ok(build_explain_dict(py, &parsed))
+    }
+
+    /// Execute a VelesQL query returning only IDs and scores (no payload).
+    ///
+    /// Args:
+    ///     velesql: VelesQL query string
+    ///     params: Optional dict of query parameters
+    ///
+    /// Returns:
+    ///     List of dicts with 'id' and 'score' fields
+    #[pyo3(signature = (velesql, params = None))]
+    fn query_ids(
+        &self,
+        py: Python<'_>,
+        velesql: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<PyObject>> {
+        let parsed_query = parse_velesql(velesql)?;
+        let json_params = convert_params(py, params)?;
+
+        let results = py.allow_threads(|| {
+            self.inner
+                .execute_query(&parsed_query, &json_params)
+                .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_id_score(py, results))
     }
 }
 

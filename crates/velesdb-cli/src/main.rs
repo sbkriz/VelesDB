@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
             format,
         } => {
             let db = velesdb_core::Database::open(&path)?;
-            let result = repl::execute_query(&db, &query)?;
+            let result = repl::execute_query(&db, &query, None)?;
             repl::print_result(&result, &format);
         }
         Commands::Info { path } => {

@@ -186,6 +186,8 @@ pub struct SearchResult {
     pub id: u64,
     /// Similarity score.
     pub score: f32,
+    /// Optional payload as JSON string (populated by `query()` method).
+    pub payload: Option<String>,
 }
 
 /// A point to insert into the database.

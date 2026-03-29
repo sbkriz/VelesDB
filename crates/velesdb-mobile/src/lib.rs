@@ -284,6 +284,7 @@ impl VelesCollection {
             .map(|sr| SearchResult {
                 id: sr.id,
                 score: sr.score,
+                payload: None,
             })
             .collect())
     }
@@ -421,6 +422,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -456,6 +458,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -494,6 +497,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -547,6 +551,7 @@ impl VelesCollection {
                         .map(|r| SearchResult {
                             id: r.point.id,
                             score: r.score,
+                            payload: None,
                         })
                         .collect()
                 },
@@ -588,6 +593,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -627,6 +633,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -683,6 +690,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: r.point.payload.as_ref().map(|p| p.to_string()),
             })
             .collect())
     }
@@ -744,6 +752,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -794,6 +803,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -911,6 +921,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }
@@ -959,6 +970,7 @@ impl VelesCollection {
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
+                payload: None,
             })
             .collect())
     }

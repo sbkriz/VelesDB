@@ -577,6 +577,36 @@ for r in results:
     print(f"Node {r['id']}: score {r['score']:.4f}")
 ```
 
+**VelesQL MATCH queries (Cypher-like graph pattern matching):**
+
+```python
+# Important: nodes must have _labels in their payload for label-based matching
+graph.store_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+graph.store_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+graph.store_node_payload(30, {"_labels": ["City"], "name": "Paris"})
+
+# MATCH query: find who Alice knows
+results = graph.match_query(
+    "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name LIMIT 10"
+)
+for r in results:
+    print(f"Node {r['node_id']} at depth {r['depth']}, projected: {r['projected']}")
+
+# Hybrid: MATCH + vector similarity (requires embeddings)
+results = graph.match_query(
+    "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 10",
+    vector=query_embedding,  # score each result by similarity
+    threshold=0.5            # minimum similarity threshold
+)
+
+# VelesQL SELECT also works on GraphCollection
+results = graph.query("SELECT * FROM kg WHERE name = 'Alice' LIMIT 5")
+
+# Explain MATCH execution plan
+plan = graph.explain("MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10")
+print(plan["tree"])
+```
+
 **Persistence:**
 
 ```python

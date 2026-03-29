@@ -145,7 +145,7 @@ impl Collection {
         }
     }
 
-    /// Applies DISTINCT, ORDER BY, and LIMIT to SELECT results.
+    /// Applies DISTINCT, ORDER BY, OFFSET, and LIMIT to SELECT results.
     pub(super) fn apply_select_postprocessing(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -158,6 +158,11 @@ impl Collection {
         }
         if let Some(ref order_by) = stmt.order_by {
             self.apply_order_by(&mut results, order_by, params)?;
+        }
+        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
+        if let Some(offset) = stmt.offset {
+            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+            results = results.into_iter().skip(skip).collect();
         }
         results.truncate(limit);
         Ok(results)

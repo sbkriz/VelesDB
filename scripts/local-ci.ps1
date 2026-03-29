@@ -207,6 +207,52 @@ try {
     Write-Output "   Install with: pip install flake8 mccabe"
 }
 
+# ============================================================================
+# Check: Code duplication (jscpd, threshold < 2%)
+# ============================================================================
+Write-Step "Check: Code duplication (jscpd, threshold < 2%)"
+try {
+    $jscpdCheck = npx jscpd --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $dupTargets = @(
+            @{ Name = "Rust crates"; Format = "rust"; Path = "crates/"; Ignore = "**/tests/**,**/*_tests.rs,**/test_*,**/benches/**,**/examples/**,**/target/**" },
+            @{ Name = "Python integrations"; Format = "python"; Path = "integrations/"; Ignore = "**/.venv/**,**/target/**,**/node_modules/**,**/__pycache__/**" },
+            @{ Name = "TypeScript SDK"; Format = "typescript"; Path = "sdks/typescript/src/"; Ignore = "" }
+        )
+        $dupFailed = $false
+        foreach ($target in $dupTargets) {
+            if (-not (Test-Path $target.Path)) { continue }
+            $jscpdArgs = @("jscpd", "--min-tokens", "50", "--reporters", "console", "--format", $target.Format)
+            if ($target.Ignore) { $jscpdArgs += "--ignore"; $jscpdArgs += $target.Ignore }
+            $jscpdArgs += $target.Path
+            $output = npx @jscpdArgs 2>&1 | Out-String
+            $pctMatch = [regex]::Match($output, "(\d+\.\d+)%\s*\)")
+            if ($pctMatch.Success) {
+                $pct = [double]$pctMatch.Groups[1].Value
+                if ($pct -ge 2.0) {
+                    Write-Fail "$($target.Name): ${pct}% duplication (threshold: < 2%)"
+                    $dupFailed = $true
+                } else {
+                    Write-Success "$($target.Name): ${pct}% duplication OK"
+                }
+            } else {
+                Write-Success "$($target.Name): no duplication detected"
+            }
+        }
+        if ($dupFailed) {
+            $errors += "Duplication"
+            Write-Output "   Fix: extract shared helpers, apply DRY refactoring"
+            Write-Output "   Details: npx jscpd --min-tokens 50 --reporters console --format rust crates/"
+        }
+    } else {
+        Write-Warn "jscpd not available - skipping duplication check"
+        Write-Output "   Install: npm install -g jscpd"
+    }
+} catch {
+    Write-Warn "jscpd duplication check skipped (not installed)"
+    Write-Output "   Install: npm install -g jscpd"
+}
+
 if ($Quick) {
     Write-Warn "Quick mode - skipping tests and security audit"
 } else {
@@ -281,7 +327,7 @@ if ($Quick) {
     }
 
     # ============================================================================
-    # Check 6: File size validation
+    # Check: File size validation
     # ============================================================================
     Write-Step "Check: File size validation (< 500 lines)"
     $largeFiles = Get-ChildItem -Path "crates" -Recurse -Filter "*.rs" | 

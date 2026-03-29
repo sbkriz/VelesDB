@@ -14,7 +14,7 @@ use super::Collection;
 ///
 /// Extracts node_id, depth, path, bindings, score, and projected fields
 /// into a flat Python dict with interned keys.
-fn match_result_to_dict(
+pub(crate) fn match_result_to_dict(
     py: Python<'_>,
     r: velesdb_core::collection::search::query::match_exec::MatchResult,
 ) -> PyObject {
@@ -36,7 +36,7 @@ fn match_result_to_dict(
 }
 
 /// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
-fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
+pub(crate) fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
     velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
         PyValueError::new_err(format!(
             "VelesQL parse error at position {}: {}",
@@ -45,8 +45,47 @@ fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
     })
 }
 
+/// Builds an EXPLAIN dict from a parsed VelesQL query.
+pub(crate) fn build_explain_dict(py: Python<'_>, parsed: &velesdb_core::velesql::Query) -> PyObject {
+    let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
+        let stats =
+            velesdb_core::collection::search::query::match_planner::CollectionStats::default();
+        velesdb_core::velesql::QueryPlan::from_match(match_clause, &stats)
+    } else {
+        velesdb_core::velesql::QueryPlan::from_select(&parsed.select)
+    };
+
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(
+        PyString::intern(py, "tree"),
+        to_pyobject(py, plan.to_tree()),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "estimated_cost_ms"),
+        plan.estimated_cost_ms,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "filter_strategy"),
+        plan.filter_strategy.as_str(),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "index_used"),
+        plan.index_used.map(|i| i.as_str().to_string()),
+    );
+    dict.into_any().unbind()
+}
+
+/// Converts `Vec<SearchResult>` to id/score dicts.
+pub(crate) fn search_results_to_id_score(
+    py: Python<'_>,
+    results: Vec<velesdb_core::SearchResult>,
+) -> Vec<PyObject> {
+    let tuples: Vec<(u64, f32)> = results.into_iter().map(|r| (r.point.id, r.score)).collect();
+    id_score_pairs_to_dicts(py, tuples)
+}
+
 /// Converts Python params dict to Rust `HashMap<String, serde_json::Value>`.
-fn convert_params(
+pub(crate) fn convert_params(
     py: Python<'_>,
     params: Option<HashMap<String, PyObject>>,
 ) -> PyResult<HashMap<String, serde_json::Value>> {
@@ -145,33 +184,7 @@ impl Collection {
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
         let parsed = parse_velesql(query_str)?;
-
-        let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
-            let stats =
-                velesdb_core::collection::search::query::match_planner::CollectionStats::default();
-            velesdb_core::velesql::QueryPlan::from_match(match_clause, &stats)
-        } else {
-            velesdb_core::velesql::QueryPlan::from_select(&parsed.select)
-        };
-
-        let dict = PyDict::new(py);
-        let _ = dict.set_item(
-            PyString::intern(py, "tree"),
-            to_pyobject(py, plan.to_tree()),
-        );
-        let _ = dict.set_item(
-            PyString::intern(py, "estimated_cost_ms"),
-            plan.estimated_cost_ms,
-        );
-        let _ = dict.set_item(
-            PyString::intern(py, "filter_strategy"),
-            plan.filter_strategy.as_str(),
-        );
-        let _ = dict.set_item(
-            PyString::intern(py, "index_used"),
-            plan.index_used.map(|i| i.as_str().to_string()),
-        );
-        Ok(dict.into_any().unbind())
+        Ok(build_explain_dict(py, &parsed))
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).
@@ -203,7 +216,6 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        let tuples: Vec<(u64, f32)> = results.into_iter().map(|r| (r.point.id, r.score)).collect();
-        Ok(id_score_pairs_to_dicts(py, tuples))
+        Ok(search_results_to_id_score(py, results))
     }
 }

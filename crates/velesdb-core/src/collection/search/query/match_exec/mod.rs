@@ -344,6 +344,9 @@ impl Collection {
     }
 
     /// Finds start nodes matching the first node pattern.
+    ///
+    /// Enumerates the union of vector storage IDs and payload storage IDs so
+    /// that graph-only nodes (no embedding) are also discoverable by MATCH.
     fn find_start_nodes(&self, pattern: &GraphPattern) -> Result<Vec<(u64, HashMap<String, u64>)>> {
         let first_node = pattern
             .nodes
@@ -354,8 +357,14 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let needs_payload = !first_node.labels.is_empty() || !first_node.properties.is_empty();
 
-        let results = vector_storage
-            .ids()
+        // Union of vector IDs and payload IDs — graph-only nodes have no vector.
+        let mut all_ids: std::collections::HashSet<u64> =
+            vector_storage.ids().into_iter().collect();
+        for id in payload_storage.ids() {
+            all_ids.insert(id);
+        }
+
+        let results = all_ids
             .into_iter()
             .filter(|id| {
                 Self::node_matches_pattern(*id, first_node, needs_payload, &payload_storage)
