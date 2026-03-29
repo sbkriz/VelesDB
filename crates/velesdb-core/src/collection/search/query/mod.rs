@@ -189,15 +189,26 @@ impl Collection {
             .unwrap_or(MAX_LIMIT)
             .min(MAX_LIMIT);
 
+        // When OFFSET is present, fetch limit+offset rows so post-processing
+        // can skip `offset` rows and still return `limit` results.
+        let offset_val = stmt
+            .offset
+            .map(|o| usize::try_from(o).unwrap_or(MAX_LIMIT))
+            .unwrap_or(0);
+        let fetch_limit = limit.saturating_add(offset_val).min(MAX_LIMIT);
+
         let extracted = self.extract_query_components(stmt, params)?;
 
         // Early-return paths for special query shapes.
-        if let Some(results) = self.try_early_return_path(stmt, params, &extracted, limit, &ctx)? {
+        if let Some(results) =
+            self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
+        {
             return Ok(results);
         }
 
         // Main vector/similarity/metadata dispatch path.
-        let mut results = self.dispatch_main_select(stmt, params, &extracted, limit, &ctx)?;
+        let mut results =
+            self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
 
         // JOIN pushdown analysis (EPIC-031 US-006).
         self.analyze_join_pushdown(stmt);

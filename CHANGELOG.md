@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **OFFSET clause not executed** — `SELECT ... OFFSET N` was parsed but never applied;
-  now applied after ORDER BY, before LIMIT in select_dispatch
+  now applied after ORDER BY, before LIMIT in select_dispatch. Execution fetches
+  `limit + offset` rows so `LIMIT 10 OFFSET 5` correctly returns 10 rows
 - **MATCH start-node discovery** — `find_start_nodes()` only enumerated vector storage
   IDs, missing graph-only nodes (payload-only); now unions both ID sources
 - **CLI rejected MATCH queries** — `Database::execute_query()` requires a FROM clause

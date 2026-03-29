@@ -409,9 +409,10 @@ pub async fn hybrid_search<R: Runtime>(
 
 /// Executes a `VelesQL` query (EPIC-031 US-012).
 ///
-/// Supports both SELECT and MATCH `VelesQL` queries. SELECT queries return
-/// vector similarity results; MATCH queries perform Cypher-like graph
-/// traversal. Returns results in `HybridResult` format.
+/// Supports SELECT-style `VelesQL` queries with vector similarity search.
+/// Aggregation queries (GROUP BY, COUNT, etc.) are auto-detected and routed
+/// to `execute_aggregate()`. MATCH queries are not yet supported through
+/// this endpoint. Returns results in `HybridResult` format.
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,
