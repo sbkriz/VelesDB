@@ -10,7 +10,7 @@ GitHub:  https://github.com/cyberlife-coder/VelesDB
 Docs:    https://velesdb.com/en/
 
 Requirements:
-    pip install velesdb==1.9.2 sentence-transformers
+    pip install velesdb==1.9.3 sentence-transformers
 
 This script contains every code example from the article.
 Run it end-to-end to reproduce all results.
@@ -29,9 +29,14 @@ if os.path.exists(DB_PATH):
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 db = velesdb.Database(DB_PATH)
-collection = db.create_collection(
+
+# Create a graph collection: vector + graph + columnar in one object
+graph = db._inner.create_graph_collection(
     "support_kb", dimension=384, metric="cosine"
 )
+
+# Get the collection handle for upsert and VelesQL SELECT queries
+collection = db._inner.get_collection("support_kb")
 
 # ============================================================
 # Step 1: Build the knowledge base
@@ -52,6 +57,7 @@ articles = [
         "difficulty": "beginner",
         "resolved_pct": 95.0,
         "views": 12500,
+        "_labels": ["Article"],
     },
     {
         "id": 2,
@@ -64,6 +70,7 @@ articles = [
         "difficulty": "intermediate",
         "resolved_pct": 88.0,
         "views": 8900,
+        "_labels": ["Article"],
     },
     {
         "id": 3,
@@ -76,6 +83,7 @@ articles = [
         "difficulty": "beginner",
         "resolved_pct": 92.0,
         "views": 15200,
+        "_labels": ["Article"],
     },
     {
         "id": 4,
@@ -88,6 +96,7 @@ articles = [
         "difficulty": "beginner",
         "resolved_pct": 78.5,
         "views": 22100,
+        "_labels": ["Article"],
     },
     {
         "id": 5,
@@ -100,6 +109,7 @@ articles = [
         "difficulty": "advanced",
         "resolved_pct": 82.0,
         "views": 34500,
+        "_labels": ["Article"],
     },
     {
         "id": 6,
@@ -112,6 +122,7 @@ articles = [
         "difficulty": "advanced",
         "resolved_pct": 75.0,
         "views": 18200,
+        "_labels": ["Article"],
     },
     {
         "id": 7,
@@ -124,6 +135,7 @@ articles = [
         "difficulty": "intermediate",
         "resolved_pct": 98.0,
         "views": 9800,
+        "_labels": ["Article"],
     },
     {
         "id": 8,
@@ -136,6 +148,7 @@ articles = [
         "difficulty": "advanced",
         "resolved_pct": 70.0,
         "views": 7600,
+        "_labels": ["Article"],
     },
     {
         "id": 9,
@@ -148,6 +161,7 @@ articles = [
         "difficulty": "beginner",
         "resolved_pct": 90.0,
         "views": 19500,
+        "_labels": ["Article"],
     },
     {
         "id": 10,
@@ -160,6 +174,7 @@ articles = [
         "difficulty": "intermediate",
         "resolved_pct": 85.0,
         "views": 28900,
+        "_labels": ["Article"],
     },
 ]
 
@@ -175,7 +190,7 @@ for article in articles:
     })
 
 collection.upsert(points)
-print(f"Inserted {collection.count()} articles\n")
+print(f"Inserted {len(points)} articles\n")
 
 # ============================================================
 # Step 2: Semantic search with NEAR
@@ -219,10 +234,10 @@ for r in results:
           f"| {p['difficulty']} | {p['resolved_pct']}%")
 
 # ============================================================
-# Step 4: Hybrid search with MATCH
+# Step 4: Keyword precision with MATCH
 # ============================================================
 print(f"\n{'=' * 60}")
-print("Step 4: Hybrid search with MATCH")
+print("Step 4: Keyword precision with MATCH")
 print("=" * 60)
 
 question = "How do I configure authentication for my API?"
@@ -242,95 +257,85 @@ for r in results:
           f" | {r['payload']['title']}")
 
 # ============================================================
-# Step 5: Graph traversal for learning paths
+# Step 5: Graph relationships and traversal
 # ============================================================
 print(f"\n{'=' * 60}")
-print("Step 5: Graph traversal for learning paths")
+print("Step 5: Graph relationships and traversal")
 print("=" * 60)
 
-graph = collection.get_graph_store()
+graph.add_edge({"id": 101, "source": 1, "target": 2, "label": "NEXT_STEP", "properties": {"reason": "After password reset, enable 2FA"}})
+graph.add_edge({"id": 102, "source": 2, "target": 8, "label": "NEXT_STEP", "properties": {"reason": "Advanced: set up SSO after 2FA"}})
+graph.add_edge({"id": 103, "source": 4, "target": 3, "label": "RELATED", "properties": {"reason": "Understanding billing after upgrade"}})
+graph.add_edge({"id": 104, "source": 9, "target": 4, "label": "RELATED", "properties": {"reason": "Payment fix may lead to plan change"}})
+graph.add_edge({"id": 105, "source": 5, "target": 6, "label": "RELATED", "properties": {"reason": "Rate limits affect webhook delivery"}})
+graph.add_edge({"id": 106, "source": 6, "target": 10, "label": "NEXT_STEP", "properties": {"reason": "After webhooks, try the GraphQL API"}})
+graph.add_edge({"id": 107, "source": 8, "target": 5, "label": "PREREQUISITE", "properties": {"reason": "SSO tokens used for API auth"}})
+graph.add_edge({"id": 108, "source": 7, "target": 3, "label": "RELATED", "properties": {"reason": "GDPR export includes billing data"}})
 
-# Account learning path
-graph.add_edge({
-    "id": 101, "source": 1, "target": 2,
-    "label": "NEXT_STEP",
-    "properties": {"reason": "After password reset, enable 2FA"}
-})
-graph.add_edge({
-    "id": 102, "source": 2, "target": 8,
-    "label": "NEXT_STEP",
-    "properties": {"reason": "Advanced: set up SSO after 2FA"}
-})
-
-# Billing links
-graph.add_edge({
-    "id": 103, "source": 4, "target": 3,
-    "label": "RELATED",
-    "properties": {"reason": "Understanding billing after upgrade"}
-})
-graph.add_edge({
-    "id": 104, "source": 9, "target": 4,
-    "label": "RELATED",
-    "properties": {"reason": "Payment fix may lead to plan change"}
-})
-
-# Technical cross-references
-graph.add_edge({
-    "id": 105, "source": 5, "target": 6,
-    "label": "RELATED",
-    "properties": {"reason": "Rate limits affect webhook delivery"}
-})
-graph.add_edge({
-    "id": 106, "source": 6, "target": 10,
-    "label": "NEXT_STEP",
-    "properties": {"reason": "After webhooks, try the GraphQL API"}
-})
-
-# Cross-category links
-graph.add_edge({
-    "id": 107, "source": 8, "target": 5,
-    "label": "PREREQUISITE",
-    "properties": {"reason": "SSO tokens used for API auth"}
-})
-graph.add_edge({
-    "id": 108, "source": 7, "target": 3,
-    "label": "RELATED",
-    "properties": {"reason": "GDPR export includes billing data"}
-})
-
-# BFS from password reset article
 print("BFS from article 1 (password reset), depth=2:\n")
-related = graph.traverse_bfs(source=1, max_depth=2)
+related = graph.traverse_bfs(1, max_depth=2)
 for r in related:
-    print(f"  depth={r.depth} | article {r.source} -> {r.target} ({r.label})")
+    print(f"  depth={r['depth']} | target {r['target_id']} via path {r['path']}")
 
-# DFS for full exploration
 print("\nDFS from article 1, depth=3:\n")
-deep = graph.traverse_dfs(source=1, max_depth=3)
+deep = graph.traverse_dfs(1, max_depth=3)
 for r in deep:
-    print(f"  depth={r.depth} | article {r.source} -> {r.target} ({r.label})")
-
-# Filtered: only NEXT_STEP
-print("\nBFS (only NEXT_STEP) from article 1:\n")
-filtered = graph.traverse_bfs(
-    source=1, max_depth=3,
-    relationship_types=["NEXT_STEP"]
-)
-for r in filtered:
-    print(f"  depth={r.depth} | article {r.source} -> {r.target} ({r.label})")
+    print(f"  depth={r['depth']} | target {r['target_id']} via path {r['path']}")
 
 # ============================================================
-# Step 6: The complete pipeline
+# Step 6: Cypher-like MATCH queries
 # ============================================================
 print(f"\n{'=' * 60}")
-print("Step 6: The complete pipeline")
+print("Step 6: Cypher-like MATCH queries")
+print("=" * 60)
+
+print("MATCH query: account articles with NEXT_STEP edges\n")
+results = graph.match_query(
+    "MATCH (article:Article)-[:NEXT_STEP]->(next:Article) "
+    "WHERE article.category = 'account' "
+    "RETURN article.title, next.title, next.difficulty "
+    "ORDER BY article.title "
+    "LIMIT 10"
+)
+for r in results:
+    p = r["projected"]
+    print(f"  {p['article.title']} -> {p['next.title']} ({p['next.difficulty']})")
+
+print("\nHybrid MATCH: vector similarity + graph traversal\n")
+question = "I need help securing my account"
+query_vec = model.encode(question).tolist()
+results = graph.match_query(
+    "MATCH (article:Article)-[:NEXT_STEP]->(next:Article) "
+    "WHERE similarity(article.embedding, $v) > 0.3 "
+    "RETURN article.title, next.title "
+    "ORDER BY similarity() DESC "
+    "LIMIT 5",
+    params={"v": query_vec},
+    vector=query_vec,
+    threshold=0.3
+)
+for r in results:
+    print(f"  score={r['score']:.3f} | "
+          f"{r['projected']['article.title']} -> {r['projected']['next.title']}")
+
+print("\nQuery plan for hybrid MATCH:\n")
+plan = graph.explain(
+    "MATCH (article:Article)-[:NEXT_STEP]->(next:Article) "
+    "WHERE similarity(article.embedding, $v) > 0.5 "
+    "RETURN article.title, next.title LIMIT 5"
+)
+print(plan["tree"])
+
+# ============================================================
+# Step 7: The complete pipeline
+# ============================================================
+print(f"{'=' * 60}")
+print("Step 7: The complete pipeline")
 print("=" * 60)
 
 
-def answer_support_question(question: str, collection, graph):
+def answer_support_question(question, graph):
     query_vec = model.encode(question).tolist()
-
-    # Step 1: Hybrid search with filters
     results = collection.query(
         """SELECT * FROM support_kb
            WHERE vector NEAR $v
@@ -339,63 +344,39 @@ def answer_support_question(question: str, collection, graph):
            LIMIT 3""",
         params={"v": query_vec}
     )
-
     top = results[0]
     print(f"Best match: {top['payload']['title']}")
     print(f"  Score: {top['fused_score']:.3f}")
-
-    # Step 2: Follow the knowledge graph
-    related = graph.traverse_bfs(source=top["id"], max_depth=2)
+    related = graph.traverse_bfs(top["id"], max_depth=2)
     if related:
         print("Related articles:")
         for r in related:
-            print(f"  -> article {r.target} ({r.label})")
-
+            print(f"  -> article {r['target_id']} (depth={r['depth']})")
     return results, related
 
 
-answer_support_question(
-    "My API calls are getting rejected, need help with rate limits",
-    collection, graph
-)
+answer_support_question("My API calls are getting rejected, need help with rate limits", graph)
 
-# ============================================================
-# Step 7: Query plan
-# ============================================================
 print(f"\n{'=' * 60}")
-print("Step 7: Query plan")
+print("What's under the hood: Query plan")
 print("=" * 60)
-
-plan = collection._inner.explain(
-    "SELECT * FROM support_kb "
-    "WHERE vector NEAR $v AND category = 'technical' LIMIT 10"
-)
+plan = graph.explain("SELECT * FROM support_kb WHERE vector NEAR $v AND category = 'technical' LIMIT 10")
 print(plan["tree"])
 
-# ============================================================
-# New in v1.9.2: Search quality modes
-# ============================================================
 print(f"{'=' * 60}")
-print("New in v1.9.2: Search quality modes")
+print("Adaptive search quality")
 print("=" * 60)
-
 query_vec = model.encode("help with my account settings").tolist()
-
 for mode in ["fast", "balanced", "accurate", "perfect", "autotune"]:
     results = collection.search_with_quality(query_vec, mode, top_k=3)
     titles = [r["payload"]["title"][:40] for r in results]
     print(f"  {mode:10s} => {titles}")
 
-# ============================================================
-# New in v1.9.2: Multi-query fusion
-# ============================================================
 print(f"\n{'=' * 60}")
-print("New in v1.9.2: Multi-query fusion")
+print("Multi-query fusion")
 print("=" * 60)
-
 q1 = model.encode("password reset account access").tolist()
 q2 = model.encode("billing invoice payment").tolist()
-
 strategies = {
     "rrf": velesdb.FusionStrategy.rrf(),
     "average": velesdb.FusionStrategy.average(),
@@ -403,66 +384,32 @@ strategies = {
     "relative_score": velesdb.FusionStrategy.relative_score(0.7, 0.3),
     "weighted": velesdb.FusionStrategy.weighted(0.5, 0.3, 0.2),
 }
-
 for name, strategy in strategies.items():
-    results = collection._inner.multi_query_search(
-        vectors=[q1, q2], top_k=3, fusion=strategy
-    )
-    titles = [
-        r.get("payload", r.get("bindings", {})).get("title", "N/A")
-        for r in results
-    ]
+    results = collection.multi_query_search(vectors=[q1, q2], top_k=3, fusion=strategy)
+    titles = [r.get("payload", r.get("bindings", {})).get("title", "N/A") for r in results]
     print(f"  {name:20s} => {titles}")
 
-# ============================================================
-# New in v1.9.2: VelesQL parser
-# ============================================================
 print(f"\n{'=' * 60}")
-print("New in v1.9.2: VelesQL parser")
+print("VelesQL parser")
 print("=" * 60)
-
 from velesdb import VelesQL
-
-# Validate
 print(f"  Valid query:   {VelesQL.is_valid('SELECT * FROM kb WHERE vector NEAR $v LIMIT 10')}")
 print(f"  Invalid query: {VelesQL.is_valid('DROP TABLE kb')}")
-
-# Introspect
-parsed = VelesQL.parse(
-    "SELECT * FROM support_kb WHERE vector NEAR $v "
-    "AND category = 'technical' LIMIT 5"
-)
+parsed = VelesQL.parse("SELECT * FROM support_kb WHERE vector NEAR $v AND category = 'technical' LIMIT 5")
 print(f"\n  Table:         {parsed.table_name}")
 print(f"  Vector search: {parsed.has_vector_search()}")
 print(f"  WHERE clause:  {parsed.has_where_clause()}")
 print(f"  Limit:         {parsed.limit}")
-
-# GROUP BY
-agg = VelesQL.parse(
-    "SELECT category, COUNT(*) FROM kb GROUP BY category"
-)
+agg = VelesQL.parse("SELECT category, COUNT(*) FROM kb GROUP BY category")
 print(f"  GROUP BY:      {agg.group_by}")
-
-# ORDER BY
-ordered = VelesQL.parse(
-    "SELECT * FROM kb ORDER BY views DESC LIMIT 10"
-)
+ordered = VelesQL.parse("SELECT * FROM kb ORDER BY views DESC LIMIT 10")
 print(f"  ORDER BY:      {ordered.order_by}")
-
-# JOIN
-joined = VelesQL.parse(
-    "SELECT a.*, t.name FROM articles a "
-    "JOIN tags t ON a.id = t.article_id"
-)
+joined = VelesQL.parse("SELECT a.*, t.name FROM articles a JOIN tags t ON a.id = t.article_id")
 print(f"  JOIN count:    {joined.join_count}")
 print(f"  Aliases:       {joined.table_aliases}")
 
-# ============================================================
-# Cleanup
-# ============================================================
 print(f"\n{'=' * 60}")
 print("Done! All examples executed successfully.")
 print(f"VelesDB version: {velesdb.__version__}")
 print("=" * 60)
-
 shutil.rmtree(DB_PATH)
