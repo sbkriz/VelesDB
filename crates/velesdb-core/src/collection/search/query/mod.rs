@@ -210,8 +210,7 @@ impl Collection {
         }
 
         // Main vector/similarity/metadata dispatch path.
-        let mut results =
-            self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
+        let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
 
         // JOIN pushdown analysis (EPIC-031 US-006).
         self.analyze_join_pushdown(stmt);

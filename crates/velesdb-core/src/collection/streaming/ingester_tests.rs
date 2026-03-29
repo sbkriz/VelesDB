@@ -453,17 +453,24 @@ async fn test_stream_delta_rebuild_no_data_loss() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
+    // Poll until all 10 points are indexed in HNSW and searchable (max 5s).
+    // Points visible via get() may not yet be in the HNSW index.
     let query = vec![10.0, 0.0, 0.0, 0.0];
-    let results = coll_clone
-        .search_ids(&query, 10)
-        .expect("search_ids should succeed");
-    let found_ids: std::collections::HashSet<u64> = results.iter().map(|sr| sr.id).collect();
-
-    for id in 1..=10 {
+    let search_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let results = coll_clone
+            .search_ids(&query, 10)
+            .expect("search_ids should succeed");
+        let found_ids: std::collections::HashSet<u64> = results.iter().map(|sr| sr.id).collect();
+        if (1..=10u64).all(|id| found_ids.contains(&id)) {
+            break;
+        }
         assert!(
-            found_ids.contains(&id),
-            "point id={id} should be in search results"
+            tokio::time::Instant::now() < search_deadline,
+            "timed out waiting for all 10 points in search results (found {}/10)",
+            found_ids.len()
         );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
     let drained = coll_clone.delta_buffer.deactivate_and_drain();

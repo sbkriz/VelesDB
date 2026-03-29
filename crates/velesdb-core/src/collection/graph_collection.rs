@@ -370,8 +370,12 @@ impl GraphCollection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
-        self.inner
-            .execute_match_with_similarity(match_clause, query_vector, similarity_threshold, params)
+        self.inner.execute_match_with_similarity(
+            match_clause,
+            query_vector,
+            similarity_threshold,
+            params,
+        )
     }
 }
 
@@ -442,10 +446,16 @@ mod tests {
         .unwrap();
 
         // Store node payloads with labels
-        col.upsert_node_payload(10, &serde_json::json!({"_labels": ["Person"], "name": "Alice"}))
-            .unwrap();
-        col.upsert_node_payload(20, &serde_json::json!({"_labels": ["Person"], "name": "Bob"}))
-            .unwrap();
+        col.upsert_node_payload(
+            10,
+            &serde_json::json!({"_labels": ["Person"], "name": "Alice"}),
+        )
+        .unwrap();
+        col.upsert_node_payload(
+            20,
+            &serde_json::json!({"_labels": ["Person"], "name": "Bob"}),
+        )
+        .unwrap();
 
         // Add edge: Alice -> Bob
         let edge = crate::collection::graph::GraphEdge::new(1, 10, 20, "KNOWS").unwrap();
@@ -473,7 +483,10 @@ mod tests {
 
         let params = HashMap::new();
         let results = col.execute_match(&match_clause, &params).unwrap();
-        assert!(!results.is_empty(), "execute_match should find the KNOWS edge");
+        assert!(
+            !results.is_empty(),
+            "execute_match should find the KNOWS edge"
+        );
         assert_eq!(results[0].node_id, 20, "target should be Bob (id=20)");
     }
 }

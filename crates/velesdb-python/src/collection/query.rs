@@ -46,7 +46,10 @@ pub(crate) fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::
 }
 
 /// Builds an EXPLAIN dict from a parsed VelesQL query.
-pub(crate) fn build_explain_dict(py: Python<'_>, parsed: &velesdb_core::velesql::Query) -> PyObject {
+pub(crate) fn build_explain_dict(
+    py: Python<'_>,
+    parsed: &velesdb_core::velesql::Query,
+) -> PyObject {
     let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
         let stats =
             velesdb_core::collection::search::query::match_planner::CollectionStats::default();
