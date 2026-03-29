@@ -333,4 +333,4 @@ Phase results are stored in `benchmarks/phase_results/`:
 
 - [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
 - [Rust Performance Book](https://nnethercote.github.io/perf-book/)
-- [BENCHMARKS.md](./BENCHMARKS.md) - Current benchmark results
+- [BENCHMARKS.md](../BENCHMARKS.md) - Current benchmark results

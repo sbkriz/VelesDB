@@ -589,7 +589,7 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 | **VelesQL** | `/query`, `/aggregate`, `/query/explain` |
 | **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/analyze`, `/collections/{name}/empty`, `/collections/{name}/sanity` |
 
-> **Full API reference:** [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) | **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
+> **Full API reference:** [docs/reference/api-reference.md](docs/reference/api-reference.md) | **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
 
 </details>
 
