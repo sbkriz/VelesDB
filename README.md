@@ -1,20 +1,16 @@
 <p align="center">
   <img src="velesdb_icon_pack/favicon/android-chrome-512x512.png" alt="VelesDB Logo" width="200"/>
 </p>
-
 <h1 align="center">
   <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="VelesDB" width="32" height="32" style="vertical-align: middle;"/>
 </h1>
-
 <h3 align="center">
-  The Local Knowledge Engine for AI Agents
+  Your AI agents forget everything. VelesDB fixes that.
 </h3>
-
 <p align="center">
-  <strong>One 6 MB binary. Three engines. One query language.</strong><br/>
-  <em>Vector + Graph + ColumnStore &mdash; unified under VelesQL</em>
+  <strong>One 6 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
+  <em>Vector + Graph + ColumnStore — unified under <a href="docs/reference/velesql.md">VelesQL</a></em>
 </p>
-
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade"><img src="https://app.codacy.com/project/badge/Grade/58c73832dd294ba38144856ae69e9cf2" alt="Codacy Badge"></a>
@@ -25,14 +21,38 @@
   <img src="https://img.shields.io/badge/coverage-82.3%25-brightgreen" alt="Coverage">
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
+  <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
 </p>
-
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.10.0">Download v1.10.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
 </p>
+
+<!-- TODO: Uncomment when GIF demo is ready
+<p align="center">
+  <img src="docs/assets/velesdb-demo.gif" alt="VelesDB Demo" width="700"/>
+</p>
+-->
+
+---
+
+> **Every AI agent today stitches together 3 databases for memory — vectors for "what feels similar", a graph for "what is connected", and SQL for "what I know for sure". That's 3 deployments, 3 configs, 3 query languages, and a pile of glue code.**
+>
+> **VelesDB replaces all of that with a single Rust binary that fits on a floppy disk.**
+
+---
+
+## Why VelesDB?
+
+| Today (3 systems to maintain) | With VelesDB (1 binary) |
+|-------------------------------|------------------------|
+| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
+| Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
+| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
+| Custom glue code + 3 query languages | **VelesQL** — one language for everything |
+| 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
 
 ---
 
@@ -59,18 +79,6 @@ ORDER BY similarity() DESC LIMIT 5
 **Built-in Agent Memory SDK** provides semantic, episodic, and procedural memory for AI agents — no external services needed.
 
 > **One binary. No cloud. No glue code. Runs on server, browser, mobile, and desktop.**
-
----
-
-## Why VelesDB?
-
-| Today (3 systems to maintain) | With VelesDB (1 binary) |
-|-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
-| Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
-| Custom glue code + 3 query languages | **VelesQL** — one language for everything |
-| 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
 
 ---
 
@@ -239,7 +247,6 @@ docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
 # Verify it's running
 curl http://localhost:8080/health
 ```
-
 Data is stored in the `/data` directory inside the container. The named volume `velesdb_data` persists data across container restarts. The built-in health check polls `GET /health` every 30 seconds.
 
 <details>
@@ -473,7 +480,6 @@ pricing.upsert(vec![
     Point::metadata_only(1, json!({"product": "Widget A", "price": 29.99})),
     Point::metadata_only(2, json!({"product": "Widget B", "price": 49.99})),
 ])?;
-
 let results = pricing.execute_query_str("SELECT * FROM pricing WHERE price < 40 LIMIT 10", &params)?;
 ```
 
