@@ -315,7 +315,7 @@ fn build_vector_params(
     suffix: Option<CreateSuffix>,
 ) -> Result<CreateCollectionKind, ParseError> {
     let dimension = lookup_required_usize(options, "dimension", "Vector collection")?;
-    let metric = lookup_required_str(options, "metric", "Vector collection")?;
+    let metric = lookup_optional_str(options, "metric").unwrap_or_else(|| "cosine".to_string());
     let mut storage = lookup_optional_str(options, "storage");
 
     let (m, ef_construction) = extract_with_suffix_hnsw(options, suffix, &mut storage);

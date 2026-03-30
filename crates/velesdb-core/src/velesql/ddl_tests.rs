@@ -458,13 +458,19 @@ fn test_create_vector_without_dimension_fails() {
 }
 
 #[test]
-fn test_create_vector_without_metric_fails() {
-    // Vector collection requires metric — parser-level validation in build_vector_params
-    let result = Parser::parse("CREATE COLLECTION docs (dimension = 768);");
-    assert!(
-        result.is_err(),
-        "CREATE COLLECTION without metric should fail"
-    );
+fn test_create_vector_without_metric_defaults_to_cosine() {
+    // Omitting metric defaults to "cosine" per VELESQL_SPEC.md
+    let query = Parser::parse("CREATE COLLECTION docs (dimension = 768);")
+        .expect("CREATE COLLECTION without metric should succeed");
+    let ddl = query.ddl.expect("Expected DDL");
+    let DdlStatement::CreateCollection(create) = ddl else {
+        panic!("Expected CreateCollection");
+    };
+    let CreateCollectionKind::Vector(params) = create.kind else {
+        panic!("Expected Vector kind");
+    };
+    assert_eq!(params.metric, "cosine", "metric should default to cosine");
+    assert_eq!(params.dimension, 768);
 }
 
 #[test]

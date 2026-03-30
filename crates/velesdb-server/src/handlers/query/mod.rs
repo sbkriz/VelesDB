@@ -111,9 +111,10 @@ pub async fn query(
         Err(resp) => return resp,
     };
 
-    // DDL bypass: CREATE/DROP COLLECTION has no FROM clause — dispatch directly.
-    if parsed.is_ddl_query() {
-        return execute_ddl_query(&state, &parsed, &req.params, start);
+    // DDL/DML mutation bypass: these queries extract collection from the SQL AST,
+    // not from the request body — dispatch directly to avoid empty-name metrics.
+    if parsed.is_ddl_query() || parsed.is_dml_query() {
+        return execute_mutation_query(&state, &parsed, &req.params, start);
     }
 
     let collection_name = match resolve_collection_name(&parsed, &req) {
@@ -140,11 +141,12 @@ pub async fn query(
     )
 }
 
-/// Execute a DDL query (CREATE/DROP COLLECTION) via the database.
+/// Execute a DDL or DML mutation query via the database.
 ///
-/// DDL statements have no FROM clause and return empty results on success.
-/// The response uses the standard `QueryResponse` shape with zero rows.
-fn execute_ddl_query(
+/// DDL (CREATE/DROP) and DML mutations (INSERT EDGE, DELETE, DELETE EDGE)
+/// extract collection names from the SQL AST — no FROM clause needed.
+/// Returns a standard `QueryResponse` with zero rows on success.
+fn execute_mutation_query(
     state: &Arc<AppState>,
     parsed: &Query,
     params: &std::collections::HashMap<String, serde_json::Value>,
@@ -170,9 +172,9 @@ fn execute_ddl_query(
         }
         Err(e) => velesql_error(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "VELESQL_DDL_ERROR",
+            "VELESQL_MUTATION_ERROR",
             &e.to_string(),
-            "Check collection name, parameters, and whether the collection already exists",
+            "Check collection name, statement syntax, and target existence",
             None,
         ),
     }

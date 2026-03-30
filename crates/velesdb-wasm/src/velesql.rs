@@ -196,7 +196,7 @@ impl ParsedQuery {
         self.inner.select.joins.len()
     }
 
-    // === DDL/DML Introspection (VelesQL v4.0) ===
+    // === DDL/DML Introspection (VelesQL v3.3) ===
 
     /// Check if this is a DDL query (CREATE/DROP COLLECTION).
     #[wasm_bindgen(getter, js_name = isDdl)]
@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(mc.return_clause.limit, Some(10));
     }
 
-    // === DDL/DML Introspection Tests (VelesQL v4.0) ===
+    // === DDL/DML Introspection Tests (VelesQL v3.3) ===
 
     #[test]
     fn test_ddl_create_collection_detected() {
