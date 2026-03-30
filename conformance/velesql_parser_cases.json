@@ -301,6 +301,106 @@
       "id": "P059",
       "query": "LET x = similarity() MATCH (a)-[r]->(b) RETURN a LIMIT 5",
       "should_parse": true
+    },
+    {
+      "id": "P060",
+      "query": "CREATE COLLECTION docs (dimension = 768, metric = 'cosine')",
+      "should_parse": true
+    },
+    {
+      "id": "P061",
+      "query": "CREATE COLLECTION docs (dimension = 768, metric = 'cosine') WITH (storage = 'sq8')",
+      "should_parse": true
+    },
+    {
+      "id": "P062",
+      "query": "CREATE GRAPH COLLECTION kg (dimension = 768, metric = 'cosine') SCHEMALESS",
+      "should_parse": true
+    },
+    {
+      "id": "P063",
+      "query": "CREATE METADATA COLLECTION tags",
+      "should_parse": true
+    },
+    {
+      "id": "P064",
+      "query": "DROP COLLECTION docs",
+      "should_parse": true
+    },
+    {
+      "id": "P065",
+      "query": "DROP COLLECTION IF EXISTS docs",
+      "should_parse": true
+    },
+    {
+      "id": "P066",
+      "query": "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS')",
+      "should_parse": true
+    },
+    {
+      "id": "P067",
+      "query": "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS') WITH PROPERTIES (weight = 0.95)",
+      "should_parse": true
+    },
+    {
+      "id": "P068",
+      "query": "DELETE FROM docs WHERE id = 42",
+      "should_parse": true
+    },
+    {
+      "id": "P069",
+      "query": "DELETE FROM docs WHERE id IN (1, 2, 3)",
+      "should_parse": true
+    },
+    {
+      "id": "P070",
+      "query": "DELETE EDGE 123 FROM kg",
+      "should_parse": true
+    },
+    {
+      "id": "P071",
+      "query": "CREATE COLLECTION docs (dimension = 768, metric = 'euclidean')",
+      "should_parse": true
+    },
+    {
+      "id": "P072",
+      "query": "CREATE GRAPH COLLECTION kg (dimension = 768, metric = 'cosine') WITH SCHEMA (NODE Person (name: STRING), EDGE KNOWS FROM Person TO Person)",
+      "should_parse": true
+    },
+    {
+      "id": "P073",
+      "query": "CREATE COLLECTION",
+      "should_parse": false
+    },
+    {
+      "id": "P074",
+      "query": "DROP docs",
+      "should_parse": false
+    },
+    {
+      "id": "P075",
+      "query": "DELETE FROM docs",
+      "should_parse": false
+    },
+    {
+      "id": "P076",
+      "query": "DELETE EDGE FROM kg",
+      "should_parse": false
+    },
+    {
+      "id": "P077",
+      "query": "INSERT EDGE INTO",
+      "should_parse": false
+    },
+    {
+      "id": "P078",
+      "query": "CREATE TABLE docs (dimension = 768)",
+      "should_parse": false
+    },
+    {
+      "id": "P079",
+      "query": "DROP TABLE docs",
+      "should_parse": false
     }
   ]
 }

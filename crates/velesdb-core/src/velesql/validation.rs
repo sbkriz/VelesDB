@@ -35,6 +35,24 @@ impl QueryValidator {
         query: &Query,
         config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
+        // LET bindings are only meaningful for SELECT/MATCH queries.
+        // Reject them on DDL and DML statements where they are nonsensical.
+        if (query.is_ddl_query() || query.is_dml_query()) && !query.let_bindings.is_empty() {
+            return Err(ValidationError::new(
+                ValidationErrorKind::InvalidLetBinding,
+                None,
+                "LET clause",
+                "LET bindings are not supported with DDL or DML statements",
+            ));
+        }
+
+        // DDL statements (CREATE/DROP COLLECTION) bypass SELECT-specific
+        // validation — they have no FROM clause, no similarity conditions, etc.
+        if query.is_ddl_query() {
+            return Ok(());
+        }
+
+        // DML statements bypass SELECT-specific validation.
         if query.is_dml_query() {
             return Ok(());
         }

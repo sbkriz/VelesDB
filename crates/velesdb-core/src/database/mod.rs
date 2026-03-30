@@ -19,6 +19,7 @@ use crate::simd_dispatch;
 use crate::{Collection, ColumnStore, Error, Result};
 
 mod collection_ops;
+mod ddl_executor;
 mod graph_ops;
 mod metadata_ops;
 mod persistence;
@@ -34,6 +35,8 @@ mod database_helpers;
 mod collection_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod database_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod ddl_executor_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]

@@ -146,6 +146,10 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
+        if let Some(ddl) = query.ddl.as_ref() {
+            return self.execute_ddl(ddl);
+        }
+
         if let Some(train) = query.train.as_ref() {
             return self.execute_train(train);
         }
@@ -341,6 +345,9 @@ impl Database {
         match dml {
             crate::velesql::DmlStatement::Insert(stmt) => self.execute_insert(stmt, params),
             crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
+            crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
+            crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),
+            crate::velesql::DmlStatement::DeleteEdge(stmt) => self.execute_delete_edge(stmt),
         }
     }
 

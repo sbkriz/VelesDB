@@ -17,6 +17,7 @@ fn test_parse_insert_statement() {
             assert_eq!(insert.values[1], Value::String("Pen".to_string()));
         }
         DmlStatement::Update(_) => panic!("Expected INSERT statement"),
+        _ => panic!("Unexpected DML variant"),
     }
 }
 
@@ -35,5 +36,6 @@ fn test_parse_update_statement_with_where() {
             assert_eq!(update.assignments[1].column, "active");
         }
         DmlStatement::Insert(_) => panic!("Expected UPDATE statement"),
+        _ => panic!("Unexpected DML variant"),
     }
 }

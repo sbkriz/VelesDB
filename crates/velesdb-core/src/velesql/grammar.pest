@@ -8,9 +8,10 @@ COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 // LET clause: named score bindings evaluated once (VelesQL v1.10 Phase 3)
 let_clause = { ^"LET" ~ identifier ~ "=" ~ order_by_arithmetic }
 
-// Main entry point - supports SELECT, MATCH and DML (INSERT/UPDATE)
+// Main entry point - supports SELECT, MATCH, DML (INSERT/UPDATE/DELETE) and DDL (CREATE/DROP)
 // LET clauses appear zero or more times before the main statement.
-query = { SOI ~ let_clause* ~ (match_query | compound_query | train_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
+// Order matters (PEG ordered choice): insert_edge_stmt before insert_stmt, delete_edge_stmt before delete_stmt.
+query = { SOI ~ let_clause* ~ (match_query | compound_query | train_stmt | create_collection_stmt | drop_collection_stmt | insert_edge_stmt | delete_edge_stmt | delete_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
 
 // MATCH query for graph pattern matching (EPIC-045 US-001)
 // Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]
@@ -79,6 +80,66 @@ assignment = { identifier ~ "=" ~ value }
 // TRAIN statement: TRAIN QUANTIZER ON collection WITH (params)
 train_stmt = {
     ^"TRAIN" ~ ^"QUANTIZER" ~ ^"ON" ~ identifier ~ with_clause
+}
+
+// ──────────────────────────────────────────────────────────────
+// DDL statements (VelesQL v4.0)
+// ──────────────────────────────────────────────────────────────
+
+// CREATE COLLECTION: vector (default), graph, or metadata-only
+// Examples:
+//   CREATE COLLECTION docs (dimension = 768, metric = 'cosine');
+//   CREATE COLLECTION docs (dimension = 768, metric = 'cosine') WITH (storage = 'sq8', m = 16);
+//   CREATE GRAPH COLLECTION kg (dimension = 768, metric = 'cosine') SCHEMALESS;
+//   CREATE METADATA COLLECTION tags;
+create_collection_stmt = {
+    ^"CREATE" ~ collection_kind_kw? ~ ^"COLLECTION" ~ identifier ~
+    create_body?
+}
+collection_kind_kw = { ^"GRAPH" | ^"METADATA" }
+create_body = { "(" ~ create_option_list ~ ")" ~ create_suffix? }
+create_option_list = { create_option ~ ("," ~ create_option)* }
+create_option = { identifier ~ "=" ~ create_option_value }
+create_option_value = { string | float | integer | boolean | identifier }
+create_suffix = { schemaless_clause | with_schema_clause | with_clause }
+schemaless_clause = { ^"SCHEMALESS" }
+
+// WITH SCHEMA for typed graph collections
+with_schema_clause = { ^"WITH" ~ ^"SCHEMA" ~ "(" ~ schema_def_list ~ ")" }
+schema_def_list = { schema_def ~ ("," ~ schema_def)* }
+schema_def = { node_type_def | edge_type_def }
+node_type_def = { ^"NODE" ~ identifier ~ "(" ~ property_def_list ~ ")" }
+edge_type_def = { ^"EDGE" ~ identifier ~ ^"FROM" ~ identifier ~ ^"TO" ~ identifier }
+property_def_list = { property_def ~ ("," ~ property_def)* }
+property_def = { identifier ~ ":" ~ type_name }
+type_name = { ^"STRING" | ^"INTEGER" | ^"FLOAT" | ^"BOOLEAN" | ^"VECTOR" }
+
+// DROP COLLECTION [IF EXISTS] name
+drop_collection_stmt = {
+    ^"DROP" ~ ^"COLLECTION" ~ if_exists_clause? ~ identifier
+}
+if_exists_clause = { ^"IF" ~ ^"EXISTS" }
+
+// INSERT EDGE INTO collection (source = N, target = N, label = 'L')
+//   [WITH PROPERTIES (key = val, ...)]
+insert_edge_stmt = {
+    ^"INSERT" ~ ^"EDGE" ~ ^"INTO" ~ identifier ~
+    "(" ~ edge_field_list ~ ")" ~
+    edge_properties_clause?
+}
+edge_field_list = { edge_field ~ ("," ~ edge_field)* }
+edge_field = { identifier ~ "=" ~ value }
+edge_properties_clause = { ^"WITH" ~ ^"PROPERTIES" ~ "(" ~ create_option_list ~ ")" }
+
+// DELETE FROM collection WHERE condition
+// WHERE is mandatory to prevent accidental full-collection deletion.
+delete_stmt = {
+    ^"DELETE" ~ ^"FROM" ~ identifier ~ where_clause
+}
+
+// DELETE EDGE edge_id FROM collection
+delete_edge_stmt = {
+    ^"DELETE" ~ ^"EDGE" ~ value ~ ^"FROM" ~ identifier
 }
 
 // SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses

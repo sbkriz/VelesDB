@@ -1193,6 +1193,9 @@ paths:
       description: |-
         BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
         and routes them to execute_aggregate for proper handling.
+
+        DDL statements (CREATE/DROP COLLECTION) are intercepted before collection
+        resolution and dispatched directly through `Database::execute_query`.
       operationId: query
       requestBody:
         content:

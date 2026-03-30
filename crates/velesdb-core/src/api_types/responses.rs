@@ -129,6 +129,10 @@ pub enum QueryType {
     Rows,
     /// Graph pattern matching (MATCH clause).
     Graph,
+    /// DDL statement (CREATE/DROP COLLECTION) — `VelesQL` v4.0.
+    Ddl,
+    /// DML mutation (INSERT/UPDATE/DELETE) — `VelesQL` v4.0.
+    Dml,
 }
 
 /// Response from `VelesQL` query execution.

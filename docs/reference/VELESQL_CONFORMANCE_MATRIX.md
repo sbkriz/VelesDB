@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-03-15 (v1.7.0)
+> Last updated: 2026-03-30 (v4.0.0)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -46,6 +46,10 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `UNION` / `UNION ALL` | `grammar.pest:set_operator`, `ast/mod.rs:CompoundQuery` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; dedup by point ID (UNION) or keep all (UNION ALL) |
 | `INTERSECT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Intersect` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; keep only common point IDs |
 | `EXCEPT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Except` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; remove right-side IDs from left |
+| `CREATE COLLECTION` | `grammar.pest:create_collection`, `ast/ddl.rs:CreateCollectionStatement` | `database/query_engine.rs` | DDL v4.0; vector, graph, metadata collections |
+| `DROP COLLECTION` | `grammar.pest:drop_collection`, `ast/ddl.rs:DropCollectionStatement` | `database/query_engine.rs` | DDL v4.0; with IF EXISTS support |
+| `INSERT EDGE` | `grammar.pest:insert_edge`, `ast/dml.rs:InsertEdgeStatement` | `database/query_engine.rs` | Graph mutation v4.0 |
+| `DELETE EDGE` | `grammar.pest:delete_edge`, `ast/dml.rs:DeleteEdgeStatement` | `database/query_engine.rs` | Graph mutation v4.0 |
 
 ## Parsed but NOT Executed
 
@@ -69,7 +73,7 @@ parse errors.
 | Subqueries in `FROM` clause | Only collection names allowed in `FROM` |
 | `CASE WHEN ... THEN ... END` | Not in grammar |
 | `EXISTS` / `IN (subquery)` | Not in grammar |
-| `CREATE TABLE` / DDL | Collections managed via API, not SQL DDL |
+| `CREATE TABLE` / DDL (SQL-standard) | VelesQL uses `CREATE COLLECTION` instead (v4.0); SQL `CREATE TABLE` is not supported |
 | Stored procedures / functions | Not applicable |
 
 ## Conformance Test Coverage
@@ -82,3 +86,6 @@ parse errors.
 - **Aggregation tests**: `velesql/aggregation_tests.rs`
 - **DML tests**: `velesql/dml_tests.rs`
 - **MATCH tests**: `search/query/match_exec_tests.rs`
+- **DDL parse tests**: `velesql/ast_tests.rs` (CREATE/DROP COLLECTION)
+- **DDL validation tests**: `velesql/validation_tests.rs`, `velesql/validation_parity_tests.rs`
+- **Graph mutation tests**: `velesql/dml_tests.rs` (INSERT EDGE, DELETE EDGE)

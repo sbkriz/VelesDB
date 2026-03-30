@@ -4,6 +4,7 @@
 
 mod aggregation;
 pub(crate) mod condition;
+mod ddl;
 mod dml;
 mod fusion;
 mod join;
@@ -24,7 +25,14 @@ pub use condition::{
     IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, SparseVectorExpr,
     SparseVectorSearch, VectorFusedSearch, VectorSearch,
 };
-pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
+pub use ddl::{
+    CreateCollectionKind, CreateCollectionStatement, DdlStatement, DropCollectionStatement,
+    GraphCollectionParams, GraphSchemaMode, SchemaDefinition, VectorCollectionParams,
+};
+pub use dml::{
+    DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement, InsertStatement,
+    UpdateAssignment, UpdateStatement,
+};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
@@ -54,12 +62,15 @@ pub struct Query {
     /// MATCH clause for graph pattern matching (EPIC-045 US-001).
     #[serde(default)]
     pub match_clause: Option<crate::velesql::MatchClause>,
-    /// Optional DML statement (INSERT/UPDATE).
+    /// Optional DML statement (INSERT/UPDATE/DELETE).
     #[serde(default)]
     pub dml: Option<DmlStatement>,
     /// Optional TRAIN statement (TRAIN QUANTIZER).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub train: Option<TrainStatement>,
+    /// Optional DDL statement (CREATE/DROP COLLECTION) — VelesQL v4.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ddl: Option<DdlStatement>,
 }
 
 impl Query {
@@ -72,7 +83,10 @@ impl Query {
     /// Returns true if this is a SELECT query.
     #[must_use]
     pub fn is_select_query(&self) -> bool {
-        self.match_clause.is_none() && self.dml.is_none() && self.train.is_none()
+        self.match_clause.is_none()
+            && self.dml.is_none()
+            && self.train.is_none()
+            && self.ddl.is_none()
     }
 
     /// Returns true if this is a DML query.
@@ -87,6 +101,12 @@ impl Query {
         self.train.is_some()
     }
 
+    /// Returns true if this is a DDL statement (CREATE/DROP COLLECTION).
+    #[must_use]
+    pub fn is_ddl_query(&self) -> bool {
+        self.ddl.is_some()
+    }
+
     /// Creates a new SELECT query.
     #[must_use]
     pub fn new_select(select: SelectStatement) -> Self {
@@ -97,6 +117,7 @@ impl Query {
             match_clause: None,
             dml: None,
             train: None,
+            ddl: None,
         }
     }
 
@@ -113,6 +134,7 @@ impl Query {
             match_clause: Some(match_clause),
             dml: None,
             train: None,
+            ddl: None,
         }
     }
 
@@ -126,6 +148,7 @@ impl Query {
             match_clause: None,
             dml: Some(dml),
             train: None,
+            ddl: None,
         }
     }
 
@@ -139,6 +162,21 @@ impl Query {
             match_clause: None,
             dml: None,
             train: Some(train),
+            ddl: None,
+        }
+    }
+
+    /// Creates a new DDL query (CREATE/DROP COLLECTION).
+    #[must_use]
+    pub fn new_ddl(ddl: DdlStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select: SelectStatement::empty(),
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: Some(ddl),
         }
     }
 }

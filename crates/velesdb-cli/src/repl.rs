@@ -43,11 +43,26 @@ pub enum OutputFormat {
     Json,
 }
 
+/// The kind of query that was executed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum QueryKind {
+    /// Standard SELECT query.
+    Select,
+    /// DDL statement (CREATE/DROP COLLECTION).
+    Ddl,
+    /// DML statement (INSERT/UPDATE/DELETE).
+    Dml,
+    /// TRAIN statement.
+    Train,
+}
+
 /// Query execution result
 #[derive(Debug)]
 pub struct QueryResult {
     pub rows: Vec<HashMap<String, serde_json::Value>>,
     pub duration_ms: f64,
+    /// What kind of statement produced this result.
+    pub kind: QueryKind,
 }
 
 #[derive(Completer, Helper, Highlighter, Hinter, Validator)]
@@ -177,8 +192,20 @@ pub fn execute_query(
         return Ok(QueryResult {
             rows: Vec::new(),
             duration_ms,
+            kind: QueryKind::Select,
         });
     }
+
+    // Determine query kind for display purposes.
+    let kind = if parsed.is_ddl_query() {
+        QueryKind::Ddl
+    } else if parsed.is_dml_query() {
+        QueryKind::Dml
+    } else if parsed.is_train() {
+        QueryKind::Train
+    } else {
+        QueryKind::Select
+    };
 
     let params = HashMap::new();
 
@@ -225,7 +252,11 @@ pub fn execute_query(
 
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    Ok(QueryResult { rows, duration_ms })
+    Ok(QueryResult {
+        rows,
+        duration_ms,
+        kind,
+    })
 }
 
 fn contains_param_vector(condition: &velesdb_core::velesql::Condition) -> bool {
@@ -312,6 +343,7 @@ mod tests {
         let result = QueryResult {
             rows: vec![],
             duration_ms: 0.0,
+            kind: QueryKind::Select,
         };
         assert!(result.rows.is_empty());
         assert!((result.duration_ms - 0.0).abs() < f64::EPSILON);
@@ -326,11 +358,32 @@ mod tests {
         let result = QueryResult {
             rows: vec![row],
             duration_ms: 1.5,
+            kind: QueryKind::Select,
         };
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].get("id"), Some(&json!(1)));
         assert!((result.duration_ms - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_query_kind_ddl() {
+        let result = QueryResult {
+            rows: vec![],
+            duration_ms: 0.5,
+            kind: QueryKind::Ddl,
+        };
+        assert_eq!(result.kind, QueryKind::Ddl);
+    }
+
+    #[test]
+    fn test_query_kind_dml() {
+        let result = QueryResult {
+            rows: vec![],
+            duration_ms: 0.3,
+            kind: QueryKind::Dml,
+        };
+        assert_eq!(result.kind, QueryKind::Dml);
     }
 
     // =========================================================================
@@ -549,6 +602,7 @@ mod tests {
         let result = QueryResult {
             rows: vec![],
             duration_ms: 0.0,
+            kind: QueryKind::Select,
         };
         // Should not panic on empty results
         print_result(&result, "table");
@@ -563,6 +617,7 @@ mod tests {
         let result = QueryResult {
             rows: vec![row],
             duration_ms: 1.0,
+            kind: QueryKind::Select,
         };
         // Should not panic
         print_result(&result, "json");
@@ -577,6 +632,7 @@ mod tests {
         let result = QueryResult {
             rows: vec![row],
             duration_ms: 2.0,
+            kind: QueryKind::Select,
         };
         // Should not panic
         print_result(&result, "table");

@@ -46,6 +46,7 @@ impl Parser {
             match_clause: None,
             dml: None,
             train: None,
+            ddl: None,
         })
     }
 

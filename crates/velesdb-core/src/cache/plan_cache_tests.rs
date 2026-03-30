@@ -277,6 +277,7 @@ fn select_query(collection: &str) -> crate::velesql::Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
     }
 }
 

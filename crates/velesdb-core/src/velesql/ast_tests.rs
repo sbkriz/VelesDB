@@ -48,6 +48,7 @@ fn test_query_serialization() {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,

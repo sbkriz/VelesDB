@@ -1,6 +1,6 @@
 //! DML statement types for VelesQL.
 //!
-//! This module defines INSERT/UPDATE statement AST nodes.
+//! This module defines INSERT/UPDATE/DELETE and graph mutation AST nodes.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,41 @@ pub struct UpdateStatement {
     pub where_clause: Option<Condition>,
 }
 
+/// INSERT EDGE statement (VelesQL v4.0).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InsertEdgeStatement {
+    /// Target graph collection name.
+    pub collection: String,
+    /// Optional explicit edge ID.
+    pub edge_id: Option<u64>,
+    /// Source node ID.
+    pub source: u64,
+    /// Target node ID.
+    pub target: u64,
+    /// Edge label/type.
+    pub label: String,
+    /// Optional edge properties.
+    pub properties: Vec<(String, Value)>,
+}
+
+/// DELETE FROM statement (VelesQL v4.0).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteStatement {
+    /// Target collection/table name.
+    pub table: String,
+    /// WHERE clause (mandatory — prevents accidental full deletion).
+    pub where_clause: Condition,
+}
+
+/// DELETE EDGE statement (VelesQL v4.0).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteEdgeStatement {
+    /// Target graph collection name.
+    pub collection: String,
+    /// Edge ID to delete.
+    pub edge_id: u64,
+}
+
 /// DML statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DmlStatement {
@@ -44,4 +79,10 @@ pub enum DmlStatement {
     Insert(InsertStatement),
     /// UPDATE statement.
     Update(UpdateStatement),
+    /// INSERT EDGE statement (VelesQL v4.0).
+    InsertEdge(InsertEdgeStatement),
+    /// DELETE FROM statement (VelesQL v4.0).
+    Delete(DeleteStatement),
+    /// DELETE EDGE statement (VelesQL v4.0).
+    DeleteEdge(DeleteEdgeStatement),
 }

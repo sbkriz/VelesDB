@@ -2,8 +2,8 @@
 
 Canonical contract for VelesQL server endpoints and payloads.
 
-- Contract version: `3.0.0`
-- Last updated: `2026-03-04`
+- Contract version: `4.0.0`
+- Last updated: `2026-03-30`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
@@ -55,7 +55,7 @@ Success response shape:
   "result": [{ "category": "tech", "count": 42 }],
   "timing_ms": 1.12,
   "meta": {
-    "velesql_contract_version": "3.0.0",
+    "velesql_contract_version": "4.0.0",
     "count": 1
   }
 }
@@ -78,11 +78,55 @@ Success response shape:
   "took_ms": 1,
   "rows_returned": 1,
   "meta": {
-    "velesql_contract_version": "3.0.0",
+    "velesql_contract_version": "4.0.0",
     "count": 1
   }
 }
 ```
+
+### DDL and Mutation Statements via `/query`
+
+DDL statements (`CREATE COLLECTION`, `DROP COLLECTION`) and graph mutation statements
+(`INSERT EDGE`, `DELETE EDGE`) are submitted through the same `POST /query` endpoint.
+
+Request body (DDL example):
+
+```json
+{
+  "query": "CREATE COLLECTION documents (dimension = 768, metric = 'cosine') WITH (storage = 'sq8')",
+  "params": {},
+  "collection": ""
+}
+```
+
+Request body (graph mutation example):
+
+```json
+{
+  "query": "INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY') WITH PROPERTIES (year = 2026)",
+  "params": {},
+  "collection": "knowledge"
+}
+```
+
+DDL success response shape:
+
+```json
+{
+  "success": true,
+  "message": "Collection 'documents' created",
+  "timing_ms": 2.31
+}
+```
+
+DDL error response shape uses the standard VelesQL error model (see below).
+
+Rules:
+
+- DDL statements always route to `/query`, never to `/aggregate`.
+- `CREATE COLLECTION` does not require a `collection` field in the body (the collection name is in the query).
+- `DROP COLLECTION IF EXISTS` returns success even if the collection does not exist.
+- Graph mutation statements (`INSERT EDGE`, `DELETE EDGE`) require `collection` in the body.
 
 ### `POST /collections/{name}/match`
 
@@ -103,7 +147,7 @@ Success response shape:
   "took_ms": 4,
   "count": 1,
   "meta": {
-    "velesql_contract_version": "3.0.0"
+    "velesql_contract_version": "4.0.0"
   }
 }
 ```
@@ -165,6 +209,10 @@ Reference grammar:
 | `LEFT/RIGHT/FULL JOIN` | Stable | Stable |
 | `GROUP BY` / `HAVING` | Stable | Stable |
 | `UNION/INTERSECT/EXCEPT` | Stable | Stable |
+| `CREATE COLLECTION` | Stable | Stable |
+| `DROP COLLECTION [IF EXISTS]` | Stable | Stable |
+| `INSERT EDGE INTO` | Stable | Stable |
+| `DELETE EDGE ... FROM` | Stable | Stable |
 
 ## Validation Matrix
 
@@ -184,6 +232,10 @@ Each invalid case maps to an expected HTTP status and an expected error shape.
 | `GROUP BY`, `HAVING` | Supported | Supported |
 | `ORDER BY similarity()` | Supported | Supported |
 | `UNION/INTERSECT/EXCEPT` | Supported | Supported |
+| `CREATE COLLECTION` | Supported | Supported |
+| `DROP COLLECTION [IF EXISTS]` | Supported | Supported |
+| `INSERT EDGE INTO` | Supported | Supported |
+| `DELETE EDGE ... FROM` | Supported | Supported |
 
 ## Compatibility Notes
 

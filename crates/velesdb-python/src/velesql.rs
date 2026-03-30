@@ -16,7 +16,7 @@
 // Exceptions created via pyo3::create_exception! macro
 use pyo3::prelude::*;
 use velesdb_core::velesql::{
-    ParseError as CoreParseError, Parser as CoreParser, Query as CoreQuery, SelectColumns,
+    ParseError as CoreParseError, Parser as CoreParser, Query as CoreQuery,
 };
 
 // VelesQL syntax error exception.
@@ -123,6 +123,45 @@ impl ParsedStatement {
     ///     bool: True if this is a MATCH query
     fn is_match(&self) -> bool {
         self.inner.is_match_query()
+    }
+
+    /// Check if this is a DDL statement (CREATE/DROP COLLECTION).
+    ///
+    /// Returns:
+    ///     bool: True if this is a DDL statement
+    fn is_ddl(&self) -> bool {
+        self.inner.is_ddl_query()
+    }
+
+    /// Check if this is a DML statement (INSERT/UPDATE/DELETE).
+    ///
+    /// Returns:
+    ///     bool: True if this is a DML statement
+    fn is_dml(&self) -> bool {
+        self.inner.is_dml_query()
+    }
+
+    /// Check if this is a DELETE statement.
+    ///
+    /// Returns:
+    ///     bool: True if this is a DELETE or DELETE EDGE statement
+    fn is_delete(&self) -> bool {
+        matches!(
+            &self.inner.dml,
+            Some(velesdb_core::velesql::DmlStatement::Delete(_))
+                | Some(velesdb_core::velesql::DmlStatement::DeleteEdge(_))
+        )
+    }
+
+    /// Check if this is an INSERT EDGE statement.
+    ///
+    /// Returns:
+    ///     bool: True if this is an INSERT EDGE statement
+    fn is_insert_edge(&self) -> bool {
+        matches!(
+            &self.inner.dml,
+            Some(velesdb_core::velesql::DmlStatement::InsertEdge(_))
+        )
     }
 
     /// Get the table name from the FROM clause.
@@ -303,20 +342,16 @@ impl ParsedStatement {
 
     /// Get a string representation of the parsed query.
     fn __repr__(&self) -> String {
-        let query_type = if self.is_match() { "MATCH" } else { "SELECT" };
+        let query_type = self.query_type_label();
         let table = self.table_name().unwrap_or_else(|| "<graph>".to_string());
-        format!("ParsedStatement({} FROM {})", query_type, table)
+        format!("ParsedStatement({query_type} FROM {table})")
     }
 
     /// Get a detailed string representation.
     fn __str__(&self) -> String {
         let mut parts = Vec::new();
 
-        if self.is_match() {
-            parts.push("Type: MATCH (graph query)".to_string());
-        } else {
-            parts.push("Type: SELECT".to_string());
-        }
+        parts.push(format!("Type: {}", self.query_type_label()));
 
         if let Some(table) = self.table_name() {
             parts.push(format!("Table: {}", table));
@@ -346,6 +381,21 @@ impl ParsedStatement {
 }
 
 impl ParsedStatement {
+    /// Returns a human-readable label for the query type.
+    fn query_type_label(&self) -> &'static str {
+        if self.inner.is_ddl_query() {
+            "DDL"
+        } else if self.inner.is_dml_query() {
+            "DML"
+        } else if self.inner.is_train() {
+            "TRAIN"
+        } else if self.inner.is_match_query() {
+            "MATCH"
+        } else {
+            "SELECT"
+        }
+    }
+
     /// Recursively check if a condition contains vector search.
     fn condition_has_vector_search(cond: &velesdb_core::velesql::Condition) -> bool {
         use velesdb_core::velesql::Condition;
@@ -456,5 +506,79 @@ mod tests {
         assert!(result.is_ok());
         let query = result.unwrap();
         assert!(query.select.group_by.is_some());
+    }
+
+    #[test]
+    fn test_is_ddl_create_collection() {
+        let query =
+            CoreParser::parse("CREATE COLLECTION docs (dimension = 128, metric = 'cosine')")
+                .unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert!(stmt.is_ddl());
+        assert!(!stmt.is_select());
+        assert!(!stmt.is_dml());
+    }
+
+    #[test]
+    fn test_is_ddl_drop_collection() {
+        let query = CoreParser::parse("DROP COLLECTION docs").unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert!(stmt.is_ddl());
+        assert!(!stmt.is_select());
+    }
+
+    #[test]
+    fn test_is_delete() {
+        let query = CoreParser::parse("DELETE FROM docs WHERE category = 'old'").unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert!(stmt.is_delete());
+        assert!(stmt.is_dml());
+        assert!(!stmt.is_ddl());
+        assert!(!stmt.is_select());
+    }
+
+    #[test]
+    fn test_is_insert_edge() {
+        let query =
+            CoreParser::parse("INSERT EDGE INTO kg (source = 1, target = 2, label = 'related')")
+                .unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert!(stmt.is_insert_edge());
+        assert!(stmt.is_dml());
+        assert!(!stmt.is_ddl());
+    }
+
+    #[test]
+    fn test_select_is_not_ddl_nor_dml() {
+        let query = CoreParser::parse("SELECT * FROM docs LIMIT 10").unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert!(!stmt.is_ddl());
+        assert!(!stmt.is_dml());
+        assert!(!stmt.is_delete());
+        assert!(!stmt.is_insert_edge());
+        assert!(stmt.is_select());
+    }
+
+    #[test]
+    fn test_query_type_label_ddl() {
+        let query =
+            CoreParser::parse("CREATE COLLECTION docs (dimension = 128, metric = 'cosine')")
+                .unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert_eq!(stmt.query_type_label(), "DDL");
+    }
+
+    #[test]
+    fn test_query_type_label_dml() {
+        let query = CoreParser::parse("DELETE FROM docs WHERE id = 1").unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert_eq!(stmt.query_type_label(), "DML");
+    }
+
+    #[test]
+    fn test_query_type_label_select() {
+        let query = CoreParser::parse("SELECT * FROM docs LIMIT 10").unwrap();
+        let stmt = ParsedStatement { inner: query };
+        assert_eq!(stmt.query_type_label(), "SELECT");
     }
 }

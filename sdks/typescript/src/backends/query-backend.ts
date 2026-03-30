@@ -76,6 +76,13 @@ export function isLikelyAggregationQuery(queryString: string): boolean {
   );
 }
 
+/** Detect DDL or mutation statements that must always route to `/query`. */
+export function isLikelyDdlOrMutationQuery(queryString: string): boolean {
+  return /^\s*(CREATE|DROP)\s+(COLLECTION|GRAPH|METADATA)\b/i.test(queryString)
+    || /^\s*DELETE\s+(FROM|EDGE)\b/i.test(queryString)
+    || /^\s*INSERT\s+EDGE\b/i.test(queryString);
+}
+
 export async function query(
   transport: QueryTransport,
   collection: string,
@@ -83,7 +90,11 @@ export async function query(
   params?: Record<string, unknown>,
   options?: QueryOptions
 ): Promise<QueryApiResponse> {
-  const endpoint = isLikelyAggregationQuery(queryString) ? '/aggregate' : '/query';
+  const endpoint = isLikelyDdlOrMutationQuery(queryString)
+    ? '/query'
+    : isLikelyAggregationQuery(queryString)
+    ? '/aggregate'
+    : '/query';
   const response = await transport.requestJson<Record<string, unknown>>(
     'POST',
     endpoint,

@@ -15,43 +15,40 @@ use crate::velesql::Parser;
 impl Parser {
     pub(crate) fn parse_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, ParseError> {
         let mut let_bindings = Vec::new();
-        let inner = pair.into_inner();
-        for p in inner {
-            match p.as_rule() {
-                Rule::let_clause => let_bindings.push(Self::parse_let_clause(p)?),
-                Rule::match_query => {
-                    let mut q = Self::parse_match_query(p)?;
-                    q.let_bindings = let_bindings;
-                    return Ok(q);
-                }
-                Rule::compound_query => {
-                    let mut q = Self::parse_compound_query(p)?;
-                    q.let_bindings = let_bindings;
-                    return Ok(q);
-                }
-                Rule::train_stmt => {
-                    let mut q = Self::parse_train_stmt(p)?;
-                    q.let_bindings = let_bindings;
-                    return Ok(q);
-                }
-                Rule::insert_stmt => {
-                    let mut q = Self::parse_insert_stmt(p)?;
-                    q.let_bindings = let_bindings;
-                    return Ok(q);
-                }
-                Rule::update_stmt => {
-                    let mut q = Self::parse_update_stmt(p)?;
-                    q.let_bindings = let_bindings;
-                    return Ok(q);
-                }
-                _ => {}
+        for p in pair.into_inner() {
+            if p.as_rule() == Rule::let_clause {
+                let_bindings.push(Self::parse_let_clause(p)?);
+            } else {
+                let mut q = Self::dispatch_statement(p)?;
+                q.let_bindings = let_bindings;
+                return Ok(q);
             }
         }
         Err(ParseError::syntax(
             0,
             "",
-            "Expected MATCH, SELECT, INSERT, UPDATE, or TRAIN query",
+            "Expected MATCH, SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
         ))
+    }
+
+    /// Routes a top-level statement pair to the appropriate parser method.
+    ///
+    /// Each arm delegates to a dedicated `parse_*` method that owns the full
+    /// parsing logic for that statement type. This keeps `parse_query` at CC 3.
+    fn dispatch_statement(p: pest::iterators::Pair<Rule>) -> Result<Query, ParseError> {
+        match p.as_rule() {
+            Rule::match_query => Self::parse_match_query(p),
+            Rule::compound_query => Self::parse_compound_query(p),
+            Rule::train_stmt => Self::parse_train_stmt(p),
+            Rule::create_collection_stmt => Self::parse_create_collection_stmt(p),
+            Rule::drop_collection_stmt => Self::parse_drop_collection_stmt(p),
+            Rule::insert_edge_stmt => Self::parse_insert_edge_stmt(p),
+            Rule::delete_edge_stmt => Self::parse_delete_edge_stmt(p),
+            Rule::delete_stmt => Self::parse_delete_stmt(p),
+            Rule::insert_stmt => Self::parse_insert_stmt(p),
+            Rule::update_stmt => Self::parse_update_stmt(p),
+            _ => Err(ParseError::syntax(0, "", "Unknown statement type")),
+        }
     }
 
     /// Parses a single `LET name = expr` clause (VelesQL v1.10 Phase 3).

@@ -395,8 +395,10 @@ pub async fn hybrid_search<R: Runtime>(
 ///
 /// Supports SELECT-style `VelesQL` queries with vector similarity search.
 /// Aggregation queries (GROUP BY, COUNT, etc.) are auto-detected and routed
-/// to `execute_aggregate()`. MATCH queries are not yet supported through
+/// to `execute_aggregate()`. DDL/DML/TRAIN queries are dispatched directly
+/// to `Database::execute_query`. MATCH queries are not yet supported through
 /// this endpoint. Returns results in `HybridResult` format.
+#[allow(clippy::too_many_lines)]
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,
@@ -416,6 +418,35 @@ pub async fn query<R: Runtime>(
              Use graph-specific commands instead."
                 .to_string(),
         )));
+    }
+
+    // DDL/DML/TRAIN queries are dispatched through Database::execute_query
+    // which handles them internally (no collection lookup needed).
+    if parsed.is_ddl_query() || parsed.is_dml_query() || parsed.is_train() {
+        let results = state
+            .with_db(|db| {
+                let search_results = db
+                    .execute_query(&parsed, &request.params)
+                    .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
+
+                Ok(search_results
+                    .into_iter()
+                    .map(|r| HybridResult {
+                        node_id: r.point.id,
+                        vector_score: Some(r.score),
+                        graph_score: None,
+                        fused_score: r.score,
+                        bindings: r.point.payload.clone(),
+                        column_data: None,
+                    })
+                    .collect::<Vec<_>>())
+            })
+            .map_err(CommandError::from)?;
+
+        return Ok(QueryResponse {
+            results,
+            timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+        });
     }
 
     let collection_name = &parsed.select.from;

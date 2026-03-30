@@ -40,6 +40,8 @@ mod complex_parser_tests;
 #[cfg(feature = "persistence")]
 mod cost_estimator;
 #[cfg(test)]
+mod ddl_tests;
+#[cfg(test)]
 mod distinct_tests;
 #[cfg(test)]
 mod dml_tests;
@@ -133,18 +135,28 @@ pub use ast::{
     Condition,
     // Values (used by cli, wasm)
     CorrelatedColumn,
-    DistinctMode,
+    // DDL (VelesQL v4.0 — used by database ddl_executor)
+    CreateCollectionKind,
+    CreateCollectionStatement,
+    DdlStatement,
     // DML (used by database execute_dml)
+    DeleteEdgeStatement,
+    DeleteStatement,
+    DistinctMode,
     DmlStatement,
+    DropCollectionStatement,
     // Fusion
     FusionClause,
     FusionConfig,
     FusionStrategyType,
+    GraphCollectionParams,
     GraphMatchPredicate,
+    GraphSchemaMode,
     GroupByClause,
     HavingClause,
     HavingCondition,
     InCondition,
+    InsertEdgeStatement,
     InsertStatement,
     IntervalUnit,
     IntervalValue,
@@ -161,6 +173,7 @@ pub use ast::{
     // WITH clause
     QuantizationMode,
     Query,
+    SchemaDefinition,
     SelectColumns,
     SelectOrderBy,
     SelectStatement,
@@ -177,6 +190,7 @@ pub use ast::{
     UpdateAssignment,
     UpdateStatement,
     Value,
+    VectorCollectionParams,
     VectorExpr,
     VectorFusedSearch,
     VectorSearch,

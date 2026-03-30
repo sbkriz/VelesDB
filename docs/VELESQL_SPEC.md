@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 3.2.0 | **Last Updated**: 2026-03-29
+**Version**: 4.0.0 | **Last Updated**: 2026-03-30
 
 ## Overview
 
@@ -33,6 +33,11 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | ORDER BY arithmetic scoring | ✅ Stable | 3.0 |
 | LET score bindings | ✅ Stable | 3.2 |
 | Agent Memory VelesQL queries | ✅ Stable | 3.2 |
+| CREATE COLLECTION | ✅ Stable | 4.0 |
+| DROP COLLECTION | ✅ Stable | 4.0 |
+| INSERT EDGE graph mutation | ✅ Stable | 4.0 |
+| DELETE FROM statement | ✅ Stable | 4.0 |
+| DELETE EDGE graph mutation | ✅ Stable | 4.0 |
 | Table aliases | 🔜 Planned | - |
 
 ### REST Contract Notes
@@ -979,6 +984,9 @@ SELECT id AS `select` FROM docs
 | `WITH`, `AS` | Options and aliases |
 | `NEAR`, `NEAR_FUSED`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
 | `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions (`FUSE` reserved for planned syntax) |
+| `CREATE`, `DROP`, `COLLECTION`, `GRAPH`, `METADATA` | DDL keywords (v4.0) |
+| `EDGE`, `SCHEMALESS`, `SCHEMA`, `NODE`, `PROPERTIES` | DDL/graph mutation keywords (v4.0) |
+| `IF`, `EXISTS` | Conditional DDL (v4.0) |
 
 ## Grammar (EBNF) - v2.2
 
@@ -1081,6 +1089,34 @@ fusion_param    = identifier "=" value ;
 train_quantizer = "TRAIN" "QUANTIZER" "ON" identifier "WITH" "(" train_params ")" ;
 train_params    = train_param { "," train_param } ;
 train_param     = identifier "=" integer ;
+
+(* DDL statements — v4.0 *)
+create_collection = "CREATE" ["GRAPH" | "METADATA"] "COLLECTION" identifier
+                    [ "(" collection_params ")" ]
+                    [ "WITH" "(" with_options ")" ]
+                    [ "SCHEMALESS" ]
+                    [ "WITH" "SCHEMA" "(" schema_defs ")" ] ;
+collection_params = collection_param { "," collection_param } ;
+collection_param  = identifier "=" value ;
+schema_defs       = schema_def { "," schema_def } ;
+schema_def        = ("NODE" identifier "(" typed_fields ")")
+                  | ("EDGE" identifier "FROM" identifier "TO" identifier) ;
+typed_fields      = typed_field { "," typed_field } ;
+typed_field       = identifier ":" type_name ;
+type_name         = "STRING" | "INTEGER" | "FLOAT" | "BOOLEAN" ;
+
+drop_collection   = "DROP" "COLLECTION" ["IF" "EXISTS"] identifier ;
+
+(* Graph mutation statements — v4.0 *)
+insert_edge       = "INSERT" "EDGE" "INTO" identifier
+                    "(" edge_params ")"
+                    [ "WITH" "PROPERTIES" "(" kv_pairs ")" ] ;
+edge_params       = edge_param { "," edge_param } ;
+edge_param        = identifier "=" value ;
+kv_pairs          = kv_pair { "," kv_pair } ;
+kv_pair           = identifier "=" value ;
+
+delete_edge       = "DELETE" "EDGE" integer "FROM" identifier ;
 
 (* Values *)
 value           = string | number | boolean | "NULL" | vector_literal ;
@@ -1316,6 +1352,113 @@ let results = agent_memory.query_semantic(
 
 All three subsystems support: vector NEAR, payload filters, ORDER BY, LIMIT/OFFSET,
 WITH options, LET bindings, and USING FUSION.
+
+## DDL Statements (v4.0+)
+
+VelesQL supports Data Definition Language statements for managing collections directly from SQL syntax.
+
+### CREATE COLLECTION
+
+Create vector, graph, or metadata-only collections.
+
+```sql
+-- Vector collection
+CREATE COLLECTION documents (
+  dimension = 768,
+  metric = 'cosine'
+) WITH (storage = 'sq8', m = 16, ef_construction = 200);
+
+-- Graph collection (schemaless)
+CREATE GRAPH COLLECTION knowledge (
+  dimension = 768,
+  metric = 'cosine'
+) SCHEMALESS;
+
+-- Graph collection (typed schema)
+CREATE GRAPH COLLECTION knowledge (
+  dimension = 768,
+  metric = 'cosine'
+) WITH SCHEMA (
+  NODE Person (name: STRING, age: INTEGER),
+  NODE Document (title: STRING),
+  EDGE AUTHORED_BY FROM Person TO Document
+);
+
+-- Metadata-only collection
+CREATE METADATA COLLECTION tags;
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `dimension` | integer | Yes (vector/graph) | Vector embedding dimension |
+| `metric` | string | No (default: `cosine`) | Distance metric: `cosine`, `euclidean`, `dot` |
+
+#### WITH Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `storage` | string | Storage mode: `full`, `sq8`, `binary` |
+| `m` | integer | HNSW M parameter (links per node) |
+| `ef_construction` | integer | HNSW ef_construction parameter |
+
+### DROP COLLECTION
+
+```sql
+-- Drop collection (error if not found)
+DROP COLLECTION documents;
+
+-- Drop collection (no error if absent)
+DROP COLLECTION IF EXISTS documents;
+```
+
+## Graph Mutation Statements (v4.0+)
+
+### INSERT EDGE
+
+Insert a labeled edge between two nodes in a graph collection.
+
+```sql
+-- Insert edge
+INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY')
+  WITH PROPERTIES (year = 2026, confidence = 0.95);
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source` | integer | Yes | Source node ID |
+| `target` | integer | Yes | Target node ID |
+| `label` | string | Yes | Edge relationship type |
+
+#### WITH PROPERTIES
+
+Optional key-value pairs attached to the edge. Values can be strings, integers, or floats.
+
+### DELETE EDGE
+
+Remove an edge by its ID from a graph collection.
+
+```sql
+-- Delete edge
+DELETE EDGE 123 FROM knowledge;
+```
+
+## DELETE Statement (v4.0+)
+
+Delete points from a collection by ID.
+
+```sql
+-- Delete by ID
+DELETE FROM documents WHERE id = 42;
+
+-- Delete multiple
+DELETE FROM documents WHERE id IN (1, 2, 3);
+```
+
+The DELETE statement supports `WHERE id = <value>` and `WHERE id IN (<values>)` predicates. Arbitrary WHERE conditions are not supported for DELETE in the current version.
 
 ## TRAIN QUANTIZER Command (v2.2+)
 

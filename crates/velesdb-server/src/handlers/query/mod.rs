@@ -84,6 +84,9 @@ fn execute_aggregation_query(
 ///
 /// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
 /// and routes them to execute_aggregate for proper handling.
+///
+/// DDL statements (CREATE/DROP COLLECTION) are intercepted before collection
+/// resolution and dispatched directly through `Database::execute_query`.
 #[utoipa::path(
     post,
     path = "/query",
@@ -108,6 +111,11 @@ pub async fn query(
         Err(resp) => return resp,
     };
 
+    // DDL bypass: CREATE/DROP COLLECTION has no FROM clause — dispatch directly.
+    if parsed.is_ddl_query() {
+        return execute_ddl_query(&state, &parsed, &req.params, start);
+    }
+
     let collection_name = match resolve_collection_name(&parsed, &req) {
         Ok(name) => name,
         Err(resp) => return resp,
@@ -130,6 +138,44 @@ pub async fn query(
         results,
         &parsed.select.columns,
     )
+}
+
+/// Execute a DDL query (CREATE/DROP COLLECTION) via the database.
+///
+/// DDL statements have no FROM clause and return empty results on success.
+/// The response uses the standard `QueryResponse` shape with zero rows.
+fn execute_ddl_query(
+    state: &Arc<AppState>,
+    parsed: &Query,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+    start: std::time::Instant,
+) -> axum::response::Response {
+    match state.db.execute_query(parsed, params) {
+        Ok(_) => {
+            let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
+            let took_ms = timing_ms.round() as u64;
+            Json(QueryResponse {
+                results: Vec::new(),
+                timing_ms,
+                took_ms,
+                rows_returned: 0,
+                meta: QueryResponseMeta {
+                    velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+                    count: 0,
+                },
+            })
+            .into_response()
+        }
+        Err(e) => velesql_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VELESQL_DDL_ERROR",
+            &e.to_string(),
+            "Check collection name, parameters, and whether the collection already exists",
+            None,
+        ),
+    }
 }
 
 /// Determine the target collection from the parsed query and request body.
@@ -297,12 +343,22 @@ fn resolve_aggregate_collection(
 /// Detect query type from parsed AST (EPIC-052 US-006).
 ///
 /// Priority order:
-/// 1. MATCH clause -> Graph
-/// 2. GROUP BY or aggregates -> Aggregation
-/// 3. Vector search -> Search
-/// 4. Default -> Rows
+/// 1. DDL (CREATE/DROP COLLECTION) -> Ddl
+/// 2. DML (INSERT/UPDATE/DELETE) -> Dml
+/// 3. MATCH clause -> Graph
+/// 4. GROUP BY or aggregates -> Aggregation
+/// 5. Vector search -> Search
+/// 6. Default -> Rows
 #[allow(dead_code)] // Used in tests, will be used in unified handler
 pub fn detect_query_type(query: &Query) -> QueryType {
+    if query.is_ddl_query() {
+        return QueryType::Ddl;
+    }
+
+    if query.is_dml_query() {
+        return QueryType::Dml;
+    }
+
     if query.is_match_query() {
         return QueryType::Graph;
     }
@@ -369,5 +425,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(detect_query_type(&parsed), QueryType::Aggregation);
+    }
+
+    #[test]
+    fn test_detect_query_type_ddl_create() {
+        let parsed =
+            velesql::Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'cosine');")
+                .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Ddl);
+    }
+
+    #[test]
+    fn test_detect_query_type_ddl_drop() {
+        let parsed = velesql::Parser::parse("DROP COLLECTION docs;").unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Ddl);
+    }
+
+    #[test]
+    fn test_detect_query_type_dml_insert_edge() {
+        let parsed = velesql::Parser::parse(
+            "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS');",
+        )
+        .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Dml);
+    }
+
+    #[test]
+    fn test_detect_query_type_dml_delete() {
+        let parsed = velesql::Parser::parse("DELETE FROM docs WHERE id = 1;").unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Dml);
     }
 }
