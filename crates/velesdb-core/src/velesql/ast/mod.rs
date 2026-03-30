@@ -27,8 +27,9 @@ pub use condition::{
     SparseVectorSearch, VectorFusedSearch, VectorSearch,
 };
 pub use ddl::{
-    CreateCollectionKind, CreateCollectionStatement, DdlStatement, DropCollectionStatement,
-    GraphCollectionParams, GraphSchemaMode, SchemaDefinition, VectorCollectionParams,
+    CreateCollectionKind, CreateCollectionStatement, CreateIndexStatement, DdlStatement,
+    DropCollectionStatement, DropIndexStatement, GraphCollectionParams, GraphSchemaMode,
+    SchemaDefinition, VectorCollectionParams,
 };
 pub use dml::{
     DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement, InsertStatement,

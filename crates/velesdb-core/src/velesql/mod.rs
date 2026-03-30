@@ -113,6 +113,8 @@ mod velesql_v2_integration_tests;
 mod with_options_tests;
 
 #[cfg(test)]
+mod index_ddl_tests;
+#[cfg(test)]
 mod introspection_tests;
 
 #[cfg(test)]
@@ -158,6 +160,7 @@ pub use ast::{
     // DDL (VelesQL v3.3 -- used by database ddl_executor)
     CreateCollectionKind,
     CreateCollectionStatement,
+    CreateIndexStatement,
     DdlStatement,
     // DML (used by database execute_dml)
     DeleteEdgeStatement,
@@ -167,6 +170,7 @@ pub use ast::{
     DistinctMode,
     DmlStatement,
     DropCollectionStatement,
+    DropIndexStatement,
     // Fusion
     FusionClause,
     FusionConfig,

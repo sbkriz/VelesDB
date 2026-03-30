@@ -11,6 +11,10 @@ pub enum DdlStatement {
     CreateCollection(CreateCollectionStatement),
     /// DROP COLLECTION statement.
     DropCollection(DropCollectionStatement),
+    /// CREATE INDEX ON collection (field) -- secondary metadata index.
+    CreateIndex(CreateIndexStatement),
+    /// DROP INDEX ON collection (field) -- remove secondary metadata index.
+    DropIndex(DropIndexStatement),
 }
 
 /// CREATE COLLECTION statement.
@@ -96,4 +100,22 @@ pub struct DropCollectionStatement {
     pub name: String,
     /// Whether IF EXISTS was specified.
     pub if_exists: bool,
+}
+
+/// CREATE INDEX statement -- secondary metadata index on a payload field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateIndexStatement {
+    /// Target collection name.
+    pub collection: String,
+    /// Payload field to index.
+    pub field: String,
+}
+
+/// DROP INDEX statement -- remove secondary metadata index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DropIndexStatement {
+    /// Target collection name.
+    pub collection: String,
+    /// Payload field whose index to drop.
+    pub field: String,
 }

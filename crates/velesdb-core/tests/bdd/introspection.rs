@@ -263,9 +263,7 @@ fn test_describe_collection_with_data() {
     )
     .expect("create");
 
-    let vc = db
-        .get_vector_collection("indexed")
-        .expect("get collection");
+    let vc = db.get_vector_collection("indexed").expect("get collection");
     vc.upsert(vec![
         Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None),
         Point::new(2, vec![0.0, 1.0, 0.0, 0.0], None),
@@ -282,7 +280,11 @@ fn test_describe_collection_with_data() {
         .as_ref()
         .and_then(|p| p.get("point_count"))
         .and_then(serde_json::Value::as_u64);
-    assert_eq!(point_count, Some(3), "point_count should reflect inserted data");
+    assert_eq!(
+        point_count,
+        Some(3),
+        "point_count should reflect inserted data"
+    );
 }
 
 /// DESCRIBE with HNSW params — verify custom M and ef_construction are shown.
@@ -435,7 +437,12 @@ fn test_explain_metadata_only_query() {
 
     assert_eq!(results.len(), 1);
     assert!(
-        results[0].point.payload.as_ref().and_then(|p| p.get("plan")).is_some(),
+        results[0]
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("plan"))
+            .is_some(),
         "plan field should be present"
     );
 }

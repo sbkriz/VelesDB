@@ -12,7 +12,7 @@ let_clause = { ^"LET" ~ identifier ~ "=" ~ order_by_arithmetic }
 // LET clauses appear zero or more times before the main statement.
 // Order matters (PEG ordered choice): insert_edge_stmt before insert_stmt, delete_edge_stmt before delete_stmt.
 // Introspection statements are placed first since SHOW/DESCRIBE/EXPLAIN do not conflict with any existing first-token.
-query = { SOI ~ let_clause* ~ (show_collections_stmt | describe_stmt | explain_stmt | match_query | compound_query | train_stmt | create_collection_stmt | drop_collection_stmt | insert_edge_stmt | delete_edge_stmt | delete_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
+query = { SOI ~ let_clause* ~ (show_collections_stmt | describe_stmt | explain_stmt | match_query | compound_query | train_stmt | create_index_stmt | create_collection_stmt | drop_index_stmt | drop_collection_stmt | insert_edge_stmt | delete_edge_stmt | delete_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
 
 // ──────────────────────────────────────────────────────────────
 // Introspection statements (VelesQL v3.4)
@@ -99,6 +99,12 @@ train_stmt = {
 // ──────────────────────────────────────────────────────────────
 // DDL statements (VelesQL v3.3)
 // ──────────────────────────────────────────────────────────────
+
+// CREATE INDEX ON collection (field) — secondary metadata index
+create_index_stmt = { ^"CREATE" ~ ^"INDEX" ~ ^"ON" ~ identifier ~ "(" ~ identifier ~ ")" }
+
+// DROP INDEX ON collection (field) — remove secondary metadata index
+drop_index_stmt = { ^"DROP" ~ ^"INDEX" ~ ^"ON" ~ identifier ~ "(" ~ identifier ~ ")" }
 
 // CREATE COLLECTION: vector (default), graph, or metadata-only
 // Examples:

@@ -27,7 +27,7 @@ impl Parser {
         Err(ParseError::syntax(
             0,
             "",
-            "Expected SHOW, DESCRIBE, EXPLAIN, MATCH, SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
+            "Expected SHOW, DESCRIBE, EXPLAIN, MATCH, SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, CREATE INDEX, DROP INDEX, or TRAIN query",
         ))
     }
 
@@ -43,7 +43,9 @@ impl Parser {
             Rule::match_query => Self::parse_match_query(p),
             Rule::compound_query => Self::parse_compound_query(p),
             Rule::train_stmt => Self::parse_train_stmt(p),
+            Rule::create_index_stmt => Self::parse_create_index_stmt(p),
             Rule::create_collection_stmt => Self::parse_create_collection_stmt(p),
+            Rule::drop_index_stmt => Self::parse_drop_index_stmt(p),
             Rule::drop_collection_stmt => Self::parse_drop_collection_stmt(p),
             Rule::insert_edge_stmt => Self::parse_insert_edge_stmt(p),
             Rule::delete_edge_stmt => Self::parse_delete_edge_stmt(p),

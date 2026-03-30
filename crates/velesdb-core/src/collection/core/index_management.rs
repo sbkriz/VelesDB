@@ -35,6 +35,15 @@ impl Collection {
         Ok(())
     }
 
+    /// Drops a secondary metadata index for a payload field.
+    ///
+    /// Returns `true` if the index existed and was removed, `false` if no
+    /// such index existed.
+    #[must_use]
+    pub fn drop_secondary_index(&self, field_name: &str) -> bool {
+        self.secondary_indexes.write().remove(field_name).is_some()
+    }
+
     /// Checks whether a secondary metadata index exists for a field.
     #[must_use]
     pub fn has_secondary_index(&self, field_name: &str) -> bool {

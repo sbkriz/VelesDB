@@ -265,7 +265,10 @@ fn test_describe_with_quoted_identifier() {
     else {
         panic!("Expected DescribeCollection variant");
     };
-    assert_eq!(desc.name, "select", "quoted keyword should be unquoted in AST");
+    assert_eq!(
+        desc.name, "select",
+        "quoted keyword should be unquoted in AST"
+    );
 }
 
 #[test]

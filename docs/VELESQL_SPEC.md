@@ -56,6 +56,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | SHOW COLLECTIONS | Stable | 3.4 |
 | DESCRIBE COLLECTION | Stable | 3.4 |
 | EXPLAIN query plan | Stable | 3.4 |
+| CREATE INDEX / DROP INDEX | Stable | 3.5 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -1445,6 +1446,43 @@ DROP COLLECTION documents
 DROP COLLECTION IF EXISTS documents
 ```
 
+### Index Management (v3.5+)
+
+Create or drop secondary metadata indexes on collection payload fields.
+Secondary indexes use a BTree structure for O(log n) equality lookups on
+metadata fields, accelerating WHERE-clause filters.
+
+#### CREATE INDEX
+
+```sql
+-- Create a secondary index on a metadata field
+CREATE INDEX ON docs (category)
+
+-- Case-insensitive keywords
+create index on docs (status)
+```
+
+Index creation is **idempotent** -- creating an index that already exists is a
+no-op.
+
+#### DROP INDEX
+
+```sql
+-- Remove a secondary metadata index
+DROP INDEX ON docs (category)
+```
+
+Dropping a non-existent index succeeds silently (no error).
+
+#### Notes
+
+- Secondary indexes only apply to **metadata payload fields** (not vector data).
+- Indexes accelerate equality filters in WHERE clauses (e.g., `WHERE category = 'tech'`).
+- The indexed field must already contain data for the index to be populated on
+  subsequent upserts. Existing data is not retroactively indexed.
+- Indexes are in-memory only; they are not persisted to disk in the current
+  implementation.
+
 ---
 
 ## DML Statements (INSERT, UPDATE, DELETE)
@@ -1880,6 +1918,8 @@ VelesQL returns structured errors:
 | `DELETE EDGE` | Remove graph edge | `DELETE EDGE 123 FROM kg` |
 | `CREATE COLLECTION` | Create collection | `CREATE COLLECTION docs (dimension=768)` |
 | `DROP COLLECTION` | Delete collection | `DROP COLLECTION IF EXISTS docs` |
+| `CREATE INDEX` | Add metadata index | `CREATE INDEX ON docs (category)` |
+| `DROP INDEX` | Remove metadata index | `DROP INDEX ON docs (category)` |
 | `TRAIN QUANTIZER` | Train compression | `TRAIN QUANTIZER ON docs WITH (m=8, k=256)` |
 | `SHOW COLLECTIONS` | List collections | `SHOW COLLECTIONS` |
 | `DESCRIBE` | Collection metadata | `DESCRIBE COLLECTION docs` |
@@ -2112,6 +2152,12 @@ CREATE METADATA COLLECTION tags
 
 -- Drop collection safely
 DROP COLLECTION IF EXISTS old_data
+
+-- Create a secondary index on a metadata field
+CREATE INDEX ON documents (category)
+
+-- Drop a secondary index
+DROP INDEX ON documents (category)
 ```
 
 ### Data Manipulation (DML)
@@ -2199,7 +2245,7 @@ TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
 
 ---
 
-## EBNF Grammar (v3.3)
+## EBNF Grammar (v3.5)
 
 ```ebnf
 (* ═══════════════════════════════════════════════════════ *)
@@ -2208,7 +2254,8 @@ TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
 
 query             = let_clause* (show_collections_stmt | describe_stmt
                     | explain_stmt | match_query | compound_query | train_stmt
-                    | create_collection_stmt | drop_collection_stmt
+                    | create_index_stmt | create_collection_stmt
+                    | drop_index_stmt | drop_collection_stmt
                     | insert_edge_stmt | delete_edge_stmt
                     | delete_stmt | insert_stmt | update_stmt) [";"] ;
 
@@ -2442,8 +2489,11 @@ edge_field        = identifier "=" value ;
 delete_edge_stmt  = "DELETE" "EDGE" value "FROM" identifier ;
 
 (* ═══════════════════════════════════════════════════════ *)
-(* DDL: CREATE / DROP COLLECTION (v3.3)                   *)
+(* DDL: CREATE / DROP COLLECTION, INDEX (v3.3 / v3.5)     *)
 (* ═══════════════════════════════════════════════════════ *)
+
+create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
+drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
 
 create_collection_stmt = "CREATE" ["GRAPH" | "METADATA"] "COLLECTION" identifier
                          [create_body] ;

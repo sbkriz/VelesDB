@@ -446,6 +446,26 @@
       "id": "P088",
       "query": "EXPLAIN MATCH (a)-[:REL]->(b) RETURN a",
       "should_parse": false
+    },
+    {
+      "id": "P089",
+      "query": "CREATE INDEX ON docs (category)",
+      "should_parse": true
+    },
+    {
+      "id": "P090",
+      "query": "DROP INDEX ON docs (category)",
+      "should_parse": true
+    },
+    {
+      "id": "P091",
+      "query": "CREATE INDEX ON docs",
+      "should_parse": false
+    },
+    {
+      "id": "P092",
+      "query": "DROP INDEX ON",
+      "should_parse": false
     }
   ]
 }

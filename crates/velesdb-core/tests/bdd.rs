@@ -11,6 +11,8 @@ mod ddl_lifecycle;
 mod helpers;
 #[path = "bdd/hybrid_compositions.rs"]
 mod hybrid_compositions;
+#[path = "bdd/index_management.rs"]
+mod index_management;
 #[path = "bdd/introspection.rs"]
 mod introspection;
 #[path = "bdd/operators.rs"]

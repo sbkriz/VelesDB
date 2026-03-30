@@ -4,7 +4,10 @@
 //! by delegating to existing [`Database`] APIs.
 
 use crate::collection::graph::{EdgeType, GraphSchema, NodeType, ValueType};
-use crate::velesql::{CreateCollectionKind, DdlStatement, GraphSchemaMode, SchemaDefinition};
+use crate::velesql::{
+    CreateCollectionKind, CreateIndexStatement, DdlStatement, DropIndexStatement, GraphSchemaMode,
+    SchemaDefinition,
+};
 use crate::{Error, Result, SearchResult};
 
 use super::Database;
@@ -26,6 +29,8 @@ impl Database {
         match ddl {
             DdlStatement::CreateCollection(stmt) => self.execute_create_collection(stmt),
             DdlStatement::DropCollection(stmt) => self.execute_drop_collection(stmt),
+            DdlStatement::CreateIndex(stmt) => self.execute_create_index(stmt),
+            DdlStatement::DropIndex(stmt) => self.execute_drop_index(stmt),
         }
     }
 
@@ -111,6 +116,35 @@ impl Database {
             Err(Error::CollectionNotFound(_)) if stmt.if_exists => Ok(Vec::new()),
             Err(e) => Err(e),
         }
+    }
+
+    /// Executes a CREATE INDEX statement.
+    ///
+    /// Resolves the collection (vector or legacy) and creates a secondary
+    /// `BTree` index on the specified payload field.  Index creation is
+    /// idempotent -- creating the same index twice is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection does not exist.
+    fn execute_create_index(&self, stmt: &CreateIndexStatement) -> Result<Vec<SearchResult>> {
+        let collection = self.resolve_writable_collection(&stmt.collection)?;
+        collection.create_index(&stmt.field)?;
+        Ok(Vec::new())
+    }
+
+    /// Executes a DROP INDEX statement.
+    ///
+    /// Resolves the collection and removes the secondary metadata index for
+    /// the specified field.  Silently succeeds if no such index existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection does not exist.
+    fn execute_drop_index(&self, stmt: &DropIndexStatement) -> Result<Vec<SearchResult>> {
+        let collection = self.resolve_writable_collection(&stmt.collection)?;
+        let _ = collection.drop_secondary_index(&stmt.field);
+        Ok(Vec::new())
     }
 
     /// Executes an INSERT EDGE statement.
@@ -220,6 +254,8 @@ fn ddl_operation_info(ddl: &DdlStatement) -> (&str, String) {
     match ddl {
         DdlStatement::CreateCollection(stmt) => ("CREATE", stmt.name.clone()),
         DdlStatement::DropCollection(stmt) => ("DROP", stmt.name.clone()),
+        DdlStatement::CreateIndex(stmt) => ("CREATE_INDEX", stmt.collection.clone()),
+        DdlStatement::DropIndex(stmt) => ("DROP_INDEX", stmt.collection.clone()),
     }
 }
 

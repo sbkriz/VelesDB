@@ -2,8 +2,9 @@
 
 use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
-    CreateCollectionKind, CreateCollectionStatement, DdlStatement, DropCollectionStatement,
-    GraphCollectionParams, GraphSchemaMode, Query, SchemaDefinition, VectorCollectionParams,
+    CreateCollectionKind, CreateCollectionStatement, CreateIndexStatement, DdlStatement,
+    DropCollectionStatement, DropIndexStatement, GraphCollectionParams, GraphSchemaMode, Query,
+    SchemaDefinition, VectorCollectionParams,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -80,6 +81,59 @@ impl Parser {
             DropCollectionStatement { name, if_exists },
         )))
     }
+
+    /// Parses a `CREATE INDEX ON collection (field)` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// CREATE INDEX ON identifier ( identifier )
+    /// ```
+    pub(crate) fn parse_create_index_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let (collection, field) = extract_index_identifiers(pair, "CREATE INDEX")?;
+        Ok(Query::new_ddl(DdlStatement::CreateIndex(
+            CreateIndexStatement { collection, field },
+        )))
+    }
+
+    /// Parses a `DROP INDEX ON collection (field)` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// DROP INDEX ON identifier ( identifier )
+    /// ```
+    pub(crate) fn parse_drop_index_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let (collection, field) = extract_index_identifiers(pair, "DROP INDEX")?;
+        Ok(Query::new_ddl(DdlStatement::DropIndex(
+            DropIndexStatement { collection, field },
+        )))
+    }
+}
+
+/// Extracts the two identifiers (collection, field) from a CREATE/DROP INDEX pair.
+///
+/// Both `create_index_stmt` and `drop_index_stmt` share the same structure:
+/// `keyword ON identifier ( identifier )`, so this helper avoids duplication.
+fn extract_index_identifiers(
+    pair: pest::iterators::Pair<Rule>,
+    context: &str,
+) -> Result<(String, String), ParseError> {
+    let mut idents = pair
+        .into_inner()
+        .filter(|p| p.as_rule() == Rule::identifier)
+        .map(|p| extract_identifier(&p));
+
+    let collection = idents.next().ok_or_else(|| {
+        ParseError::syntax(0, "", format!("{context} requires a collection name"))
+    })?;
+    let field = idents
+        .next()
+        .ok_or_else(|| ParseError::syntax(0, "", format!("{context} requires a field name")))?;
+
+    Ok((collection, field))
 }
 
 // ---------------------------------------------------------------------------
