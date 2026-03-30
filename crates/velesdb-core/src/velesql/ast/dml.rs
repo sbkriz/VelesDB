@@ -37,7 +37,7 @@ pub struct UpdateStatement {
     pub where_clause: Option<Condition>,
 }
 
-/// INSERT EDGE statement (VelesQL v4.0).
+/// INSERT EDGE statement (VelesQL v3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InsertEdgeStatement {
     /// Target graph collection name.
@@ -54,7 +54,7 @@ pub struct InsertEdgeStatement {
     pub properties: Vec<(String, Value)>,
 }
 
-/// DELETE FROM statement (VelesQL v4.0).
+/// DELETE FROM statement (VelesQL v3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteStatement {
     /// Target collection/table name.
@@ -63,7 +63,7 @@ pub struct DeleteStatement {
     pub where_clause: Condition,
 }
 
-/// DELETE EDGE statement (VelesQL v4.0).
+/// DELETE EDGE statement (VelesQL v3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteEdgeStatement {
     /// Target graph collection name.
@@ -79,10 +79,10 @@ pub enum DmlStatement {
     Insert(InsertStatement),
     /// UPDATE statement.
     Update(UpdateStatement),
-    /// INSERT EDGE statement (VelesQL v4.0).
+    /// INSERT EDGE statement (VelesQL v3.3).
     InsertEdge(InsertEdgeStatement),
-    /// DELETE FROM statement (VelesQL v4.0).
+    /// DELETE FROM statement (VelesQL v3.3).
     Delete(DeleteStatement),
-    /// DELETE EDGE statement (VelesQL v4.0).
+    /// DELETE EDGE statement (VelesQL v3.3).
     DeleteEdge(DeleteEdgeStatement),
 }

@@ -1,4 +1,4 @@
-//! Tests for DDL and DML extension parsing (VelesQL v4.0).
+//! Tests for DDL and DML extension parsing (VelesQL v3.3).
 //!
 //! Covers CREATE COLLECTION (vector, graph, metadata), DROP COLLECTION,
 //! INSERT EDGE, DELETE FROM, DELETE EDGE — nominal cases, edge cases,

@@ -1160,7 +1160,7 @@ fn test_validate_arithmetic_without_similarity_passes() {
 }
 
 // ============================================================================
-// DDL / DML validation bypass and LET rejection (VelesQL v4.0)
+// DDL / DML validation bypass and LET rejection (VelesQL v3.3)
 // ============================================================================
 
 /// Helper: builds a DDL query (CREATE COLLECTION).

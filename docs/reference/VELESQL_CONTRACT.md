@@ -2,7 +2,7 @@
 
 Canonical contract for VelesQL server endpoints and payloads.
 
-- Contract version: `4.0.0`
+- Contract version: `3.3.0`
 - Last updated: `2026-03-30`
 
 This document is the normative REST contract baseline for VelesQL.
@@ -55,7 +55,7 @@ Success response shape:
   "result": [{ "category": "tech", "count": 42 }],
   "timing_ms": 1.12,
   "meta": {
-    "velesql_contract_version": "4.0.0",
+    "velesql_contract_version": "3.3.0",
     "count": 1
   }
 }
@@ -78,7 +78,7 @@ Success response shape:
   "took_ms": 1,
   "rows_returned": 1,
   "meta": {
-    "velesql_contract_version": "4.0.0",
+    "velesql_contract_version": "3.3.0",
     "count": 1
   }
 }
@@ -147,7 +147,7 @@ Success response shape:
   "took_ms": 4,
   "count": 1,
   "meta": {
-    "velesql_contract_version": "4.0.0"
+    "velesql_contract_version": "3.3.0"
   }
 }
 ```

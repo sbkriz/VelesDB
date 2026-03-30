@@ -1,4 +1,4 @@
-//! DDL and extended DML executor for `VelesQL` v4.0.
+//! DDL and extended DML executor for `VelesQL` v3.3.
 //!
 //! Handles CREATE/DROP COLLECTION, INSERT EDGE, DELETE, and DELETE EDGE
 //! by delegating to existing [`Database`] APIs.

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 4.0.0 | **Last Updated**: 2026-03-30
+**Version**: 3.3.0 | **Last Updated**: 2026-03-30
 
 ## Overview
 
@@ -33,11 +33,13 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | ORDER BY arithmetic scoring | ✅ Stable | 3.0 |
 | LET score bindings | ✅ Stable | 3.2 |
 | Agent Memory VelesQL queries | ✅ Stable | 3.2 |
-| CREATE COLLECTION | ✅ Stable | 4.0 |
-| DROP COLLECTION | ✅ Stable | 4.0 |
-| INSERT EDGE graph mutation | ✅ Stable | 4.0 |
-| DELETE FROM statement | ✅ Stable | 4.0 |
-| DELETE EDGE graph mutation | ✅ Stable | 4.0 |
+| INSERT INTO statement | ✅ Stable | 3.2 |
+| UPDATE statement | ✅ Stable | 3.2 |
+| CREATE COLLECTION | ✅ Stable | 3.3 |
+| DROP COLLECTION | ✅ Stable | 3.3 |
+| INSERT EDGE graph mutation | ✅ Stable | 3.3 |
+| DELETE FROM statement | ✅ Stable | 3.3 |
+| DELETE EDGE graph mutation | ✅ Stable | 3.3 |
 | Table aliases | 🔜 Planned | - |
 
 ### REST Contract Notes
@@ -984,9 +986,9 @@ SELECT id AS `select` FROM docs
 | `WITH`, `AS` | Options and aliases |
 | `NEAR`, `NEAR_FUSED`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
 | `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions (`FUSE` reserved for planned syntax) |
-| `CREATE`, `DROP`, `COLLECTION`, `GRAPH`, `METADATA` | DDL keywords (v4.0) |
-| `EDGE`, `SCHEMALESS`, `SCHEMA`, `NODE`, `PROPERTIES` | DDL/graph mutation keywords (v4.0) |
-| `IF`, `EXISTS` | Conditional DDL (v4.0) |
+| `CREATE`, `DROP`, `COLLECTION`, `GRAPH`, `METADATA` | DDL keywords (v3.3) |
+| `EDGE`, `SCHEMALESS`, `SCHEMA`, `NODE`, `PROPERTIES` | DDL/graph mutation keywords (v3.3) |
+| `IF`, `EXISTS` | Conditional DDL (v3.3) |
 
 ## Grammar (EBNF) - v2.2
 
@@ -1090,7 +1092,7 @@ train_quantizer = "TRAIN" "QUANTIZER" "ON" identifier "WITH" "(" train_params ")
 train_params    = train_param { "," train_param } ;
 train_param     = identifier "=" integer ;
 
-(* DDL statements — v4.0 *)
+(* DDL statements — v3.3 *)
 create_collection = "CREATE" ["GRAPH" | "METADATA"] "COLLECTION" identifier
                     [ "(" collection_params ")" ]
                     [ "WITH" "(" with_options ")" ]
@@ -1107,7 +1109,7 @@ type_name         = "STRING" | "INTEGER" | "FLOAT" | "BOOLEAN" ;
 
 drop_collection   = "DROP" "COLLECTION" ["IF" "EXISTS"] identifier ;
 
-(* Graph mutation statements — v4.0 *)
+(* Graph mutation statements — v3.3 *)
 insert_edge       = "INSERT" "EDGE" "INTO" identifier
                     "(" edge_params ")"
                     [ "WITH" "PROPERTIES" "(" kv_pairs ")" ] ;
@@ -1353,7 +1355,7 @@ let results = agent_memory.query_semantic(
 All three subsystems support: vector NEAR, payload filters, ORDER BY, LIMIT/OFFSET,
 WITH options, LET bindings, and USING FUSION.
 
-## DDL Statements (v4.0+)
+## DDL Statements (v3.3+)
 
 VelesQL supports Data Definition Language statements for managing collections directly from SQL syntax.
 
@@ -1413,7 +1415,7 @@ DROP COLLECTION documents;
 DROP COLLECTION IF EXISTS documents;
 ```
 
-## Graph Mutation Statements (v4.0+)
+## Graph Mutation Statements (v3.3+)
 
 ### INSERT EDGE
 
@@ -1446,7 +1448,7 @@ Remove an edge by its ID from a graph collection.
 DELETE EDGE 123 FROM knowledge;
 ```
 
-## DELETE Statement (v4.0+)
+## DELETE Statement (v3.3+)
 
 Delete points from a collection by ID.
 

@@ -68,7 +68,7 @@ pub struct Query {
     /// Optional TRAIN statement (TRAIN QUANTIZER).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub train: Option<TrainStatement>,
-    /// Optional DDL statement (CREATE/DROP COLLECTION) — VelesQL v4.0.
+    /// Optional DDL statement (CREATE/DROP COLLECTION) — VelesQL v3.3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ddl: Option<DdlStatement>,
 }

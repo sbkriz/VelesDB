@@ -135,7 +135,7 @@ pub use ast::{
     Condition,
     // Values (used by cli, wasm)
     CorrelatedColumn,
-    // DDL (VelesQL v4.0 — used by database ddl_executor)
+    // DDL (VelesQL v3.3 — used by database ddl_executor)
     CreateCollectionKind,
     CreateCollectionStatement,
     DdlStatement,

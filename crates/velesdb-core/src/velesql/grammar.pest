@@ -1,5 +1,5 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 3.2.0 — LET clause for named score bindings (v1.10 Phase 3)
+// Version 3.3.0 — DDL (CREATE/DROP COLLECTION), graph mutations (INSERT/DELETE EDGE), DELETE FROM
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -83,7 +83,7 @@ train_stmt = {
 }
 
 // ──────────────────────────────────────────────────────────────
-// DDL statements (VelesQL v4.0)
+// DDL statements (VelesQL v3.3)
 // ──────────────────────────────────────────────────────────────
 
 // CREATE COLLECTION: vector (default), graph, or metadata-only

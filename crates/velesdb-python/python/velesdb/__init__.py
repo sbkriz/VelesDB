@@ -285,6 +285,37 @@ class Database:
         col = self._inner.create_metadata_collection(name)
         return Collection(col)
 
+    def execute_query(
+        self,
+        sql: str,
+        params: dict | None = None,
+    ) -> list[dict]:
+        """Execute a VelesQL query string (SELECT, DDL, DML).
+
+        Supports all VelesQL statements including:
+
+        - SELECT ... FROM ... WHERE ...
+        - CREATE [GRAPH|METADATA] COLLECTION ...
+        - DROP COLLECTION [IF EXISTS] ...
+        - INSERT EDGE INTO ...
+        - DELETE FROM ... WHERE ...
+        - DELETE EDGE ... FROM ...
+
+        Args:
+            sql: VelesQL query string.
+            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+
+        Returns:
+            List of result dicts for SELECT queries, empty list for DDL/DML.
+
+        Raises:
+            ValueError: If parsing fails.
+            RuntimeError: If execution fails.
+        """
+        if params is None:
+            params = {}
+        return self._inner.execute_query(sql, params)
+
 
 class VelesQL:
     """Compatibility wrapper for VelesQL parser API."""
