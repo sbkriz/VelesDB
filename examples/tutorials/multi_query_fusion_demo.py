@@ -15,9 +15,11 @@ Article: "One query is never enough: why top RAG systems search three times"
 Requirements:
     pip install velesdb sentence-transformers
 """
-import velesdb
+import atexit
 import shutil
 import os
+
+import velesdb
 from sentence_transformers import SentenceTransformer
 
 # ============================================================
@@ -27,6 +29,9 @@ DB_PATH = "./multi_query_demo"
 
 if os.path.exists(DB_PATH):
     shutil.rmtree(DB_PATH)
+
+# Ensure cleanup even if the script crashes mid-way
+atexit.register(lambda: shutil.rmtree(DB_PATH, ignore_errors=True))
 
 db = velesdb.Database(DB_PATH)
 model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -166,18 +171,18 @@ for r in results:
 # 4. Compare all fusion strategies
 # ============================================================
 print(f"\n{'=' * 60}")
-print("STEP 4: Five fusion strategies compared")
+print("STEP 4: Fusion strategies compared")
 print("=" * 60)
 
-strategies = {
+# These 4 strategies support N vectors (multi-query dense fusion)
+multi_query_strategies = {
     "rrf": velesdb.FusionStrategy.rrf(),
     "average": velesdb.FusionStrategy.average(),
     "maximum": velesdb.FusionStrategy.maximum(),
-    "relative_score": velesdb.FusionStrategy.relative_score(0.7, 0.3),
     "weighted": velesdb.FusionStrategy.weighted(0.6, 0.3, 0.1),
 }
 
-for name, strategy in strategies.items():
+for name, strategy in multi_query_strategies.items():
     results = collection.multi_query_search(
         vectors=[q1, q2, q3],
         top_k=3,
@@ -190,6 +195,19 @@ for name, strategy in strategies.items():
     print(f"\n  {name}:")
     for t in titles:
         print(f"    - {t}")
+
+# RelativeScore is designed for exactly 2 branches (dense + sparse).
+# With 3+ vectors, branches beyond index 1 are silently discarded.
+# Demo it separately with 2 vectors to show correct usage.
+print("\n  relative_score (2 vectors — dense+sparse design):")
+results = collection.multi_query_search(
+    vectors=[q1, q2],
+    top_k=3,
+    fusion=velesdb.FusionStrategy.relative_score(0.7, 0.3),
+)
+for r in results:
+    title = r.get("payload", r.get("bindings", {}))["title"][:50]
+    print(f"    - {title}")
 
 
 # ============================================================
