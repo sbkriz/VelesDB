@@ -75,15 +75,27 @@ impl ParsedQuery {
         self.inner.is_match_query()
     }
 
-    /// Get the table name from the FROM clause.
+    /// Get the collection name from the FROM clause.
+    ///
+    /// For DDL statements, returns the collection name from the DDL AST.
+    /// Alias: `tableName` is kept for backward compatibility.
+    #[wasm_bindgen(getter, js_name = collectionName)]
+    pub fn collection_name(&self) -> Option<String> {
+        // DDL: collection name is in the DDL AST, not in SELECT FROM.
+        if let Some(ddl) = &self.inner.ddl {
+            return Some(match ddl {
+                velesdb_core::velesql::DdlStatement::CreateCollection(s) => s.name.clone(),
+                velesdb_core::velesql::DdlStatement::DropCollection(s) => s.name.clone(),
+            });
+        }
+        let from = &self.inner.select.from;
+        if from.is_empty() { None } else { Some(from.clone()) }
+    }
+
+    /// Legacy alias for `collectionName`. Prefer `collectionName`.
     #[wasm_bindgen(getter, js_name = tableName)]
     pub fn table_name(&self) -> Option<String> {
-        let from = &self.inner.select.from;
-        if from.is_empty() {
-            None
-        } else {
-            Some(from.clone())
-        }
+        self.collection_name()
     }
 
     /// Get the list of selected columns as JSON array.

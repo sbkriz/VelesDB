@@ -31,7 +31,7 @@ impl Parser {
         }
 
         let table =
-            table.ok_or_else(|| ParseError::syntax(0, "", "INSERT requires target table"))?;
+            table.ok_or_else(|| ParseError::syntax(0, "", "INSERT requires target collection"))?;
         Self::validate_insert_columns_values(&columns, &values)?;
 
         Ok(Query::new_dml(DmlStatement::Insert(InsertStatement {
@@ -84,7 +84,7 @@ impl Parser {
         }
 
         let table =
-            table.ok_or_else(|| ParseError::syntax(0, "", "UPDATE requires target table"))?;
+            table.ok_or_else(|| ParseError::syntax(0, "", "UPDATE requires target collection"))?;
         if assignments.is_empty() {
             return Err(ParseError::syntax(
                 0,
@@ -171,7 +171,7 @@ impl Parser {
         }
 
         let table =
-            table.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a target table"))?;
+            table.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a target collection"))?;
         let where_clause = where_clause
             .ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a WHERE clause"))?;
 

@@ -164,18 +164,29 @@ impl ParsedStatement {
         )
     }
 
-    /// Get the table name from the FROM clause.
+    /// Get the collection name from the FROM clause or DDL statement.
     ///
     /// Returns:
-    ///     str or None: Table name, or None for MATCH queries
+    ///     str or None: Collection name, or None for MATCH queries
+    #[getter]
+    fn collection_name(&self) -> Option<String> {
+        if let Some(ddl) = &self.inner.ddl {
+            return Some(match ddl {
+                velesdb_core::velesql::DdlStatement::CreateCollection(s) => s.name.clone(),
+                velesdb_core::velesql::DdlStatement::DropCollection(s) => s.name.clone(),
+            });
+        }
+        let from = &self.inner.select.from;
+        if from.is_empty() { None } else { Some(from.clone()) }
+    }
+
+    /// Legacy alias for `collection_name`. Prefer `collection_name`.
+    ///
+    /// Returns:
+    ///     str or None: Collection name
     #[getter]
     fn table_name(&self) -> Option<String> {
-        let from = &self.inner.select.from;
-        if from.is_empty() {
-            None
-        } else {
-            Some(from.clone())
-        }
+        self.collection_name()
     }
 
     /// Get the table alias if present (for self-joins).
