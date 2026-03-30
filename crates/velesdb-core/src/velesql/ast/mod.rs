@@ -2,6 +2,7 @@
 //!
 //! This module defines the data structures representing parsed VelesQL queries.
 
+mod admin;
 mod aggregation;
 pub(crate) mod condition;
 mod ddl;
@@ -17,6 +18,7 @@ mod with_clause;
 use serde::{Deserialize, Serialize};
 
 // Re-export all types for backward compatibility
+pub use admin::{AdminStatement, FlushStatement};
 pub use aggregation::{
     AggregateArg, AggregateFunction, AggregateType, GroupByClause, HavingClause, HavingCondition,
     LogicalOp,
@@ -78,6 +80,9 @@ pub struct Query {
     /// Optional introspection statement (SHOW/DESCRIBE/EXPLAIN) -- VelesQL v3.4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub introspection: Option<IntrospectionStatement>,
+    /// Optional admin statement (FLUSH) -- VelesQL v3.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin: Option<AdminStatement>,
 }
 
 impl Query {
@@ -95,6 +100,7 @@ impl Query {
             && self.train.is_none()
             && self.ddl.is_none()
             && self.introspection.is_none()
+            && self.admin.is_none()
     }
 
     /// Returns true if this is a DML query.
@@ -121,6 +127,12 @@ impl Query {
         self.introspection.is_some()
     }
 
+    /// Returns true if this is an admin statement (FLUSH).
+    #[must_use]
+    pub fn is_admin_query(&self) -> bool {
+        self.admin.is_some()
+    }
+
     /// Returns true if this is a SELECT EDGES query.
     #[must_use]
     pub fn is_select_edges_query(&self) -> bool {
@@ -145,6 +157,7 @@ impl Query {
             train: None,
             ddl: None,
             introspection: None,
+            admin: None,
         }
     }
 
@@ -163,6 +176,7 @@ impl Query {
             train: None,
             ddl: None,
             introspection: None,
+            admin: None,
         }
     }
 
@@ -178,6 +192,7 @@ impl Query {
             train: None,
             ddl: None,
             introspection: None,
+            admin: None,
         }
     }
 
@@ -193,6 +208,7 @@ impl Query {
             train: Some(train),
             ddl: None,
             introspection: None,
+            admin: None,
         }
     }
 
@@ -208,6 +224,7 @@ impl Query {
             train: None,
             ddl: Some(ddl),
             introspection: None,
+            admin: None,
         }
     }
 
@@ -223,6 +240,23 @@ impl Query {
             train: None,
             ddl: None,
             introspection: Some(stmt),
+            admin: None,
+        }
+    }
+
+    /// Creates a new admin query (FLUSH).
+    #[must_use]
+    pub fn new_admin(stmt: AdminStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select: SelectStatement::empty(),
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: None,
+            introspection: None,
+            admin: Some(stmt),
         }
     }
 }

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.5.0 | **Last Updated**: 2026-03-30
+**Version**: 3.6.0 | **Last Updated**: 2026-03-30
 
 ---
 
@@ -65,6 +65,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | WITH (quality='...') alias | Stable | 3.5 |
 | SELECT EDGES graph query | Stable | 3.5 |
 | INSERT NODE graph mutation | Stable | 3.5 |
+| FLUSH / FLUSH FULL | Stable | 3.6 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -1547,6 +1548,36 @@ ALTER COLLECTION docs SET (auto_reindex = false)
 
 Unknown options are rejected with an error message listing supported options.
 
+### FLUSH (v3.6+)
+
+Persists collection data to disk. Supports fast flush (WAL only) and full flush
+(includes index serialization). Can target all collections or a specific one.
+
+```sql
+-- Fast flush all collections (WAL only)
+FLUSH
+
+-- Full flush all collections (includes index serialization)
+FLUSH FULL
+
+-- Fast flush a specific collection
+FLUSH docs
+
+-- Full flush a specific collection
+FLUSH FULL docs
+```
+
+Returns a payload with `{"status": "flushed", "full": true/false}`.
+
+- **Fast flush** (`FLUSH`): Writes WAL data to disk. Fast but requires WAL replay
+  on next startup if the process crashes before a full flush.
+- **Full flush** (`FLUSH FULL`): Writes WAL data and serializes vector indexes.
+  Slower but ensures fast startup without WAL replay. Recommended before
+  graceful shutdown.
+
+Flushing a nonexistent collection returns a `CollectionNotFound` error.
+Flushing an empty database (no collections) succeeds with no error.
+
 ---
 
 ## DML Statements (INSERT, UPDATE, DELETE)
@@ -1823,6 +1854,12 @@ let results = agent_memory.query_semantic(
 
 All three subsystems support: vector NEAR, payload filters, ORDER BY,
 LIMIT/OFFSET, WITH options, LET bindings, and USING FUSION.
+
+VelesQL queryability of agent memory collections is verified by BDD integration
+tests (`tests/bdd/agent_memory.rs`) that exercise the full
+`Database::execute_query` pipeline, and by unit tests in
+`src/agent/velesql_bridge_tests.rs` that test the `Collection::execute_query_str`
+path.
 
 ---
 

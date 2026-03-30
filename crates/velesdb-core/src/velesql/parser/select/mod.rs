@@ -27,7 +27,7 @@ impl Parser {
         Err(ParseError::syntax(
             0,
             "",
-            "Expected SHOW, DESCRIBE, EXPLAIN, ANALYZE, TRUNCATE, ALTER, MATCH, SELECT, INSERT, UPSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
+            "Expected SHOW, DESCRIBE, EXPLAIN, ANALYZE, TRUNCATE, ALTER, FLUSH, MATCH, SELECT, INSERT, UPSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
         ))
     }
 
@@ -43,6 +43,7 @@ impl Parser {
             Rule::analyze_stmt => Self::parse_analyze_stmt(p),
             Rule::truncate_stmt => Self::parse_truncate_stmt(p),
             Rule::alter_collection_stmt => Self::parse_alter_collection_stmt(p),
+            Rule::flush_stmt => Self::parse_flush_stmt(p),
             Rule::match_query => Self::parse_match_query(p),
             Rule::compound_query => Self::parse_compound_query(p),
             Rule::train_stmt => Self::parse_train_stmt(p),

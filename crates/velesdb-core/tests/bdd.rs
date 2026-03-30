@@ -5,12 +5,16 @@
 mod admin_operations;
 #[path = "bdd/advanced.rs"]
 mod advanced;
+#[path = "bdd/agent_memory.rs"]
+mod agent_memory;
 #[path = "bdd/aggregation.rs"]
 mod aggregation;
 #[path = "bdd/ddl_lifecycle.rs"]
 mod ddl_lifecycle;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/flush_operations.rs"]
+mod flush_operations;
 #[path = "bdd/graph_queries.rs"]
 mod graph_queries;
 #[path = "bdd/helpers.rs"]

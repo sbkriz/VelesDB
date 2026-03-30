@@ -279,6 +279,7 @@ fn select_query(collection: &str) -> crate::velesql::Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 

@@ -115,6 +115,8 @@ mod with_options_tests;
 #[cfg(test)]
 mod admin_ddl_tests;
 #[cfg(test)]
+mod flush_tests;
+#[cfg(test)]
 mod index_ddl_tests;
 #[cfg(test)]
 mod introspection_tests;
@@ -143,6 +145,8 @@ mod temporal_extended_tests;
 pub use aggregator::{AggregateResult, Aggregator};
 // Explicit AST exports (replaces `pub use ast::*` — prevents accidental internal type leakage)
 pub use ast::{
+    // Admin (VelesQL v3.6 -- FLUSH)
+    AdminStatement,
     // Aggregation
     AggregateArg,
     AggregateFunction,
@@ -180,6 +184,7 @@ pub use ast::{
     DropCollectionStatement,
     DropIndexStatement,
     // Fusion
+    FlushStatement,
     FusionClause,
     FusionConfig,
     FusionStrategyType,

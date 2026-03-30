@@ -1,5 +1,5 @@
 {
-  "version": "3.5.0",
+  "version": "3.6.0",
   "cases": [
     {
       "id": "P001",
@@ -546,6 +546,26 @@
       "id": "P108",
       "query": "SELECT EDGES",
       "should_parse": false
+    },
+    {
+      "id": "P109",
+      "query": "FLUSH",
+      "should_parse": true
+    },
+    {
+      "id": "P110",
+      "query": "FLUSH FULL",
+      "should_parse": true
+    },
+    {
+      "id": "P111",
+      "query": "FLUSH FULL docs",
+      "should_parse": true
+    },
+    {
+      "id": "P112",
+      "query": "FLUSH docs",
+      "should_parse": true
     }
   ]
 }

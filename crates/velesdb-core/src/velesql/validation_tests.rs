@@ -240,6 +240,7 @@ fn create_query_with_multiple_similarity() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -281,6 +282,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -315,6 +317,7 @@ fn create_query_with_single_similarity() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -354,6 +357,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -393,6 +397,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -427,6 +432,7 @@ fn create_query_with_not_similarity() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -454,6 +460,7 @@ fn create_simple_query() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -497,6 +504,7 @@ fn test_validate_vector_search_near_with_or_detected() {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     };
 
     // Should detect multiple vector search with OR
@@ -543,6 +551,7 @@ fn test_validate_vector_search_or_now_passes() {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     };
 
     // EPIC-044 US-002: NEAR OR metadata is now supported
@@ -613,6 +622,7 @@ fn test_validate_compound_query_where_clause() {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     };
 
     // Should detect multiple similarity in OR in compound query
@@ -652,6 +662,7 @@ fn make_query(where_clause: Option<Condition>) -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -989,6 +1000,7 @@ fn test_complexity_rejects_like_budget() {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     };
 
     let cfg = ValidationConfig {
@@ -1056,6 +1068,7 @@ fn make_query_with_arithmetic_order_by(
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -1213,6 +1226,7 @@ fn make_ddl_create_query() -> Query {
             }),
         })),
         introspection: None,
+        admin: None,
     }
 }
 
@@ -1245,6 +1259,7 @@ fn make_ddl_drop_query() -> Query {
             if_exists: false,
         })),
         introspection: None,
+        admin: None,
     }
 }
 
@@ -1281,6 +1296,7 @@ fn make_dml_insert_edge_query() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 
@@ -1317,6 +1333,7 @@ fn make_dml_delete_query() -> Query {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
     }
 }
 

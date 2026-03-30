@@ -48,6 +48,7 @@ impl Parser {
             train: None,
             ddl: None,
             introspection: None,
+            admin: None,
         })
     }
 

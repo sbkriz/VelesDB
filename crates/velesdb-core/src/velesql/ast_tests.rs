@@ -50,6 +50,7 @@ fn test_query_serialization() {
         train: None,
         ddl: None,
         introspection: None,
+        admin: None,
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,

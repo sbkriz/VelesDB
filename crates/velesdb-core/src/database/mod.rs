@@ -18,6 +18,7 @@ use crate::simd_dispatch;
 #[allow(deprecated)]
 use crate::{Collection, ColumnStore, Error, Result};
 
+mod admin_executor;
 mod collection_ops;
 mod ddl_executor;
 mod graph_ops;
