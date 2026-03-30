@@ -10,10 +10,13 @@ let_clause = { ^"LET" ~ identifier ~ "=" ~ order_by_arithmetic }
 
 // Main entry point - supports SELECT, MATCH, DML (INSERT/UPSERT/UPDATE/DELETE), DDL (CREATE/DROP), admin (ANALYZE/TRUNCATE/ALTER), and introspection (SHOW/DESCRIBE/EXPLAIN)
 // LET clauses appear zero or more times before the main statement.
-// Order matters (PEG ordered choice): insert_edge_stmt before insert_stmt, delete_edge_stmt before delete_stmt.
+// Order matters (PEG ordered choice):
+//   - select_edges_stmt before compound_query (both start with SELECT; EDGES disambiguates)
+//   - insert_node_stmt before insert_edge_stmt (both start with INSERT; NODE vs EDGE disambiguates)
+//   - insert_edge_stmt before insert_stmt, delete_edge_stmt before delete_stmt
 // upsert_stmt placed after insert_stmt since UPSERT and INSERT have distinct first tokens.
 // Introspection and admin statements placed first since SHOW/DESCRIBE/EXPLAIN/ANALYZE/TRUNCATE/ALTER do not conflict with any existing first-token.
-query = { SOI ~ let_clause* ~ (show_collections_stmt | describe_stmt | explain_stmt | analyze_stmt | truncate_stmt | alter_collection_stmt | match_query | compound_query | train_stmt | create_index_stmt | create_collection_stmt | drop_index_stmt | drop_collection_stmt | insert_edge_stmt | delete_edge_stmt | delete_stmt | insert_stmt | upsert_stmt | update_stmt) ~ ";"? ~ EOI }
+query = { SOI ~ let_clause* ~ (show_collections_stmt | describe_stmt | explain_stmt | analyze_stmt | truncate_stmt | alter_collection_stmt | match_query | select_edges_stmt | compound_query | train_stmt | create_index_stmt | create_collection_stmt | drop_index_stmt | drop_collection_stmt | insert_node_stmt | insert_edge_stmt | delete_edge_stmt | delete_stmt | insert_stmt | upsert_stmt | update_stmt) ~ ";"? ~ EOI }
 
 // ──────────────────────────────────────────────────────────────
 // Introspection statements (VelesQL v3.4)
@@ -181,6 +184,18 @@ delete_stmt = {
 // DELETE EDGE edge_id FROM collection
 delete_edge_stmt = {
     ^"DELETE" ~ ^"EDGE" ~ value ~ ^"FROM" ~ identifier
+}
+
+// SELECT EDGES FROM collection [WHERE source=N / target=N / label='X'] [LIMIT n]
+// Queries edges from a graph collection with optional filtering.
+select_edges_stmt = {
+    ^"SELECT" ~ ^"EDGES" ~ ^"FROM" ~ identifier ~ where_clause? ~ limit_clause?
+}
+
+// INSERT NODE INTO collection (id = N, payload = '{"key": "value"}')
+// Inserts or updates a node payload in a graph collection.
+insert_node_stmt = {
+    ^"INSERT" ~ ^"NODE" ~ ^"INTO" ~ identifier ~ "(" ~ edge_field_list ~ ")"
 }
 
 // SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses

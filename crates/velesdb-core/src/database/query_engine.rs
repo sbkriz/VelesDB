@@ -354,6 +354,8 @@ impl Database {
             crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
             crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),
             crate::velesql::DmlStatement::DeleteEdge(stmt) => self.execute_delete_edge(stmt),
+            crate::velesql::DmlStatement::SelectEdges(stmt) => self.execute_select_edges(stmt),
+            crate::velesql::DmlStatement::InsertNode(stmt) => self.execute_insert_node(stmt),
         }
     }
 

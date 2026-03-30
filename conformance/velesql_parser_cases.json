@@ -521,6 +521,31 @@
       "id": "P103",
       "query": "INSERT INTO docs (id, title) VALUES (1, 'A'), (2, 'B', 'Extra')",
       "should_parse": false
+    },
+    {
+      "id": "P104",
+      "query": "SELECT EDGES FROM kg",
+      "should_parse": true
+    },
+    {
+      "id": "P105",
+      "query": "SELECT EDGES FROM kg WHERE source = 1 LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P106",
+      "query": "SELECT EDGES FROM kg WHERE label = 'KNOWS'",
+      "should_parse": true
+    },
+    {
+      "id": "P107",
+      "query": "INSERT NODE INTO kg (id = 42, payload = '{\"name\": \"Alice\"}')",
+      "should_parse": true
+    },
+    {
+      "id": "P108",
+      "query": "SELECT EDGES",
+      "should_parse": false
     }
   ]
 }

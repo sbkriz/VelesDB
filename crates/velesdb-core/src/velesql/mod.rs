@@ -128,6 +128,8 @@ mod dml_extended_tests;
 #[cfg(test)]
 mod dml_v2_tests;
 #[cfg(test)]
+mod graph_query_tests;
+#[cfg(test)]
 mod like_edge_tests;
 #[cfg(test)]
 mod match_text_extended_tests;
@@ -189,6 +191,8 @@ pub use ast::{
     HavingCondition,
     InCondition,
     InsertEdgeStatement,
+    // Graph query extensions (VelesQL v3.5 Phase 5)
+    InsertNodeStatement,
     InsertStatement,
     IntervalUnit,
     IntervalValue,
@@ -208,6 +212,7 @@ pub use ast::{
     Query,
     SchemaDefinition,
     SelectColumns,
+    SelectEdgesStatement,
     SelectOrderBy,
     SelectStatement,
     SetOperator,

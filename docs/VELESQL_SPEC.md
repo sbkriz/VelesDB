@@ -63,6 +63,8 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | Multi-row INSERT | Stable | 3.5 |
 | UPSERT INTO statement | Stable | 3.5 |
 | WITH (quality='...') alias | Stable | 3.5 |
+| SELECT EDGES graph query | Stable | 3.5 |
+| INSERT NODE graph mutation | Stable | 3.5 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -1673,6 +1675,46 @@ DELETE EDGE 123 FROM knowledge
 DELETE EDGE 10 FROM kg
 ```
 
+### SELECT EDGES (v3.5+)
+
+Query edges from a graph collection with optional filtering by source node,
+target node, or edge label.
+
+```sql
+-- All edges
+SELECT EDGES FROM kg LIMIT 100
+
+-- Outgoing edges from a node
+SELECT EDGES FROM kg WHERE source = 1
+
+-- Incoming edges to a node
+SELECT EDGES FROM kg WHERE target = 2
+
+-- Edges by label
+SELECT EDGES FROM kg WHERE label = 'KNOWS'
+
+-- Combined: outgoing with label
+SELECT EDGES FROM kg WHERE source = 1 AND label = 'KNOWS'
+```
+
+Each result contains a JSON payload with `edge_id`, `source`, `target`, `label`,
+and `properties` fields.
+
+### INSERT NODE (v3.5+)
+
+Insert or update a node's payload in a graph collection.
+
+```sql
+-- With JSON payload
+INSERT NODE INTO kg (id = 42, payload = '{"name": "Alice", "_labels": ["Person"]}')
+
+-- With inline fields (collected into a JSON object)
+INSERT NODE INTO kg (id = 10, name = 'Bob', age = 30)
+```
+
+If a node with the given `id` already exists, the payload is replaced (upsert
+semantics).
+
 ---
 
 ## TRAIN QUANTIZER Command (v2.2+)
@@ -1997,6 +2039,8 @@ VelesQL returns structured errors:
 | `DELETE FROM` | Remove rows | `DELETE FROM docs WHERE id = 42` |
 | `INSERT EDGE` | Add graph edge | `INSERT EDGE INTO kg (source=1, target=2, label='REL')` |
 | `DELETE EDGE` | Remove graph edge | `DELETE EDGE 123 FROM kg` |
+| `SELECT EDGES` | Query graph edges | `SELECT EDGES FROM kg WHERE source = 1 LIMIT 10` |
+| `INSERT NODE` | Add/update node payload | `INSERT NODE INTO kg (id = 42, payload = '{"name": "Alice"}')` |
 | `CREATE COLLECTION` | Create collection | `CREATE COLLECTION docs (dimension=768)` |
 | `DROP COLLECTION` | Delete collection | `DROP COLLECTION IF EXISTS docs` |
 | `CREATE INDEX` | Add metadata index | `CREATE INDEX ON docs (category)` |
@@ -2202,8 +2246,13 @@ WHERE start.topic = 'AI'
 RETURN start.title, end.title
 
 -- Graph mutations
+INSERT NODE INTO knowledge (id = 1, payload = '{"name": "Alice", "_labels": ["Author"]}');
 INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY')
   WITH PROPERTIES (confidence = 0.95, year = 2026);
+
+-- Query edges
+SELECT EDGES FROM knowledge WHERE source = 1;
+SELECT EDGES FROM knowledge WHERE label = 'AUTHORED_BY' LIMIT 10;
 
 DELETE EDGE 42 FROM knowledge;
 ```

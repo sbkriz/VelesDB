@@ -1,9 +1,11 @@
-//! DML statement parsing (INSERT, UPDATE, INSERT EDGE, DELETE, DELETE EDGE).
+//! DML statement parsing (INSERT, UPDATE, INSERT EDGE, DELETE, DELETE EDGE,
+//! SELECT EDGES, INSERT NODE).
 
 use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
     Condition, DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement,
-    InsertStatement, Query, UpdateAssignment, UpdateStatement, Value,
+    InsertNodeStatement, InsertStatement, Query, SelectEdgesStatement, UpdateAssignment,
+    UpdateStatement, Value,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -192,6 +194,69 @@ impl Parser {
                 edge_id,
             },
         )))
+    }
+    /// Parses a `SELECT EDGES` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// SELECT EDGES FROM collection [WHERE ...] [LIMIT n]
+    /// ```
+    pub(crate) fn parse_select_edges_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let mut collection: Option<String> = None;
+        let mut where_clause = None;
+        let mut limit = None;
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::identifier if collection.is_none() => {
+                    collection = Some(extract_identifier(&inner));
+                }
+                Rule::where_clause => where_clause = Some(Self::parse_where_clause(inner)?),
+                Rule::limit_clause => limit = Some(Self::parse_limit_clause(inner)?),
+                _ => {}
+            }
+        }
+
+        let collection = collection
+            .ok_or_else(|| ParseError::syntax(0, "", "SELECT EDGES requires a collection name"))?;
+
+        Ok(Query::new_dml(DmlStatement::SelectEdges(
+            SelectEdgesStatement {
+                collection,
+                where_clause,
+                limit,
+            },
+        )))
+    }
+
+    /// Parses an `INSERT NODE` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// INSERT NODE INTO collection (id = N, payload = '{"key": "value"}')
+    /// ```
+    pub(crate) fn parse_insert_node_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let mut collection: Option<String> = None;
+        let mut fields: Vec<(String, Value)> = Vec::new();
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::identifier if collection.is_none() => {
+                    collection = Some(extract_identifier(&inner));
+                }
+                Rule::edge_field_list => fields = parse_edge_fields(inner)?,
+                _ => {}
+            }
+        }
+
+        let collection = collection
+            .ok_or_else(|| ParseError::syntax(0, "", "INSERT NODE requires a collection name"))?;
+
+        build_insert_node(collection, &fields)
     }
 }
 
@@ -448,5 +513,62 @@ fn extract_edge_id(value: &Value) -> Result<u64, ParseError> {
         Value::Integer(i) => u64::try_from(*i)
             .map_err(|_| ParseError::syntax(0, "", "Edge ID must be a non-negative integer")),
         _ => Err(ParseError::syntax(0, "", "Edge ID must be an integer")),
+    }
+}
+
+/// Builds an `InsertNodeStatement` from parsed fields.
+///
+/// Required fields: `id` (u64). Optional: `payload` (JSON string).
+/// Any other key-value pairs are collected into the payload object.
+fn build_insert_node(collection: String, fields: &[(String, Value)]) -> Result<Query, ParseError> {
+    let node_id = extract_required_u64(fields, "id", "INSERT NODE")?;
+    let payload = build_node_payload(fields)?;
+
+    Ok(Query::new_dml(DmlStatement::InsertNode(
+        InsertNodeStatement {
+            collection,
+            node_id,
+            payload,
+        },
+    )))
+}
+
+/// Builds the JSON payload for an `INSERT NODE` statement.
+///
+/// If a `payload` field is present, its string value is parsed as JSON.
+/// Otherwise, all non-`id` fields are collected into a JSON object.
+fn build_node_payload(fields: &[(String, Value)]) -> Result<serde_json::Value, ParseError> {
+    // Check for explicit payload field first.
+    let payload_field = fields.iter().find(|(k, _)| k == "payload");
+    if let Some((_, Value::String(json_str))) = payload_field {
+        return serde_json::from_str(json_str)
+            .map_err(|e| ParseError::syntax(0, "", format!("Invalid JSON in payload: {e}")));
+    }
+
+    // Collect non-id fields into a JSON object.
+    let mut map = serde_json::Map::new();
+    for (key, value) in fields {
+        if key == "id" {
+            continue;
+        }
+        let json_val = field_value_to_json(value)?;
+        map.insert(key.clone(), json_val);
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
+/// Converts a DML field `Value` to `serde_json::Value`.
+fn field_value_to_json(val: &Value) -> Result<serde_json::Value, ParseError> {
+    match val {
+        Value::Integer(v) => Ok(serde_json::json!(v)),
+        Value::Float(v) => Ok(serde_json::json!(v)),
+        Value::String(v) => Ok(serde_json::json!(v)),
+        Value::Boolean(v) => Ok(serde_json::json!(v)),
+        Value::Null => Ok(serde_json::Value::Null),
+        Value::Parameter(_) | Value::Temporal(_) | Value::Subquery(_) => Err(ParseError::syntax(
+            0,
+            "",
+            "Node payload fields must be literal values",
+        )),
     }
 }

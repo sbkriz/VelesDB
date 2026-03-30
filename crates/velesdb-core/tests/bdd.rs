@@ -11,6 +11,8 @@ mod aggregation;
 mod ddl_lifecycle;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/graph_queries.rs"]
+mod graph_queries;
 #[path = "bdd/helpers.rs"]
 mod helpers;
 #[path = "bdd/hybrid_compositions.rs"]

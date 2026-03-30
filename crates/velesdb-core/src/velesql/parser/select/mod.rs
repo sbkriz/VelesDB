@@ -50,6 +50,8 @@ impl Parser {
             Rule::create_collection_stmt => Self::parse_create_collection_stmt(p),
             Rule::drop_index_stmt => Self::parse_drop_index_stmt(p),
             Rule::drop_collection_stmt => Self::parse_drop_collection_stmt(p),
+            Rule::select_edges_stmt => Self::parse_select_edges_stmt(p),
+            Rule::insert_node_stmt => Self::parse_insert_node_stmt(p),
             Rule::insert_edge_stmt => Self::parse_insert_edge_stmt(p),
             Rule::delete_edge_stmt => Self::parse_delete_edge_stmt(p),
             Rule::delete_stmt => Self::parse_delete_stmt(p),

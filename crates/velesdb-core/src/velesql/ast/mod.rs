@@ -33,8 +33,8 @@ pub use ddl::{
     VectorCollectionParams,
 };
 pub use dml::{
-    DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement, InsertStatement,
-    UpdateAssignment, UpdateStatement,
+    DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement, InsertNodeStatement,
+    InsertStatement, SelectEdgesStatement, UpdateAssignment, UpdateStatement,
 };
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use introspection::{DescribeCollectionStatement, IntrospectionStatement};
@@ -119,6 +119,18 @@ impl Query {
     #[must_use]
     pub fn is_introspection_query(&self) -> bool {
         self.introspection.is_some()
+    }
+
+    /// Returns true if this is a SELECT EDGES query.
+    #[must_use]
+    pub fn is_select_edges_query(&self) -> bool {
+        matches!(self.dml, Some(DmlStatement::SelectEdges(_)))
+    }
+
+    /// Returns true if this is an INSERT NODE query.
+    #[must_use]
+    pub fn is_insert_node_query(&self) -> bool {
+        matches!(self.dml, Some(DmlStatement::InsertNode(_)))
     }
 
     /// Creates a new SELECT query.

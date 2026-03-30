@@ -72,6 +72,33 @@ pub struct DeleteEdgeStatement {
     pub edge_id: u64,
 }
 
+/// SELECT EDGES statement (VelesQL v3.5 Phase 5).
+///
+/// Queries edges from a graph collection with optional filtering
+/// by source node, target node, or edge label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectEdgesStatement {
+    /// Target graph collection name.
+    pub collection: String,
+    /// Optional WHERE clause for filtering (source=N, target=N, label='X').
+    pub where_clause: Option<Condition>,
+    /// Optional LIMIT clause.
+    pub limit: Option<u64>,
+}
+
+/// INSERT NODE statement (VelesQL v3.5 Phase 5).
+///
+/// Inserts or updates a node payload in a graph collection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InsertNodeStatement {
+    /// Target graph collection name.
+    pub collection: String,
+    /// Node ID.
+    pub node_id: u64,
+    /// JSON payload for the node.
+    pub payload: serde_json::Value,
+}
+
 /// DML statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DmlStatement {
@@ -87,4 +114,8 @@ pub enum DmlStatement {
     Delete(DeleteStatement),
     /// DELETE EDGE statement (VelesQL v3.3).
     DeleteEdge(DeleteEdgeStatement),
+    /// SELECT EDGES statement (VelesQL v3.5 Phase 5).
+    SelectEdges(SelectEdgesStatement),
+    /// INSERT NODE statement (VelesQL v3.5 Phase 5).
+    InsertNode(InsertNodeStatement),
 }
