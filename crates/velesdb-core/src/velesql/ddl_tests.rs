@@ -56,9 +56,8 @@ fn test_create_vector_collection_with_storage_in_body() {
 }
 
 #[test]
-fn test_create_vector_collection_storage_in_with_not_propagated() {
-    // `storage` in WITH suffix is NOT propagated — only m and ef_construction are.
-    // This documents the current parser behavior.
+fn test_create_vector_collection_storage_in_with_propagated() {
+    // `storage` in WITH suffix IS propagated (alongside m and ef_construction).
     let query = Parser::parse(
         "CREATE COLLECTION docs (dimension = 768, metric = 'cosine') WITH (storage = 'sq8');",
     )
@@ -72,11 +71,7 @@ fn test_create_vector_collection_storage_in_with_not_propagated() {
     let CreateCollectionKind::Vector(params) = &create.kind else {
         panic!("Expected Vector kind");
     };
-    // storage in WITH is not extracted — only m/ef_construction are.
-    assert!(
-        params.storage.is_none(),
-        "storage in WITH suffix should not be propagated to VectorCollectionParams"
-    );
+    assert_eq!(params.storage.as_deref(), Some("sq8"));
 }
 
 #[test]

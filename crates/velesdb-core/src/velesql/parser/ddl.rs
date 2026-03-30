@@ -315,9 +315,9 @@ fn build_vector_params(
 ) -> Result<CreateCollectionKind, ParseError> {
     let dimension = lookup_required_usize(options, "dimension", "Vector collection")?;
     let metric = lookup_required_str(options, "metric", "Vector collection")?;
-    let storage = lookup_optional_str(options, "storage");
+    let mut storage = lookup_optional_str(options, "storage");
 
-    let (m, ef_construction) = extract_with_suffix_hnsw(options, suffix);
+    let (m, ef_construction) = extract_with_suffix_hnsw(options, suffix, &mut storage);
 
     Ok(CreateCollectionKind::Vector(VectorCollectionParams {
         dimension,
@@ -349,20 +349,24 @@ fn build_graph_params(
     })
 }
 
-/// Extracts HNSW parameters (m, ef_construction) from body options + WITH suffix.
+/// Extracts HNSW parameters and storage from body options + WITH suffix.
 ///
 /// Body options take precedence; WITH suffix provides overrides for parameters
-/// not already in the body. Only `CreateSuffix::With` carries HNSW overrides.
+/// not already in the body. Only `CreateSuffix::With` carries overrides.
 /// `Schemaless` and `TypedSchema` suffixes are irrelevant for vector collection
 /// parameters and are silently ignored by the `if let` guard.
 fn extract_with_suffix_hnsw(
     options: &[(String, String)],
     suffix: Option<CreateSuffix>,
+    storage: &mut Option<String>,
 ) -> (Option<usize>, Option<usize>) {
     let mut m = lookup_optional_usize(options, "m");
     let mut ef_construction = lookup_optional_usize(options, "ef_construction");
 
     if let Some(CreateSuffix::With(with_opts)) = suffix {
+        if storage.is_none() {
+            *storage = lookup_optional_str(&with_opts, "storage");
+        }
         if m.is_none() {
             m = lookup_optional_usize(&with_opts, "m");
         }
