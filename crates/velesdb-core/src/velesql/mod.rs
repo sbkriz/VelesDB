@@ -112,6 +112,23 @@ mod velesql_v2_integration_tests;
 #[cfg(test)]
 mod with_options_tests;
 
+#[cfg(test)]
+mod clause_edge_tests;
+#[cfg(test)]
+mod comment_tests;
+#[cfg(test)]
+mod dml_extended_tests;
+#[cfg(test)]
+mod like_edge_tests;
+#[cfg(test)]
+mod match_text_extended_tests;
+#[cfg(test)]
+mod negative_edge_tests;
+#[cfg(test)]
+mod operator_edge_tests;
+#[cfg(test)]
+mod temporal_extended_tests;
+
 pub use aggregator::{AggregateResult, Aggregator};
 // Explicit AST exports (replaces `pub use ast::*` — prevents accidental internal type leakage)
 pub use ast::{

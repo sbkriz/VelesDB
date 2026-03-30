@@ -177,7 +177,11 @@ impl ParsedStatement {
             });
         }
         let from = &self.inner.select.from;
-        if from.is_empty() { None } else { Some(from.clone()) }
+        if from.is_empty() {
+            None
+        } else {
+            Some(from.clone())
+        }
     }
 
     /// Legacy alias for `collection_name`. Prefer `collection_name`.
