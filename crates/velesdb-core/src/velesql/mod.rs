@@ -113,6 +113,9 @@ mod velesql_v2_integration_tests;
 mod with_options_tests;
 
 #[cfg(test)]
+mod introspection_tests;
+
+#[cfg(test)]
 mod clause_edge_tests;
 #[cfg(test)]
 mod comment_tests;
@@ -152,13 +155,15 @@ pub use ast::{
     Condition,
     // Values (used by cli, wasm)
     CorrelatedColumn,
-    // DDL (VelesQL v3.3 — used by database ddl_executor)
+    // DDL (VelesQL v3.3 -- used by database ddl_executor)
     CreateCollectionKind,
     CreateCollectionStatement,
     DdlStatement,
     // DML (used by database execute_dml)
     DeleteEdgeStatement,
     DeleteStatement,
+    // Introspection (VelesQL v3.4 -- SHOW/DESCRIBE/EXPLAIN)
+    DescribeCollectionStatement,
     DistinctMode,
     DmlStatement,
     DropCollectionStatement,
@@ -177,6 +182,7 @@ pub use ast::{
     InsertStatement,
     IntervalUnit,
     IntervalValue,
+    IntrospectionStatement,
     IsNullCondition,
     JoinClause,
     JoinCondition,

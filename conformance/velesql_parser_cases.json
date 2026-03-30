@@ -401,6 +401,36 @@
       "id": "P079",
       "query": "DROP TABLE docs",
       "should_parse": false
+    },
+    {
+      "id": "P080",
+      "query": "SHOW COLLECTIONS",
+      "should_parse": true
+    },
+    {
+      "id": "P081",
+      "query": "SHOW COLLECTIONS;",
+      "should_parse": true
+    },
+    {
+      "id": "P082",
+      "query": "DESCRIBE COLLECTION docs",
+      "should_parse": true
+    },
+    {
+      "id": "P083",
+      "query": "DESCRIBE docs",
+      "should_parse": true
+    },
+    {
+      "id": "P084",
+      "query": "EXPLAIN SELECT * FROM docs LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P085",
+      "query": "SHOW TABLES",
+      "should_parse": false
     }
   ]
 }

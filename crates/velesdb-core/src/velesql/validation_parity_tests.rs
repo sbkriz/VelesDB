@@ -35,6 +35,7 @@ mod tests {
             dml: None,
             train: None,
             ddl: None,
+            introspection: None,
         }
     }
 

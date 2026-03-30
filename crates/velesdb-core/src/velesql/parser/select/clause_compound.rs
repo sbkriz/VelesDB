@@ -47,6 +47,7 @@ impl Parser {
             dml: None,
             train: None,
             ddl: None,
+            introspection: None,
         })
     }
 

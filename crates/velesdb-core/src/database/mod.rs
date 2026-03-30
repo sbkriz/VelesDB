@@ -21,6 +21,7 @@ use crate::{Collection, ColumnStore, Error, Result};
 mod collection_ops;
 mod ddl_executor;
 mod graph_ops;
+mod introspection_executor;
 mod metadata_ops;
 mod persistence;
 mod query_engine;

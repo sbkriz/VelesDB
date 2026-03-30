@@ -146,6 +146,10 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
+        if let Some(intro) = query.introspection.as_ref() {
+            return self.execute_introspection(intro);
+        }
+
         if let Some(ddl) = query.ddl.as_ref() {
             return self.execute_ddl(ddl);
         }

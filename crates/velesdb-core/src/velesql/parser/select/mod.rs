@@ -27,7 +27,7 @@ impl Parser {
         Err(ParseError::syntax(
             0,
             "",
-            "Expected MATCH, SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
+            "Expected SHOW, DESCRIBE, EXPLAIN, MATCH, SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
         ))
     }
 
@@ -37,6 +37,9 @@ impl Parser {
     /// parsing logic for that statement type. This keeps `parse_query` at CC 3.
     fn dispatch_statement(p: pest::iterators::Pair<Rule>) -> Result<Query, ParseError> {
         match p.as_rule() {
+            Rule::show_collections_stmt => Self::parse_show_collections_stmt(p),
+            Rule::describe_stmt => Self::parse_describe_stmt(p),
+            Rule::explain_stmt => Self::parse_explain_stmt(p),
             Rule::match_query => Self::parse_match_query(p),
             Rule::compound_query => Self::parse_compound_query(p),
             Rule::train_stmt => Self::parse_train_stmt(p),

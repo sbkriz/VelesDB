@@ -36,19 +36,28 @@ impl QueryValidator {
         config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
         // LET bindings are only meaningful for SELECT/MATCH queries.
-        // Reject them on DDL and DML statements where they are nonsensical.
-        if (query.is_ddl_query() || query.is_dml_query()) && !query.let_bindings.is_empty() {
+        // Reject them on DDL, DML, and introspection statements where they
+        // are nonsensical.
+        if (query.is_ddl_query() || query.is_dml_query() || query.is_introspection_query())
+            && !query.let_bindings.is_empty()
+        {
             return Err(ValidationError::new(
                 ValidationErrorKind::InvalidLetBinding,
                 None,
                 "LET clause",
-                "LET bindings are not supported with DDL or DML statements",
+                "LET bindings are not supported with DDL, DML, or introspection statements",
             ));
         }
 
         // DDL statements (CREATE/DROP COLLECTION) bypass SELECT-specific
-        // validation — they have no FROM clause, no similarity conditions, etc.
+        // validation -- they have no FROM clause, no similarity conditions, etc.
         if query.is_ddl_query() {
+            return Ok(());
+        }
+
+        // Introspection statements (SHOW/DESCRIBE/EXPLAIN) bypass SELECT-specific
+        // validation -- they have no FROM clause or similarity conditions.
+        if query.is_introspection_query() {
             return Ok(());
         }
 

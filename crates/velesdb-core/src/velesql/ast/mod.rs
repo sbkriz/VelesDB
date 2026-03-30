@@ -7,6 +7,7 @@ pub(crate) mod condition;
 mod ddl;
 mod dml;
 mod fusion;
+mod introspection;
 mod join;
 mod select;
 mod train;
@@ -34,6 +35,7 @@ pub use dml::{
     UpdateAssignment, UpdateStatement,
 };
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
+pub use introspection::{DescribeCollectionStatement, IntrospectionStatement};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
     ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
@@ -68,9 +70,12 @@ pub struct Query {
     /// Optional TRAIN statement (TRAIN QUANTIZER).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub train: Option<TrainStatement>,
-    /// Optional DDL statement (CREATE/DROP COLLECTION) — VelesQL v3.3.
+    /// Optional DDL statement (CREATE/DROP COLLECTION) -- VelesQL v3.3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ddl: Option<DdlStatement>,
+    /// Optional introspection statement (SHOW/DESCRIBE/EXPLAIN) -- VelesQL v3.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub introspection: Option<IntrospectionStatement>,
 }
 
 impl Query {
@@ -87,6 +92,7 @@ impl Query {
             && self.dml.is_none()
             && self.train.is_none()
             && self.ddl.is_none()
+            && self.introspection.is_none()
     }
 
     /// Returns true if this is a DML query.
@@ -107,6 +113,12 @@ impl Query {
         self.ddl.is_some()
     }
 
+    /// Returns true if this is an introspection statement (SHOW/DESCRIBE/EXPLAIN).
+    #[must_use]
+    pub fn is_introspection_query(&self) -> bool {
+        self.introspection.is_some()
+    }
+
     /// Creates a new SELECT query.
     #[must_use]
     pub fn new_select(select: SelectStatement) -> Self {
@@ -118,6 +130,7 @@ impl Query {
             dml: None,
             train: None,
             ddl: None,
+            introspection: None,
         }
     }
 
@@ -135,6 +148,7 @@ impl Query {
             dml: None,
             train: None,
             ddl: None,
+            introspection: None,
         }
     }
 
@@ -149,6 +163,7 @@ impl Query {
             dml: Some(dml),
             train: None,
             ddl: None,
+            introspection: None,
         }
     }
 
@@ -163,6 +178,7 @@ impl Query {
             dml: None,
             train: Some(train),
             ddl: None,
+            introspection: None,
         }
     }
 
@@ -177,6 +193,22 @@ impl Query {
             dml: None,
             train: None,
             ddl: Some(ddl),
+            introspection: None,
+        }
+    }
+
+    /// Creates a new introspection query (SHOW/DESCRIBE/EXPLAIN).
+    #[must_use]
+    pub fn new_introspection(stmt: IntrospectionStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select: SelectStatement::empty(),
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: None,
+            introspection: Some(stmt),
         }
     }
 }

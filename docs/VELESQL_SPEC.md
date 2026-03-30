@@ -53,6 +53,9 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | Scalar subqueries | Stable | 3.2 |
 | SQL comments (`--`) | Stable | 1.0 |
 | Identifier quoting (backtick, double-quote) | Stable | 1.3 |
+| SHOW COLLECTIONS | Stable | 3.4 |
+| DESCRIBE COLLECTION | Stable | 3.4 |
+| EXPLAIN query plan | Stable | 3.4 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -1293,6 +1296,72 @@ Content-Type: application/json
 
 ---
 
+## Introspection Statements (v3.4+)
+
+### SHOW COLLECTIONS
+
+Lists all collections in the database with their names and types.
+
+```sql
+-- List all collections
+SHOW COLLECTIONS
+
+-- With trailing semicolon
+SHOW COLLECTIONS;
+```
+
+Returns one row per collection, each containing:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Collection name |
+| `type` | string | Collection type: `vector`, `graph`, or `metadata` |
+
+### DESCRIBE COLLECTION
+
+Returns metadata about a specific collection. The `COLLECTION` keyword is optional.
+
+```sql
+-- With COLLECTION keyword
+DESCRIBE COLLECTION docs
+
+-- Without COLLECTION keyword (equivalent)
+DESCRIBE docs
+```
+
+Returns a single row with:
+
+| Field | Type | Present When |
+|-------|------|-------------|
+| `name` | string | Always |
+| `type` | string | Always (`vector`, `graph`, or `metadata`) |
+| `dimension` | integer | Vector collections |
+| `metric` | string | Vector collections |
+| `point_count` | integer | All types |
+
+Returns an error if the collection does not exist.
+
+### EXPLAIN
+
+Returns the query execution plan for a SELECT query without executing it.
+
+```sql
+-- Explain a simple query
+EXPLAIN SELECT * FROM docs LIMIT 10
+
+-- Explain a complex query
+EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+```
+
+Returns a single row with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plan` | object | Structured query plan (JSON) |
+| `tree` | string | Human-readable plan tree |
+
+---
+
 ## DDL Statements (v3.3+)
 
 ### CREATE COLLECTION
@@ -1812,6 +1881,9 @@ VelesQL returns structured errors:
 | `CREATE COLLECTION` | Create collection | `CREATE COLLECTION docs (dimension=768)` |
 | `DROP COLLECTION` | Delete collection | `DROP COLLECTION IF EXISTS docs` |
 | `TRAIN QUANTIZER` | Train compression | `TRAIN QUANTIZER ON docs WITH (m=8, k=256)` |
+| `SHOW COLLECTIONS` | List collections | `SHOW COLLECTIONS` |
+| `DESCRIBE` | Collection metadata | `DESCRIBE COLLECTION docs` |
+| `EXPLAIN` | Query plan | `EXPLAIN SELECT * FROM docs LIMIT 10` |
 
 ### WHERE Operators
 
@@ -2134,10 +2206,19 @@ TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
 (* Entry point                                            *)
 (* ═══════════════════════════════════════════════════════ *)
 
-query             = let_clause* (match_query | compound_query | train_stmt
+query             = let_clause* (show_collections_stmt | describe_stmt
+                    | explain_stmt | match_query | compound_query | train_stmt
                     | create_collection_stmt | drop_collection_stmt
                     | insert_edge_stmt | delete_edge_stmt
                     | delete_stmt | insert_stmt | update_stmt) [";"] ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Introspection statements (v3.4)                        *)
+(* ═══════════════════════════════════════════════════════ *)
+
+show_collections_stmt = "SHOW" "COLLECTIONS" ;
+describe_stmt         = "DESCRIBE" ["COLLECTION"] identifier ;
+explain_stmt          = "EXPLAIN" compound_query ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* LET bindings (v3.2)                                    *)
