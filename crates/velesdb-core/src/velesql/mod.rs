@@ -113,6 +113,8 @@ mod velesql_v2_integration_tests;
 mod with_options_tests;
 
 #[cfg(test)]
+mod admin_ddl_tests;
+#[cfg(test)]
 mod index_ddl_tests;
 #[cfg(test)]
 mod introspection_tests;
@@ -141,6 +143,9 @@ pub use ast::{
     AggregateArg,
     AggregateFunction,
     AggregateType,
+    // DDL (VelesQL v3.3 -- used by database ddl_executor)
+    AlterCollectionStatement,
+    AnalyzeStatement,
     // Arithmetic (EPIC-042)
     ArithmeticExpr,
     ArithmeticOp,
@@ -157,7 +162,6 @@ pub use ast::{
     Condition,
     // Values (used by cli, wasm)
     CorrelatedColumn,
-    // DDL (VelesQL v3.3 -- used by database ddl_executor)
     CreateCollectionKind,
     CreateCollectionStatement,
     CreateIndexStatement,
@@ -214,6 +218,7 @@ pub use ast::{
     TemporalExpr,
     // TRAIN statement
     TrainStatement,
+    TruncateStatement,
     UpdateAssignment,
     UpdateStatement,
     Value,

@@ -1,6 +1,8 @@
 #![cfg(feature = "persistence")]
 #![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
 
+#[path = "bdd/admin_operations.rs"]
+mod admin_operations;
 #[path = "bdd/advanced.rs"]
 mod advanced;
 #[path = "bdd/aggregation.rs"]

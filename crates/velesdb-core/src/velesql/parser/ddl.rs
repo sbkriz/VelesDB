@@ -1,10 +1,11 @@
-//! DDL statement parsing (CREATE COLLECTION, DROP COLLECTION).
+//! DDL statement parsing (CREATE/DROP COLLECTION, CREATE/DROP INDEX, ANALYZE, TRUNCATE, ALTER).
 
 use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
-    CreateCollectionKind, CreateCollectionStatement, CreateIndexStatement, DdlStatement,
-    DropCollectionStatement, DropIndexStatement, GraphCollectionParams, GraphSchemaMode, Query,
-    SchemaDefinition, VectorCollectionParams,
+    AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateCollectionStatement,
+    CreateIndexStatement, DdlStatement, DropCollectionStatement, DropIndexStatement,
+    GraphCollectionParams, GraphSchemaMode, Query, SchemaDefinition, TruncateStatement,
+    VectorCollectionParams,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -111,6 +112,72 @@ impl Parser {
             DropIndexStatement { collection, field },
         )))
     }
+
+    /// Parses an `ANALYZE [COLLECTION] name` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// ANALYZE [COLLECTION] identifier
+    /// ```
+    pub(crate) fn parse_analyze_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let collection = extract_single_identifier(pair, "ANALYZE")?;
+        Ok(Query::new_ddl(DdlStatement::Analyze(AnalyzeStatement {
+            collection,
+        })))
+    }
+
+    /// Parses a `TRUNCATE [COLLECTION] name` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// TRUNCATE [COLLECTION] identifier
+    /// ```
+    pub(crate) fn parse_truncate_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let collection = extract_single_identifier(pair, "TRUNCATE")?;
+        Ok(Query::new_ddl(DdlStatement::Truncate(TruncateStatement {
+            collection,
+        })))
+    }
+
+    /// Parses an `ALTER COLLECTION name SET (options)` statement.
+    ///
+    /// Grammar:
+    /// ```text
+    /// ALTER COLLECTION identifier SET ( create_option_list )
+    /// ```
+    pub(crate) fn parse_alter_collection_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let mut name: Option<String> = None;
+        let mut options: Vec<(String, String)> = Vec::new();
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::identifier if name.is_none() => {
+                    name = Some(extract_identifier(&inner));
+                }
+                Rule::create_option_list => {
+                    options = parse_create_options(inner)?;
+                }
+                _ => {}
+            }
+        }
+
+        let collection = name.ok_or_else(|| {
+            ParseError::syntax(0, "", "ALTER COLLECTION requires a collection name")
+        })?;
+
+        Ok(Query::new_ddl(DdlStatement::AlterCollection(
+            AlterCollectionStatement {
+                collection,
+                options,
+            },
+        )))
+    }
 }
 
 /// Extracts the two identifiers (collection, field) from a CREATE/DROP INDEX pair.
@@ -134,6 +201,20 @@ fn extract_index_identifiers(
         .ok_or_else(|| ParseError::syntax(0, "", format!("{context} requires a field name")))?;
 
     Ok((collection, field))
+}
+
+/// Extracts a single identifier from a statement pair (ANALYZE, TRUNCATE).
+///
+/// Both `analyze_stmt` and `truncate_stmt` have the same structure:
+/// `keyword [COLLECTION] identifier`, so this helper avoids duplication.
+fn extract_single_identifier(
+    pair: pest::iterators::Pair<Rule>,
+    context: &str,
+) -> Result<String, ParseError> {
+    pair.into_inner()
+        .find(|p| p.as_rule() == Rule::identifier)
+        .map(|p| extract_identifier(&p))
+        .ok_or_else(|| ParseError::syntax(0, "", format!("{context} requires a collection name")))
 }
 
 // ---------------------------------------------------------------------------

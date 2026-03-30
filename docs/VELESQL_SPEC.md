@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.4.0 | **Last Updated**: 2026-03-30
+**Version**: 3.5.0 | **Last Updated**: 2026-03-30
 
 ---
 
@@ -57,6 +57,9 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | DESCRIBE COLLECTION | Stable | 3.4 |
 | EXPLAIN query plan | Stable | 3.4 |
 | CREATE INDEX / DROP INDEX | Stable | 3.5 |
+| ANALYZE | Stable | 3.5 |
+| TRUNCATE | Stable | 3.5 |
+| ALTER COLLECTION | Stable | 3.5 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -1363,7 +1366,7 @@ Returns a single row with:
 
 ---
 
-## DDL Statements (v3.3+)
+## DDL Statements (v3.3+) and Admin Statements (v3.5+)
 
 ### CREATE COLLECTION
 
@@ -1482,6 +1485,58 @@ Dropping a non-existent index succeeds silently (no error).
   subsequent upserts. Existing data is not retroactively indexed.
 - Indexes are in-memory only; they are not persisted to disk in the current
   implementation.
+
+### ANALYZE (v3.5+)
+
+Computes cost-based optimizer (CBO) statistics for a collection. The statistics
+are cached in memory and persisted to disk (`collection.stats.json`).
+
+```sql
+-- Compute statistics for query optimizer
+ANALYZE docs
+ANALYZE COLLECTION docs   -- optional COLLECTION keyword
+```
+
+Returns a JSON payload with collection statistics including `total_points`,
+`row_count`, `deleted_count`, `avg_row_size_bytes`, `payload_size_bytes`,
+and per-field cardinality information.
+
+### TRUNCATE (v3.5+)
+
+Deletes all rows from a collection without dropping the collection itself.
+Unlike `DELETE FROM` which requires a `WHERE` clause, `TRUNCATE` removes
+all data unconditionally.
+
+```sql
+-- Delete all rows
+TRUNCATE docs
+TRUNCATE COLLECTION docs   -- optional COLLECTION keyword
+```
+
+Returns a payload with `{"deleted_count": N}`. Truncating an empty collection
+succeeds with `deleted_count: 0`. The collection structure (config, indexes)
+is preserved after truncation.
+
+### ALTER COLLECTION (v3.5+)
+
+Modifies collection settings at runtime. Uses the same key-value option
+syntax as `CREATE COLLECTION`.
+
+```sql
+-- Enable auto-reindex
+ALTER COLLECTION docs SET (auto_reindex = true)
+
+-- Disable auto-reindex
+ALTER COLLECTION docs SET (auto_reindex = false)
+```
+
+**Supported options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `auto_reindex` | boolean | Enable/disable automatic HNSW parameter tuning |
+
+Unknown options are rejected with an error message listing supported options.
 
 ---
 

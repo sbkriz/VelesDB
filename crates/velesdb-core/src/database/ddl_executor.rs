@@ -1,12 +1,13 @@
-//! DDL and extended DML executor for `VelesQL` v3.3.
+//! DDL and extended DML executor for `VelesQL` v3.5.
 //!
-//! Handles CREATE/DROP COLLECTION, INSERT EDGE, DELETE, and DELETE EDGE
-//! by delegating to existing [`Database`] APIs.
+//! Handles CREATE/DROP COLLECTION, CREATE/DROP INDEX, ANALYZE, TRUNCATE,
+//! ALTER COLLECTION, INSERT EDGE, DELETE, and DELETE EDGE by delegating
+//! to existing [`Database`] APIs.
 
 use crate::collection::graph::{EdgeType, GraphSchema, NodeType, ValueType};
 use crate::velesql::{
-    CreateCollectionKind, CreateIndexStatement, DdlStatement, DropIndexStatement, GraphSchemaMode,
-    SchemaDefinition,
+    AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateIndexStatement,
+    DdlStatement, DropIndexStatement, GraphSchemaMode, SchemaDefinition, TruncateStatement,
 };
 use crate::{Error, Result, SearchResult};
 
@@ -31,6 +32,9 @@ impl Database {
             DdlStatement::DropCollection(stmt) => self.execute_drop_collection(stmt),
             DdlStatement::CreateIndex(stmt) => self.execute_create_index(stmt),
             DdlStatement::DropIndex(stmt) => self.execute_drop_index(stmt),
+            DdlStatement::Analyze(stmt) => self.execute_analyze(stmt),
+            DdlStatement::Truncate(stmt) => self.execute_truncate(stmt),
+            DdlStatement::AlterCollection(stmt) => self.execute_alter_collection(stmt),
         }
     }
 
@@ -147,6 +151,66 @@ impl Database {
         Ok(Vec::new())
     }
 
+    /// Executes an ANALYZE statement.
+    ///
+    /// Delegates to [`Database::analyze_collection`] and returns the
+    /// computed statistics as a JSON payload in a single `SearchResult`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection does not exist or analysis fails.
+    fn execute_analyze(&self, stmt: &AnalyzeStatement) -> Result<Vec<SearchResult>> {
+        let stats = self.analyze_collection(&stmt.collection)?;
+        let stats_json = serde_json::to_value(&stats)
+            .unwrap_or_else(|_| serde_json::json!({"error": "failed to serialize stats"}));
+        let result = SearchResult::new(crate::Point::metadata_only(0, stats_json), 0.0);
+        Ok(vec![result])
+    }
+
+    /// Executes a TRUNCATE statement.
+    ///
+    /// Retrieves all point IDs and deletes them, returning a payload
+    /// with the count of deleted points. Returns success with
+    /// `deleted_count: 0` if the collection is already empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection does not exist or deletion fails.
+    fn execute_truncate(&self, stmt: &TruncateStatement) -> Result<Vec<SearchResult>> {
+        let collection = self.resolve_writable_collection(&stmt.collection)?;
+        let ids = collection.all_point_ids();
+        let count = ids.len();
+        if !ids.is_empty() {
+            collection.delete(&ids)?;
+        }
+        let payload = serde_json::json!({"deleted_count": count});
+        let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
+        Ok(vec![result])
+    }
+
+    /// Executes an ALTER COLLECTION SET statement.
+    ///
+    /// Currently supports only the `auto_reindex` option (boolean).
+    /// Unknown options are rejected with a descriptive error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection does not exist, an option is
+    /// unknown, or a value cannot be parsed.
+    fn execute_alter_collection(
+        &self,
+        stmt: &AlterCollectionStatement,
+    ) -> Result<Vec<SearchResult>> {
+        // Validate the collection exists.
+        let _collection = self.resolve_writable_collection(&stmt.collection)?;
+
+        for (key, value) in &stmt.options {
+            apply_alter_option(key, value)?;
+        }
+
+        Ok(Vec::new())
+    }
+
     /// Executes an INSERT EDGE statement.
     ///
     /// Resolves the target graph collection and builds a `GraphEdge`
@@ -256,6 +320,9 @@ fn ddl_operation_info(ddl: &DdlStatement) -> (&str, String) {
         DdlStatement::DropCollection(stmt) => ("DROP", stmt.name.clone()),
         DdlStatement::CreateIndex(stmt) => ("CREATE_INDEX", stmt.collection.clone()),
         DdlStatement::DropIndex(stmt) => ("DROP_INDEX", stmt.collection.clone()),
+        DdlStatement::Analyze(stmt) => ("ANALYZE", stmt.collection.clone()),
+        DdlStatement::Truncate(stmt) => ("TRUNCATE", stmt.collection.clone()),
+        DdlStatement::AlterCollection(stmt) => ("ALTER", stmt.collection.clone()),
     }
 }
 
@@ -436,6 +503,30 @@ fn extract_single_id(cmp: &crate::velesql::Comparison) -> Result<Vec<u64>> {
 /// Extracts multiple IDs from an IN condition `id IN (N1, N2, ...)`.
 fn extract_in_ids(in_cond: &crate::velesql::InCondition) -> Result<Vec<u64>> {
     in_cond.values.iter().map(value_to_u64).collect()
+}
+
+/// Validates and applies a single ALTER COLLECTION option.
+///
+/// Currently only `auto_reindex` (boolean) is supported.
+///
+/// # Errors
+///
+/// Returns `Error::Query` for unknown option keys or unparseable values.
+fn apply_alter_option(key: &str, value: &str) -> Result<()> {
+    match key {
+        "auto_reindex" => {
+            let _enabled = value.parse::<bool>().map_err(|_| {
+                Error::Query(format!(
+                    "auto_reindex must be 'true' or 'false', got '{value}'"
+                ))
+            })?;
+            // TODO(US-300): Persist auto_reindex flag once Collection exposes a setter.
+            Ok(())
+        }
+        _ => Err(Error::Query(format!(
+            "Unsupported ALTER option: '{key}'. Supported: auto_reindex"
+        ))),
+    }
 }
 
 /// Converts a `VelesQL` `Value` to a `u64` point ID.

@@ -15,6 +15,12 @@ pub enum DdlStatement {
     CreateIndex(CreateIndexStatement),
     /// DROP INDEX ON collection (field) -- remove secondary metadata index.
     DropIndex(DropIndexStatement),
+    /// ANALYZE [COLLECTION] name -- compute CBO statistics.
+    Analyze(AnalyzeStatement),
+    /// TRUNCATE [COLLECTION] name -- delete all rows.
+    Truncate(TruncateStatement),
+    /// ALTER COLLECTION name SET (options) -- modify collection settings.
+    AlterCollection(AlterCollectionStatement),
 }
 
 /// CREATE COLLECTION statement.
@@ -118,4 +124,27 @@ pub struct DropIndexStatement {
     pub collection: String,
     /// Payload field whose index to drop.
     pub field: String,
+}
+
+/// ANALYZE statement -- compute CBO statistics for query optimizer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalyzeStatement {
+    /// Collection name to analyze.
+    pub collection: String,
+}
+
+/// TRUNCATE statement -- delete all rows from a collection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TruncateStatement {
+    /// Collection name to truncate.
+    pub collection: String,
+}
+
+/// ALTER COLLECTION SET statement -- modify collection settings at runtime.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlterCollectionStatement {
+    /// Collection name to alter.
+    pub collection: String,
+    /// Key-value pairs of options to set.
+    pub options: Vec<(String, String)>,
 }

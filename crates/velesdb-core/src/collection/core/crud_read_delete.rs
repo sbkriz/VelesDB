@@ -174,8 +174,28 @@ impl Collection {
     }
 
     /// Returns all point IDs in the collection.
+    ///
+    /// Note: Only returns IDs that have payload entries stored. Points
+    /// inserted with `None` payload may not appear. For a complete set
+    /// of IDs, use [`all_point_ids`](Self::all_point_ids).
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
         self.payload_storage.read().ids()
+    }
+
+    /// Returns all point IDs from both vector and payload storage.
+    ///
+    /// This is the authoritative set of IDs in the collection: it unions
+    /// IDs from `vector_storage` (points with vectors) and
+    /// `payload_storage` (points with payloads). Points inserted with
+    /// `None` payload are included via the vector storage path.
+    #[must_use]
+    pub fn all_point_ids(&self) -> Vec<u64> {
+        let mut ids: std::collections::HashSet<u64> =
+            self.vector_storage.read().ids().into_iter().collect();
+        for id in self.payload_storage.read().ids() {
+            ids.insert(id);
+        }
+        ids.into_iter().collect()
     }
 }

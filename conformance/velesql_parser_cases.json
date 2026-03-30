@@ -1,5 +1,5 @@
 {
-  "version": "3.4.0",
+  "version": "3.5.0",
   "cases": [
     {
       "id": "P001",
@@ -465,6 +465,36 @@
     {
       "id": "P092",
       "query": "DROP INDEX ON",
+      "should_parse": false
+    },
+    {
+      "id": "P093",
+      "query": "ANALYZE docs",
+      "should_parse": true
+    },
+    {
+      "id": "P094",
+      "query": "ANALYZE COLLECTION docs",
+      "should_parse": true
+    },
+    {
+      "id": "P095",
+      "query": "TRUNCATE docs",
+      "should_parse": true
+    },
+    {
+      "id": "P096",
+      "query": "TRUNCATE COLLECTION docs",
+      "should_parse": true
+    },
+    {
+      "id": "P097",
+      "query": "ALTER COLLECTION docs SET (auto_reindex = true)",
+      "should_parse": true
+    },
+    {
+      "id": "P098",
+      "query": "ANALYZE",
       "should_parse": false
     }
   ]
