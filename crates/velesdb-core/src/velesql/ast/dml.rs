@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 
 use super::{Condition, Value};
 
-/// INSERT statement.
+/// INSERT or UPSERT statement (supports multi-row).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InsertStatement {
     /// Target collection/table name.
     pub table: String,
     /// Target columns.
     pub columns: Vec<String>,
-    /// Values corresponding to `columns`.
-    pub values: Vec<Value>,
+    /// Rows of values; each row corresponds to `columns`.
+    pub rows: Vec<Vec<Value>>,
 }
 
 /// UPDATE assignment.
@@ -77,6 +77,8 @@ pub struct DeleteEdgeStatement {
 pub enum DmlStatement {
     /// INSERT statement.
     Insert(InsertStatement),
+    /// UPSERT statement (VelesQL v3.5 Phase 4).
+    Upsert(InsertStatement),
     /// UPDATE statement.
     Update(UpdateStatement),
     /// INSERT EDGE statement (VelesQL v3.3).

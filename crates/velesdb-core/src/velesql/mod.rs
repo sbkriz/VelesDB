@@ -126,6 +126,8 @@ mod comment_tests;
 #[cfg(test)]
 mod dml_extended_tests;
 #[cfg(test)]
+mod dml_v2_tests;
+#[cfg(test)]
 mod like_edge_tests;
 #[cfg(test)]
 mod match_text_extended_tests;

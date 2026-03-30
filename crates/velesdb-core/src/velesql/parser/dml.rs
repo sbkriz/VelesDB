@@ -9,12 +9,42 @@ use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
 impl Parser {
+    /// Parses an `INSERT INTO ... VALUES ...` statement (supports multi-row).
     pub(crate) fn parse_insert_stmt(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Query, ParseError> {
+        let (table, columns, rows) = Self::parse_insert_or_upsert_body(pair, "INSERT")?;
+        Ok(Query::new_dml(DmlStatement::Insert(InsertStatement {
+            table,
+            columns,
+            rows,
+        })))
+    }
+
+    /// Parses an `UPSERT INTO ... VALUES ...` statement (supports multi-row).
+    pub(crate) fn parse_upsert_stmt(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Query, ParseError> {
+        let (table, columns, rows) = Self::parse_insert_or_upsert_body(pair, "UPSERT")?;
+        Ok(Query::new_dml(DmlStatement::Upsert(InsertStatement {
+            table,
+            columns,
+            rows,
+        })))
+    }
+
+    /// Shared body parser for INSERT and UPSERT statements.
+    ///
+    /// Extracts table name, column list, and one or more value rows from a
+    /// `insert_stmt` or `upsert_stmt` grammar pair.
+    #[allow(clippy::type_complexity)] // Reason: one-off tuple for internal parser helper.
+    fn parse_insert_or_upsert_body(
+        pair: pest::iterators::Pair<Rule>,
+        context: &str,
+    ) -> Result<(String, Vec<String>, Vec<Vec<Value>>), ParseError> {
         let mut table = None;
         let mut columns = Vec::new();
-        let mut values = Vec::new();
+        let mut rows = Vec::new();
 
         for inner in pair.into_inner() {
             match inner.as_rule() {
@@ -25,42 +55,24 @@ impl Parser {
                         columns.push(extract_identifier(&inner));
                     }
                 }
-                Rule::value => values.push(Self::parse_value(inner)?),
+                Rule::values_row => rows.push(Self::parse_values_row(inner)?),
                 _ => {}
             }
         }
 
-        let table =
-            table.ok_or_else(|| ParseError::syntax(0, "", "INSERT requires target collection"))?;
-        Self::validate_insert_columns_values(&columns, &values)?;
-
-        Ok(Query::new_dml(DmlStatement::Insert(InsertStatement {
-            table,
-            columns,
-            values,
-        })))
+        let table = table.ok_or_else(|| {
+            ParseError::syntax(0, "", format!("{context} requires target collection"))
+        })?;
+        validate_insert_rows(&columns, &rows, context)?;
+        Ok((table, columns, rows))
     }
 
-    /// Validates INSERT column and value lists: non-empty and matching lengths.
-    fn validate_insert_columns_values(
-        columns: &[String],
-        values: &[crate::velesql::ast::Value],
-    ) -> Result<(), ParseError> {
-        if columns.is_empty() {
-            return Err(ParseError::syntax(
-                0,
-                "",
-                "INSERT requires at least one target column",
-            ));
-        }
-        if columns.len() != values.len() {
-            return Err(ParseError::syntax(
-                0,
-                "",
-                "INSERT columns/value count mismatch",
-            ));
-        }
-        Ok(())
+    /// Parses a single `values_row`: `(v1, v2, ...)`.
+    fn parse_values_row(pair: pest::iterators::Pair<Rule>) -> Result<Vec<Value>, ParseError> {
+        pair.into_inner()
+            .filter(|p| p.as_rule() == Rule::value)
+            .map(Self::parse_value)
+            .collect()
     }
 
     pub(crate) fn parse_update_stmt(
@@ -186,6 +198,39 @@ impl Parser {
 // ---------------------------------------------------------------------------
 // Private helpers for DML extensions
 // ---------------------------------------------------------------------------
+
+/// Validates multi-row INSERT/UPSERT: non-empty columns, at least one row,
+/// and every row length matches the column count.
+fn validate_insert_rows(
+    columns: &[String],
+    rows: &[Vec<Value>],
+    context: &str,
+) -> Result<(), ParseError> {
+    if columns.is_empty() {
+        return Err(ParseError::syntax(
+            0,
+            "",
+            format!("{context} requires at least one target column"),
+        ));
+    }
+    if rows.is_empty() {
+        return Err(ParseError::syntax(
+            0,
+            "",
+            format!("{context} requires at least one VALUES row"),
+        ));
+    }
+    for row in rows {
+        if row.len() != columns.len() {
+            return Err(ParseError::syntax(
+                0,
+                "",
+                format!("{context} columns/value count mismatch"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Extracts table name and WHERE clause from a DELETE pair.
 ///

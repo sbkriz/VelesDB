@@ -341,13 +341,15 @@ impl Database {
     }
 
     /// Dispatches a DML statement (INSERT or UPDATE).
+    /// Dispatches a DML statement (INSERT, UPSERT, UPDATE, DELETE, or edge mutations).
     pub(super) fn execute_dml(
         &self,
         dml: &crate::velesql::DmlStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         match dml {
-            crate::velesql::DmlStatement::Insert(stmt) => self.execute_insert(stmt, params),
+            crate::velesql::DmlStatement::Insert(stmt)
+            | crate::velesql::DmlStatement::Upsert(stmt) => self.execute_insert(stmt, params),
             crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
             crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
             crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),
@@ -355,7 +357,7 @@ impl Database {
         }
     }
 
-    /// Executes an INSERT statement.
+    /// Executes an INSERT or UPSERT statement (single or multi-row).
     #[allow(deprecated)]
     fn execute_insert(
         &self,
@@ -364,20 +366,32 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
-        let (id, vector, payload) = Self::resolve_insert_fields(stmt, params)?;
-        let point_id =
-            id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
-        let point = Self::build_insert_point(&collection, point_id, vector, payload)?;
+        let mut points = Vec::with_capacity(stmt.rows.len());
+        for row in &stmt.rows {
+            let (id, vector, payload) = Self::resolve_insert_row(&stmt.columns, row, params)?;
+            let point_id =
+                id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
+            points.push(Self::build_insert_point(
+                &collection,
+                point_id,
+                vector,
+                payload,
+            )?);
+        }
 
-        let result = SearchResult::new(point.clone(), 0.0);
-        collection.upsert(vec![point])?;
-        Ok(vec![result])
+        let results: Vec<SearchResult> = points
+            .iter()
+            .map(|p| SearchResult::new(p.clone(), 0.0))
+            .collect();
+        collection.upsert(points)?;
+        Ok(results)
     }
 
-    /// Resolves column values from an INSERT statement into id, vector, and payload fields.
+    /// Resolves column values from a single row into id, vector, and payload fields.
     #[allow(clippy::type_complexity)] // Reason: one-off tuple return for internal helper.
-    fn resolve_insert_fields(
-        stmt: &crate::velesql::InsertStatement,
+    fn resolve_insert_row(
+        columns: &[String],
+        row: &[crate::velesql::Value],
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(
         Option<u64>,
@@ -388,7 +402,7 @@ impl Database {
         let mut payload = serde_json::Map::new();
         let mut vector: Option<Vec<f32>> = None;
 
-        for (column, value_expr) in stmt.columns.iter().zip(&stmt.values) {
+        for (column, value_expr) in columns.iter().zip(row) {
             let resolved = Self::resolve_dml_value(value_expr, params)?;
             if column == "id" {
                 id = Some(Self::json_to_u64_id(&resolved)?);

@@ -496,6 +496,31 @@
       "id": "P098",
       "query": "ANALYZE",
       "should_parse": false
+    },
+    {
+      "id": "P099",
+      "query": "INSERT INTO docs (id, title) VALUES (1, 'Hello'), (2, 'World')",
+      "should_parse": true
+    },
+    {
+      "id": "P100",
+      "query": "INSERT INTO docs (id, title) VALUES (1, 'A'), (2, 'B'), (3, 'C')",
+      "should_parse": true
+    },
+    {
+      "id": "P101",
+      "query": "UPSERT INTO docs (id, title) VALUES (1, 'Updated')",
+      "should_parse": true
+    },
+    {
+      "id": "P102",
+      "query": "UPSERT INTO docs (id, vector, title) VALUES (1, $v, 'First'), (2, $w, 'Second')",
+      "should_parse": true
+    },
+    {
+      "id": "P103",
+      "query": "INSERT INTO docs (id, title) VALUES (1, 'A'), (2, 'B', 'Extra')",
+      "should_parse": false
     }
   ]
 }

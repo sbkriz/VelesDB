@@ -60,6 +60,9 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | ANALYZE | Stable | 3.5 |
 | TRUNCATE | Stable | 3.5 |
 | ALTER COLLECTION | Stable | 3.5 |
+| Multi-row INSERT | Stable | 3.5 |
+| UPSERT INTO statement | Stable | 3.5 |
+| WITH (quality='...') alias | Stable | 3.5 |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
@@ -1003,6 +1006,7 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
 | `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset (maps to ef_search: 64/128/512/4096/auto) |
+| `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence. |
 | `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`) |
 | `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |
 | `rerank` | boolean | `true`/`false` | Two-stage SIMD reranking (retrieves 4x candidates, re-ranks with exact distance) |
@@ -1028,6 +1032,9 @@ WITH (mode = 'balanced', ef_search = 256, rerank = true)
 -- Dual quantization with oversampling
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (quantization = 'dual', oversampling = 2)
+
+-- quality alias for mode (v3.5+)
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (quality = 'accurate')
 ```
 
 ---
@@ -1542,13 +1549,13 @@ Unknown options are rejected with an error message listing supported options.
 
 ## DML Statements (INSERT, UPDATE, DELETE)
 
-### INSERT INTO (v3.2+)
+### INSERT INTO (v3.2+, multi-row v3.5+)
 
-Insert a single row into a collection. Column names are listed in parentheses,
-followed by corresponding values.
+Insert one or more rows into a collection. Column names are listed in parentheses,
+followed by corresponding values. Multiple rows are separated by commas (v3.5+).
 
 ```sql
--- Insert with string value
+-- Insert a single row
 INSERT INTO docs (id, title, category) VALUES (1, 'Getting Started', 'tutorial')
 
 -- Insert with numeric values
@@ -1562,9 +1569,27 @@ INSERT INTO events (id, description, metadata) VALUES (10, 'system boot', NULL)
 
 -- Insert with parameter-bound vector
 INSERT INTO docs (id, vector, category) VALUES (1, $vector, 'test')
+
+-- Multi-row insert (v3.5+)
+INSERT INTO docs (id, vector, title) VALUES (1, $v1, 'Hello'), (2, $v2, 'World'), (3, $v3, 'Foo')
 ```
 
-Column count must match value count. Types are inferred from literal values.
+Column count must match value count **in every row**. Types are inferred from
+literal values. Multi-row INSERT executes as a single batch `upsert()` call.
+
+### UPSERT INTO (v3.5+)
+
+Insert or update rows. Identical syntax to INSERT; semantically equivalent since
+VelesDB's INSERT is always idempotent (existing IDs are overwritten). UPSERT
+makes this intent explicit at the SQL level.
+
+```sql
+-- Single-row upsert
+UPSERT INTO docs (id, vector, title) VALUES (1, $v, 'Updated')
+
+-- Multi-row upsert
+UPSERT INTO docs (id, vector, title) VALUES (1, $v1, 'A'), (2, $v2, 'B')
+```
 
 ### UPDATE (v3.2+)
 
@@ -1966,7 +1991,8 @@ VelesQL returns structured errors:
 |-----------|---------|---------|
 | `SELECT` | Query data | `SELECT * FROM docs WHERE vector NEAR $v LIMIT 10` |
 | `MATCH` | Graph traversal | `MATCH (a)-[:KNOWS]->(b) RETURN a.name` |
-| `INSERT INTO` | Add rows | `INSERT INTO docs (id, title) VALUES (1, 'Hello')` |
+| `INSERT INTO` | Add rows (multi-row) | `INSERT INTO docs (id, title) VALUES (1, 'A'), (2, 'B')` |
+| `UPSERT INTO` | Insert or update rows | `UPSERT INTO docs (id, title) VALUES (1, 'Updated')` |
 | `UPDATE` | Modify rows | `UPDATE docs SET status = 'done' WHERE id = 1` |
 | `DELETE FROM` | Remove rows | `DELETE FROM docs WHERE id = 42` |
 | `INSERT EDGE` | Add graph edge | `INSERT EDGE INTO kg (source=1, target=2, label='REL')` |

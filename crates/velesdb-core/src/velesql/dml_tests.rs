@@ -12,9 +12,10 @@ fn test_parse_insert_statement() {
         DmlStatement::Insert(insert) => {
             assert_eq!(insert.table, "products");
             assert_eq!(insert.columns, vec!["id", "name", "price"]);
-            assert_eq!(insert.values.len(), 3);
-            assert_eq!(insert.values[0], Value::Integer(1));
-            assert_eq!(insert.values[1], Value::String("Pen".to_string()));
+            assert_eq!(insert.rows.len(), 1);
+            assert_eq!(insert.rows[0].len(), 3);
+            assert_eq!(insert.rows[0][0], Value::Integer(1));
+            assert_eq!(insert.rows[0][1], Value::String("Pen".to_string()));
         }
         DmlStatement::Update(_) => panic!("Expected INSERT statement"),
         _ => panic!("Unexpected DML variant"),

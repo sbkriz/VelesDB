@@ -9,6 +9,8 @@ mod advanced;
 mod aggregation;
 #[path = "bdd/ddl_lifecycle.rs"]
 mod ddl_lifecycle;
+#[path = "bdd/dml_enhanced.rs"]
+mod dml_enhanced;
 #[path = "bdd/helpers.rs"]
 mod helpers;
 #[path = "bdd/hybrid_compositions.rs"]

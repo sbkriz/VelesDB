@@ -27,7 +27,7 @@ impl Parser {
         Err(ParseError::syntax(
             0,
             "",
-            "Expected SHOW, DESCRIBE, EXPLAIN, ANALYZE, TRUNCATE, ALTER, MATCH, SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
+            "Expected SHOW, DESCRIBE, EXPLAIN, ANALYZE, TRUNCATE, ALTER, MATCH, SELECT, INSERT, UPSERT, UPDATE, DELETE, CREATE, DROP, or TRAIN query",
         ))
     }
 
@@ -54,6 +54,7 @@ impl Parser {
             Rule::delete_edge_stmt => Self::parse_delete_edge_stmt(p),
             Rule::delete_stmt => Self::parse_delete_stmt(p),
             Rule::insert_stmt => Self::parse_insert_stmt(p),
+            Rule::upsert_stmt => Self::parse_upsert_stmt(p),
             Rule::update_stmt => Self::parse_update_stmt(p),
             _ => Err(ParseError::syntax(0, "", "Unknown statement type")),
         }

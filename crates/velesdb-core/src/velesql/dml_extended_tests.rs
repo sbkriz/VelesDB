@@ -12,7 +12,7 @@ use crate::velesql::{CompareOp, Condition, DmlStatement, Parser, Value};
 
 #[test]
 fn test_insert_all_value_types() {
-    let query = "INSERT INTO docs (a, b, c, d, e) VALUES (42, 3.14, 'hello', true, NULL)";
+    let query = "INSERT INTO docs (a, b, c, d, e) VALUES (42, 2.75, 'hello', true, NULL)";
     let result = Parser::parse(query);
     assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
 
@@ -24,12 +24,14 @@ fn test_insert_all_value_types() {
 
     assert_eq!(insert.table, "docs");
     assert_eq!(insert.columns, vec!["a", "b", "c", "d", "e"]);
-    assert_eq!(insert.values.len(), 5);
-    assert_eq!(insert.values[0], Value::Integer(42));
-    assert_eq!(insert.values[1], Value::Float(3.14));
-    assert_eq!(insert.values[2], Value::String("hello".to_string()));
-    assert_eq!(insert.values[3], Value::Boolean(true));
-    assert_eq!(insert.values[4], Value::Null);
+    assert_eq!(insert.rows.len(), 1);
+    let row = &insert.rows[0];
+    assert_eq!(row.len(), 5);
+    assert_eq!(row[0], Value::Integer(42));
+    assert_eq!(row[1], Value::Float(2.75));
+    assert_eq!(row[2], Value::String("hello".to_string()));
+    assert_eq!(row[3], Value::Boolean(true));
+    assert_eq!(row[4], Value::Null);
 }
 
 #[test]
@@ -46,9 +48,10 @@ fn test_insert_with_vector_parameter() {
 
     assert_eq!(insert.table, "docs");
     assert_eq!(insert.columns, vec!["id", "vector", "title"]);
-    assert_eq!(insert.values[0], Value::Integer(1));
-    assert_eq!(insert.values[1], Value::Parameter("v".to_string()));
-    assert_eq!(insert.values[2], Value::String("test".to_string()));
+    assert_eq!(insert.rows.len(), 1);
+    assert_eq!(insert.rows[0][0], Value::Integer(1));
+    assert_eq!(insert.rows[0][1], Value::Parameter("v".to_string()));
+    assert_eq!(insert.rows[0][2], Value::String("test".to_string()));
 }
 
 #[test]
@@ -64,8 +67,9 @@ fn test_insert_many_columns() {
     };
 
     assert_eq!(insert.columns.len(), 6);
-    assert_eq!(insert.values.len(), 6);
-    for (i, val) in insert.values.iter().enumerate() {
+    assert_eq!(insert.rows.len(), 1);
+    assert_eq!(insert.rows[0].len(), 6);
+    for (i, val) in insert.rows[0].iter().enumerate() {
         let expected = i64::try_from(i + 1).expect("test index fits in i64");
         assert_eq!(*val, Value::Integer(expected));
     }
