@@ -2410,9 +2410,85 @@ TRAIN QUANTIZER ON embeddings WITH (m = 8, k = 256)
 TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
 ```
 
+### Multi-Row INSERT and UPSERT
+
+```sql
+-- Multi-row insert (batch)
+INSERT INTO products (id, title, price) VALUES
+  (1, 'Laptop', 999.99),
+  (2, 'Mouse', 29.99),
+  (3, 'Keyboard', 79.99)
+
+-- Upsert: insert or update if exists
+UPSERT INTO products (id, title, price) VALUES (1, 'Laptop Pro', 1299.99)
+
+-- Multi-row upsert
+UPSERT INTO products (id, title, price) VALUES
+  (1, 'Laptop Pro', 1299.99),
+  (4, 'Monitor', 499.99)
+```
+
+### Graph Edge and Node Operations
+
+```sql
+-- Query all edges in a graph collection
+SELECT EDGES FROM knowledge LIMIT 100
+
+-- Query outgoing edges from a specific node
+SELECT EDGES FROM knowledge WHERE source = 1
+
+-- Query edges by relationship type
+SELECT EDGES FROM knowledge WHERE label = 'AUTHORED_BY'
+
+-- Insert a node with payload into a graph collection
+INSERT NODE INTO knowledge (id = 42, payload = '{"name": "Alice", "_labels": ["Person"]}')
+```
+
+### Introspection
+
+```sql
+-- List all collections with their types
+SHOW COLLECTIONS
+
+-- Get collection metadata (dimension, metric, point count, type)
+DESCRIBE COLLECTION documents
+DESCRIBE documents
+
+-- View query execution plan without running
+EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+```
+
+### Administration
+
+```sql
+-- Create a secondary index for fast metadata lookups
+CREATE INDEX ON documents (category)
+
+-- Drop an index
+DROP INDEX ON documents (category)
+
+-- Compute CBO statistics for query optimizer
+ANALYZE documents
+
+-- Delete all data from a collection (preserves the collection)
+TRUNCATE documents
+
+-- Modify collection settings
+ALTER COLLECTION documents SET (auto_reindex = true)
+
+-- Flush data to disk (WAL only)
+FLUSH
+
+-- Full flush (includes index serialization)
+FLUSH FULL
+
+-- Flush a specific collection
+FLUSH documents
+```
+
 ---
 
-## EBNF Grammar (v3.5)
+## EBNF Grammar (v3.6)
 
 ```ebnf
 (* ═══════════════════════════════════════════════════════ *)
@@ -2420,11 +2496,15 @@ TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
 (* ═══════════════════════════════════════════════════════ *)
 
 query             = let_clause* (show_collections_stmt | describe_stmt
-                    | explain_stmt | match_query | compound_query | train_stmt
+                    | explain_stmt | flush_stmt
+                    | analyze_stmt | truncate_stmt | alter_collection_stmt
+                    | select_edges_stmt
+                    | match_query | compound_query | train_stmt
                     | create_index_stmt | create_collection_stmt
                     | drop_index_stmt | drop_collection_stmt
-                    | insert_edge_stmt | delete_edge_stmt
-                    | delete_stmt | insert_stmt | update_stmt) [";"] ;
+                    | insert_node_stmt | insert_edge_stmt
+                    | delete_edge_stmt | delete_stmt
+                    | upsert_stmt | insert_stmt | update_stmt) [";"] ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* Introspection statements (v3.4)                        *)
@@ -2627,7 +2707,8 @@ fusion_option     = identifier "=" (string | float | integer) ;
 
 insert_stmt       = "INSERT" "INTO" identifier
                     "(" identifier ("," identifier)* ")"
-                    "VALUES" "(" value ("," value)* ")" ;
+                    "VALUES" values_row ("," values_row)* ;
+values_row        = "(" value ("," value)* ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* UPDATE statement (v3.2)                                *)
@@ -2687,6 +2768,40 @@ drop_collection_stmt = "DROP" "COLLECTION" ["IF" "EXISTS"] identifier ;
 (* ═══════════════════════════════════════════════════════ *)
 
 train_stmt        = "TRAIN" "QUANTIZER" "ON" identifier with_clause ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Admin statements (v3.5-3.6)                            *)
+(* ═══════════════════════════════════════════════════════ *)
+
+analyze_stmt      = "ANALYZE" ["COLLECTION"] identifier ;
+truncate_stmt     = "TRUNCATE" ["COLLECTION"] identifier ;
+alter_collection_stmt = "ALTER" "COLLECTION" identifier "SET"
+                        "(" create_option_list ")" ;
+flush_stmt        = "FLUSH" ["FULL"] [identifier] ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Index management (v3.5)                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
+drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* UPSERT (v3.5)                                          *)
+(* ═══════════════════════════════════════════════════════ *)
+
+upsert_stmt       = "UPSERT" "INTO" identifier
+                    "(" identifier ("," identifier)* ")"
+                    "VALUES" values_row ("," values_row)* ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Graph edge/node queries (v3.5)                         *)
+(* ═══════════════════════════════════════════════════════ *)
+
+select_edges_stmt = "SELECT" "EDGES" "FROM" identifier
+                    [where_clause] [limit_clause] ;
+insert_node_stmt  = "INSERT" "NODE" "INTO" identifier
+                    "(" edge_field ("," edge_field)* ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* Subqueries (v3.2)                                      *)
