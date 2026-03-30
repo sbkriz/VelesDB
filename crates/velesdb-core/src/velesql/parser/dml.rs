@@ -2,8 +2,8 @@
 
 use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
-    DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement, InsertStatement,
-    Query, UpdateAssignment, UpdateStatement, Value,
+    Condition, DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement,
+    InsertStatement, Query, UpdateAssignment, UpdateStatement, Value,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -155,25 +155,7 @@ impl Parser {
     pub(crate) fn parse_delete_stmt(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Query, ParseError> {
-        let mut table: Option<String> = None;
-        let mut where_clause = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier if table.is_none() => {
-                    table = Some(extract_identifier(&inner));
-                }
-                Rule::where_clause => {
-                    where_clause = Some(Self::parse_where_clause(inner)?);
-                }
-                _ => {}
-            }
-        }
-
-        let table =
-            table.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a target collection"))?;
-        let where_clause = where_clause
-            .ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a WHERE clause"))?;
+        let (table, where_clause) = extract_delete_fields(pair)?;
 
         Ok(Query::new_dml(DmlStatement::Delete(DeleteStatement {
             table,
@@ -190,26 +172,7 @@ impl Parser {
     pub(crate) fn parse_delete_edge_stmt(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Query, ParseError> {
-        let mut edge_id: Option<u64> = None;
-        let mut collection: Option<String> = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::value if edge_id.is_none() => {
-                    let v = Self::parse_value(inner)?;
-                    edge_id = Some(extract_edge_id(&v)?);
-                }
-                Rule::identifier if collection.is_none() => {
-                    collection = Some(extract_identifier(&inner));
-                }
-                _ => {}
-            }
-        }
-
-        let edge_id =
-            edge_id.ok_or_else(|| ParseError::syntax(0, "", "DELETE EDGE requires an edge ID"))?;
-        let collection = collection
-            .ok_or_else(|| ParseError::syntax(0, "", "DELETE EDGE requires a collection name"))?;
+        let (edge_id, collection) = extract_delete_edge_fields(pair)?;
 
         Ok(Query::new_dml(DmlStatement::DeleteEdge(
             DeleteEdgeStatement {
@@ -223,6 +186,67 @@ impl Parser {
 // ---------------------------------------------------------------------------
 // Private helpers for DML extensions
 // ---------------------------------------------------------------------------
+
+/// Extracts table name and WHERE clause from a DELETE pair.
+///
+/// Iterates the pair's children once and validates that both required
+/// fields (collection name and WHERE clause) are present.
+fn extract_delete_fields(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<(String, Condition), ParseError> {
+    let mut table: Option<String> = None;
+    let mut where_clause = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::identifier if table.is_none() => {
+                table = Some(extract_identifier(&inner));
+            }
+            Rule::where_clause => {
+                where_clause = Some(Parser::parse_where_clause(inner)?);
+            }
+            _ => {}
+        }
+    }
+
+    let table =
+        table.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a target collection"))?;
+    let where_clause =
+        where_clause.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a WHERE clause"))?;
+
+    Ok((table, where_clause))
+}
+
+/// Extracts edge ID and collection name from a DELETE EDGE pair.
+///
+/// Iterates the pair's children once and validates that both required
+/// fields (edge ID and collection name) are present.
+fn extract_delete_edge_fields(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<(u64, String), ParseError> {
+    let mut edge_id: Option<u64> = None;
+    let mut collection: Option<String> = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::value if edge_id.is_none() => {
+                let v = Parser::parse_value(inner)?;
+                edge_id = Some(extract_edge_id(&v)?);
+            }
+            Rule::identifier if collection.is_none() => {
+                collection = Some(extract_identifier(&inner));
+            }
+            _ => {}
+        }
+    }
+
+    let edge_id =
+        edge_id.ok_or_else(|| ParseError::syntax(0, "", "DELETE EDGE requires an edge ID"))?;
+    let collection = collection
+        .ok_or_else(|| ParseError::syntax(0, "", "DELETE EDGE requires a collection name"))?;
+
+    Ok((edge_id, collection))
+}
 
 /// Parses edge field list: `identifier = value` pairs.
 fn parse_edge_fields(

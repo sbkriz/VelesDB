@@ -126,25 +126,9 @@ impl Database {
         &self,
         stmt: &crate::velesql::InsertEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
-        // RBAC hook — allows premium extensions to reject DML mutations.
-        if let Some(ref observer) = self.observer {
-            observer.on_dml_mutation_request("INSERT_EDGE", &stmt.collection)?;
-        }
-
+        self.check_dml_mutation("INSERT_EDGE", &stmt.collection)?;
         let graph = self.resolve_graph_collection(&stmt.collection)?;
-        let edge_id = stmt
-            .edge_id
-            .unwrap_or_else(|| hash_edge_id(stmt.source, stmt.target, &stmt.label));
-        let edge =
-            crate::collection::GraphEdge::new(edge_id, stmt.source, stmt.target, &stmt.label)?;
-
-        let edge = if stmt.properties.is_empty() {
-            edge
-        } else {
-            let props = resolve_edge_properties(&stmt.properties)?;
-            edge.with_properties(props)
-        };
-
+        let edge = build_graph_edge(stmt)?;
         graph.add_edge(edge)?;
         Ok(Vec::new())
     }
@@ -162,11 +146,7 @@ impl Database {
         &self,
         stmt: &crate::velesql::DeleteStatement,
     ) -> Result<Vec<SearchResult>> {
-        // RBAC hook — allows premium extensions to reject DML mutations.
-        if let Some(ref observer) = self.observer {
-            observer.on_dml_mutation_request("DELETE", &stmt.table)?;
-        }
-
+        self.check_dml_mutation("DELETE", &stmt.table)?;
         let ids = extract_delete_ids(&stmt.where_clause)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
         collection.delete(&ids)?;
@@ -184,14 +164,21 @@ impl Database {
         &self,
         stmt: &crate::velesql::DeleteEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
-        // RBAC hook — allows premium extensions to reject DML mutations.
-        if let Some(ref observer) = self.observer {
-            observer.on_dml_mutation_request("DELETE_EDGE", &stmt.collection)?;
-        }
-
+        self.check_dml_mutation("DELETE_EDGE", &stmt.collection)?;
         let graph = self.resolve_graph_collection(&stmt.collection)?;
         let _ = graph.remove_edge(stmt.edge_id);
         Ok(Vec::new())
+    }
+
+    /// Checks the RBAC observer for DML mutation permission.
+    ///
+    /// Returns `Ok(())` if no observer is configured or if the observer
+    /// allows the operation. Propagates the observer's error otherwise.
+    fn check_dml_mutation(&self, operation: &str, collection: &str) -> Result<()> {
+        if let Some(ref observer) = self.observer {
+            observer.on_dml_mutation_request(operation, collection)?;
+        }
+        Ok(())
     }
 
     /// Resolves a graph collection by name.
@@ -206,6 +193,25 @@ impl Database {
 // ---------------------------------------------------------------------------
 // Private helper functions
 // ---------------------------------------------------------------------------
+
+/// Builds a `GraphEdge` from an `InsertEdgeStatement`.
+///
+/// Resolves the edge ID (explicit or hashed), creates the edge, and
+/// attaches properties if any are present.
+fn build_graph_edge(
+    stmt: &crate::velesql::InsertEdgeStatement,
+) -> Result<crate::collection::GraphEdge> {
+    let edge_id = stmt
+        .edge_id
+        .unwrap_or_else(|| hash_edge_id(stmt.source, stmt.target, &stmt.label));
+    let edge = crate::collection::GraphEdge::new(edge_id, stmt.source, stmt.target, &stmt.label)?;
+
+    if stmt.properties.is_empty() {
+        return Ok(edge);
+    }
+    let props = resolve_edge_properties(&stmt.properties)?;
+    Ok(edge.with_properties(props))
+}
 
 /// Extracts the operation name and collection name from a DDL statement.
 ///

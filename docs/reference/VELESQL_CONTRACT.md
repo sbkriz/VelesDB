@@ -99,23 +99,27 @@ Request body (DDL example):
 }
 ```
 
-Request body (graph mutation example):
+Request body (graph mutation example — `collection` is optional, extracted from SQL):
 
 ```json
 {
   "query": "INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY') WITH PROPERTIES (year = 2026)",
-  "params": {},
-  "collection": "knowledge"
+  "params": {}
 }
 ```
 
-DDL success response shape:
+DDL success response shape (standard `QueryResponse` with zero rows):
 
 ```json
 {
-  "success": true,
-  "message": "Collection 'documents' created",
-  "timing_ms": 2.31
+  "results": [],
+  "timing_ms": 2.31,
+  "took_ms": 2,
+  "rows_returned": 0,
+  "meta": {
+    "velesql_contract_version": "3.3.0",
+    "count": 0
+  }
 }
 ```
 
@@ -126,7 +130,7 @@ Rules:
 - DDL statements always route to `/query`, never to `/aggregate`.
 - `CREATE COLLECTION` does not require a `collection` field in the body (the collection name is in the query).
 - `DROP COLLECTION IF EXISTS` returns success even if the collection does not exist.
-- Graph mutation statements (`INSERT EDGE`, `DELETE EDGE`) require `collection` in the body.
+- Graph mutation statements (`INSERT EDGE`, `DELETE EDGE`) extract the collection name from the SQL query; the `collection` field in the request body is optional.
 
 ### `POST /collections/{name}/match`
 
