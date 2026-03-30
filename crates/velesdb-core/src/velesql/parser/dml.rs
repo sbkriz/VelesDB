@@ -189,8 +189,8 @@ impl Parser {
 
 /// Extracts table name and WHERE clause from a DELETE pair.
 ///
-/// Iterates the pair's children once and validates that both required
-/// fields (collection name and WHERE clause) are present.
+/// Grammar guarantees at most one identifier and one where_clause,
+/// so guards are unnecessary.
 fn extract_delete_fields(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<(String, Condition), ParseError> {
@@ -199,28 +199,22 @@ fn extract_delete_fields(
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::identifier if table.is_none() => {
-                table = Some(extract_identifier(&inner));
-            }
-            Rule::where_clause => {
-                where_clause = Some(Parser::parse_where_clause(inner)?);
-            }
+            Rule::identifier => table = Some(extract_identifier(&inner)),
+            Rule::where_clause => where_clause = Some(Parser::parse_where_clause(inner)?),
             _ => {}
         }
     }
 
-    let table =
-        table.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a target collection"))?;
-    let where_clause =
-        where_clause.ok_or_else(|| ParseError::syntax(0, "", "DELETE requires a WHERE clause"))?;
-
-    Ok((table, where_clause))
+    Ok((
+        require_field(table, "DELETE", "a target collection")?,
+        require_field(where_clause, "DELETE", "a WHERE clause")?,
+    ))
 }
 
 /// Extracts edge ID and collection name from a DELETE EDGE pair.
 ///
-/// Iterates the pair's children once and validates that both required
-/// fields (edge ID and collection name) are present.
+/// Grammar guarantees at most one value and one identifier,
+/// so guards are unnecessary.
 fn extract_delete_edge_fields(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<(u64, String), ParseError> {
@@ -229,23 +223,27 @@ fn extract_delete_edge_fields(
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::value if edge_id.is_none() => {
-                let v = Parser::parse_value(inner)?;
-                edge_id = Some(extract_edge_id(&v)?);
-            }
-            Rule::identifier if collection.is_none() => {
-                collection = Some(extract_identifier(&inner));
-            }
+            Rule::value => edge_id = Some(parse_edge_id_value(inner)?),
+            Rule::identifier => collection = Some(extract_identifier(&inner)),
             _ => {}
         }
     }
 
-    let edge_id =
-        edge_id.ok_or_else(|| ParseError::syntax(0, "", "DELETE EDGE requires an edge ID"))?;
-    let collection = collection
-        .ok_or_else(|| ParseError::syntax(0, "", "DELETE EDGE requires a collection name"))?;
+    Ok((
+        require_field(edge_id, "DELETE EDGE", "an edge ID")?,
+        require_field(collection, "DELETE EDGE", "a collection name")?,
+    ))
+}
 
-    Ok((edge_id, collection))
+/// Parses a value pair into a u64 edge ID.
+fn parse_edge_id_value(pair: pest::iterators::Pair<Rule>) -> Result<u64, ParseError> {
+    let v = Parser::parse_value(pair)?;
+    extract_edge_id(&v)
+}
+
+/// Unwraps an optional field or returns a syntax error.
+fn require_field<T>(opt: Option<T>, context: &str, field: &str) -> Result<T, ParseError> {
+    opt.ok_or_else(|| ParseError::syntax(0, "", format!("{context} requires {field}")))
 }
 
 /// Parses edge field list: `identifier = value` pairs.
