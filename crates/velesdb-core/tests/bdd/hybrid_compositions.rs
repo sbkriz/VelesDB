@@ -1,83 +1,23 @@
-#![cfg(feature = "persistence")]
 //! BDD-style end-to-end tests for complex `VelesQL` query compositions.
 //!
 //! These tests exercise **real-world usage patterns** that combine vector search
 //! with metadata filters, text search, aggregation, ordering, and mutations in
 //! a single query.  Every scenario uses the **full pipeline**: SQL string ->
 //! `Parser::parse()` -> `Database::execute_query()` -> verify results.
-//!
-//! Run with:
-//! ```text
-//! cargo test -p velesdb-core --features persistence
-//!     --test velesql_hybrid_bdd_tests -- --test-threads=1
-//! ```
 
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
-
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use serde_json::json;
-use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, Point, SearchResult};
+use velesdb_core::{Database, Point};
+
+use super::helpers::{
+    create_test_db, execute_sql, execute_sql_with_params, payload_f64, payload_str, result_ids,
+    vector_param,
+};
 
 // =========================================================================
-// Helpers
+// Module-specific setup
 // =========================================================================
-
-/// Execute a `VelesQL` SQL string through the full pipeline: parse -> execute.
-fn execute_sql(db: &Database, sql: &str) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, &HashMap::new())
-}
-
-/// Execute a `VelesQL` SQL string with named parameters.
-fn execute_sql_with_params(
-    db: &Database,
-    sql: &str,
-    params: &HashMap<String, serde_json::Value>,
-) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, params)
-}
-
-/// Create a fresh database in a temp directory.
-fn create_test_db() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("test: create temp dir");
-    let db = Database::open(dir.path()).expect("test: open database");
-    (dir, db)
-}
-
-/// Build a param map with a single vector parameter named `$v`.
-fn vector_param(v: &[f32]) -> HashMap<String, serde_json::Value> {
-    let mut params = HashMap::new();
-    params.insert("v".to_string(), json!(v));
-    params
-}
-
-/// Collect result IDs into a `HashSet` for order-independent comparison.
-fn result_ids(results: &[SearchResult]) -> HashSet<u64> {
-    results.iter().map(|r| r.point.id).collect()
-}
-
-/// Extract a numeric payload field from a `SearchResult`.
-fn payload_f64(result: &SearchResult, field: &str) -> Option<f64> {
-    result
-        .point
-        .payload
-        .as_ref()
-        .and_then(|p| p.get(field))
-        .and_then(serde_json::Value::as_f64)
-}
-
-/// Extract a string payload field from a `SearchResult`.
-fn payload_str<'a>(result: &'a SearchResult, field: &str) -> Option<&'a str> {
-    result
-        .point
-        .payload
-        .as_ref()
-        .and_then(|p| p.get(field))
-        .and_then(serde_json::Value::as_str)
-}
 
 /// Populate an "articles" collection with diverse data for complex queries.
 ///
@@ -159,9 +99,6 @@ fn test_near_with_three_metadata_filters() {
     let results =
         execute_sql_with_params(&db, sql, &params).expect("test: NEAR + 3 metadata filters");
 
-    // id 2: price=19.99 (< 20, excluded)
-    // id 3: active=false (excluded)
-    // id 1: science, price=29.99 > 20, active=true => matches
     let ids = result_ids(&results);
     assert!(
         ids.contains(&1),
@@ -277,7 +214,7 @@ fn test_near_with_ilike_case_insensitive() {
 
 /// GIVEN a rich articles collection
 /// WHEN querying NEAR `[1,0,0,0]` AND price BETWEEN 20 AND 40 AND author IS NOT NULL
-/// THEN ids 1 (29.99) and 3 (39.99) match — both science cluster, priced 20-40.
+/// THEN ids 1 (29.99) and 3 (39.99) match -- both science cluster, priced 20-40.
 #[test]
 fn test_near_with_between_and_not_null() {
     let (_dir, db) = create_test_db();
@@ -341,7 +278,6 @@ fn test_near_with_in_and_order_by_similarity() {
 
     assert!(!results.is_empty(), "Should return at least one result");
 
-    // All results must be from science or tech, never history.
     for r in &results {
         let cat = payload_str(r, "category").expect("test: category must exist");
         assert!(
@@ -352,7 +288,6 @@ fn test_near_with_in_and_order_by_similarity() {
         );
     }
 
-    // Scores must be in non-increasing order (DESC).
     for w in results.windows(2) {
         assert!(
             w[0].score >= w[1].score,
@@ -446,7 +381,6 @@ fn test_near_with_temporal_filter() {
         );
     }
 
-    // The top result should be from the science cluster (closest to [1,0,0,0]).
     let top_cat = payload_str(&results[0], "category");
     assert_eq!(
         top_cat,
@@ -476,15 +410,12 @@ fn test_distinct_with_near() {
         .filter_map(|r| payload_str(r, "category"))
         .collect();
 
-    // [0.5, 0.5, 0, 0] is equidistant between science and tech clusters;
-    // with LIMIT 10 on 8 items we see all clusters.
     assert!(
         categories.len() >= 2,
         "DISTINCT should yield at least 2 unique categories, got {:?}",
         categories
     );
 
-    // Verify no duplicate category values in results.
     assert_eq!(
         categories.len(),
         results.len(),
@@ -549,7 +480,6 @@ fn test_multi_column_order_by() {
 
     assert_eq!(results.len(), 8, "All 8 articles should be returned");
 
-    // Verify primary sort: category ascending.
     for w in results.windows(2) {
         let cat_a = payload_str(&w[0], "category").expect("test: category");
         let cat_b = payload_str(&w[1], "category").expect("test: category");
@@ -562,7 +492,6 @@ fn test_multi_column_order_by() {
             w[1].point.id
         );
 
-        // Within same category, verify secondary sort: price descending.
         if cat_a == cat_b {
             let price_a = payload_f64(&w[0], "price").expect("test: price");
             let price_b = payload_f64(&w[1], "price").expect("test: price");
@@ -587,10 +516,6 @@ fn test_multi_column_order_by() {
 /// WHEN querying NEAR `[0,1,0,0]` AND tags MATCH 'programming'
 /// THEN returns hybrid (vector + BM25 RRF) fused results containing the
 ///      best-matching article (id=4, "rust programming language").
-///
-/// NOTE: Hybrid search fuses NEAR and BM25 via RRF — the scalar filter
-/// `category = 'tech'` is tested separately in scenario 12.  Here we
-/// validate the triple signal (vector closeness + text relevance + fusion).
 #[test]
 fn test_near_match_bm25_with_vector_affinity() {
     let (_dir, db) = create_test_db();
@@ -601,14 +526,11 @@ fn test_near_match_bm25_with_vector_affinity() {
     let params = vector_param(&[0.0, 1.0, 0.0, 0.0]);
     let results = execute_sql_with_params(&db, sql, &params).expect("test: NEAR + MATCH hybrid");
 
-    // "programming" appears in id=4 tags ("rust programming language").
-    // NEAR [0,1,0,0] also favors id=4 (exact vector match).
     assert!(
         !results.is_empty(),
         "Hybrid search should return at least one result"
     );
 
-    // id=4 must be present — it matches both vector proximity and text.
     let ids = result_ids(&results);
     assert!(
         ids.contains(&4),
@@ -617,7 +539,6 @@ fn test_near_match_bm25_with_vector_affinity() {
         ids
     );
 
-    // All results should have positive fused scores.
     for r in &results {
         assert!(
             r.score > 0.0,
@@ -645,8 +566,6 @@ fn test_where_complex_five_conditions() {
                AND active = true AND year >= 2022 LIMIT 10";
     let results = execute_sql(&db, sql).expect("test: 5 conditions combined");
 
-    // tech items: id 4 (49.99, active, 2024), id 5 (34.99, active, 2023), id 6 (24.99, active, 2022)
-    // All three match: category=tech, 20<price<50, active=true, year>=2022.
     let ids = result_ids(&results);
     let expected: HashSet<u64> = [4, 5, 6].into_iter().collect();
     assert_eq!(
@@ -677,7 +596,6 @@ fn test_update_then_select_verifies_state() {
     let (_dir, db) = create_test_db();
     setup_rich_collection(&db);
 
-    // Verify id=4 is active before mutation.
     let before = execute_sql(&db, "SELECT * FROM articles WHERE active = true LIMIT 10")
         .expect("test: SELECT active before update");
     let before_ids = result_ids(&before);
@@ -687,11 +605,9 @@ fn test_update_then_select_verifies_state() {
         before_ids
     );
 
-    // Mutate: set id=4 active=false.
     execute_sql(&db, "UPDATE articles SET active = false WHERE id = 4;")
         .expect("test: UPDATE should succeed");
 
-    // Verify id=4 is no longer active.
     let after = execute_sql(&db, "SELECT * FROM articles WHERE active = true LIMIT 10")
         .expect("test: SELECT active after update");
     let after_ids = result_ids(&after);
@@ -714,7 +630,6 @@ fn test_delete_then_near_excludes_deleted() {
     let (_dir, db) = create_test_db();
     setup_rich_collection(&db);
 
-    // Verify id=1 is the top NEAR result before deletion.
     let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let before = execute_sql_with_params(
         &db,
@@ -727,10 +642,8 @@ fn test_delete_then_near_excludes_deleted() {
         "id=1 should be top result before DELETE"
     );
 
-    // Mutate: delete id=1.
     execute_sql(&db, "DELETE FROM articles WHERE id = 1;").expect("test: DELETE should succeed");
 
-    // Verify id=1 is gone from NEAR results.
     let after = execute_sql_with_params(
         &db,
         "SELECT * FROM articles WHERE vector NEAR $v LIMIT 5",
@@ -744,7 +657,6 @@ fn test_delete_then_near_excludes_deleted() {
         after_ids
     );
 
-    // Remaining results should still be ordered by similarity.
     for w in after.windows(2) {
         assert!(
             w[0].score >= w[1].score,

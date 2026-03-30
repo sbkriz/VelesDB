@@ -1,4 +1,3 @@
-#![cfg(feature = "persistence")]
 //! BDD-style end-to-end tests for `VelesQL` vector search behaviors.
 //!
 //! These tests verify actual runtime behavior of NEAR, similarity scoring,
@@ -9,40 +8,16 @@
 //! - **When**: a `VelesQL` query is executed through the full pipeline
 //! - **Then**: results match expected behavior (ordering, filtering, scores)
 
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
-
-use std::collections::HashMap;
-
 use serde_json::json;
-use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, Point, SearchResult};
+use velesdb_core::{Database, Point};
+
+use super::helpers::{
+    approx_eq, create_test_db, execute_sql, execute_sql_with_params, vector_param,
+};
 
 // =========================================================================
-// Helpers
+// Module-specific setup
 // =========================================================================
-
-/// Execute a `VelesQL` SQL string through the full pipeline: parse -> validate -> execute.
-fn execute_sql(db: &Database, sql: &str) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, &HashMap::new())
-}
-
-/// Execute a `VelesQL` SQL string with named parameters.
-fn execute_sql_with_params(
-    db: &Database,
-    sql: &str,
-    params: &HashMap<String, serde_json::Value>,
-) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, params)
-}
-
-/// Create a fresh database in a temp directory.
-fn create_test_db() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("test: create temp dir");
-    let db = Database::open(dir.path()).expect("test: open database");
-    (dir, db)
-}
 
 /// Populate a "docs" collection with known vectors for predictable search.
 ///
@@ -63,7 +38,6 @@ fn setup_search_collection(db: &Database) {
         .expect("test: docs collection must exist");
 
     vc.upsert(vec![
-        // Cluster 1: science docs (vectors near [1,0,0,0])
         Point::new(
             1,
             vec![1.0, 0.0, 0.0, 0.0],
@@ -79,7 +53,6 @@ fn setup_search_collection(db: &Database) {
             vec![0.9, 0.1, 0.0, 0.0],
             Some(json!({"title":"Biology Today","category":"science","year":2024})),
         ),
-        // Cluster 2: tech docs (vectors near [0,1,0,0])
         Point::new(
             4,
             vec![0.0, 1.0, 0.0, 0.0],
@@ -90,7 +63,6 @@ fn setup_search_collection(db: &Database) {
             vec![0.05, 0.95, 0.0, 0.0],
             Some(json!({"title":"Python Guide","category":"tech","year":2023})),
         ),
-        // Cluster 3: history docs (vectors near [0,0,1,0])
         Point::new(
             6,
             vec![0.0, 0.0, 1.0, 0.0],
@@ -101,7 +73,6 @@ fn setup_search_collection(db: &Database) {
             vec![0.0, 0.0, 0.9, 0.1],
             Some(json!({"title":"Ancient Rome","category":"history","year":2021})),
         ),
-        // Outlier (equidistant from all clusters)
         Point::new(
             8,
             vec![0.25, 0.25, 0.25, 0.25],
@@ -109,18 +80,6 @@ fn setup_search_collection(db: &Database) {
         ),
     ])
     .expect("test: upsert search corpus");
-}
-
-/// Build a param map with a single vector parameter named `$v`.
-fn vector_param(v: &[f32]) -> HashMap<String, serde_json::Value> {
-    let mut params = HashMap::new();
-    params.insert("v".to_string(), json!(v));
-    params
-}
-
-/// Floating-point equality within epsilon.
-fn approx_eq(a: f32, b: f32, epsilon: f32) -> bool {
-    (a - b).abs() < epsilon
 }
 
 // =========================================================================
@@ -339,13 +298,11 @@ fn test_orthogonal_query_returns_lower_scores() {
     let (_dir, db) = create_test_db();
     setup_search_collection(&db);
 
-    // Exact-match query for reference score
     let exact_sql = "SELECT * FROM docs WHERE vector NEAR $v LIMIT 1";
     let exact_params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let exact_results =
         execute_sql_with_params(&db, exact_sql, &exact_params).expect("test: exact query");
 
-    // Orthogonal query
     let ortho_sql = "SELECT * FROM docs WHERE vector NEAR $v LIMIT 1";
     let ortho_params = vector_param(&[0.0, 0.0, 0.0, 1.0]);
     let ortho_results =

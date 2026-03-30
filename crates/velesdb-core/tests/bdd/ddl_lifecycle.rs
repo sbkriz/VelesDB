@@ -1,32 +1,11 @@
-#![cfg(feature = "persistence")]
 //! E2E lifecycle tests for `VelesQL` DDL/DML.
 //!
 //! These tests exercise the **full pipeline**: SQL string -> `Parser::parse()` ->
 //! `Database::execute_query()` -> verify database state. Each test is isolated
 //! via `tempfile::TempDir` and requires the `persistence` feature.
 
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
-
-use std::collections::HashMap;
-use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, DistanceMetric, Point, SearchResult};
-
-// =========================================================================
-// Helpers
-// =========================================================================
-
-/// Execute a `VelesQL` SQL string through the full pipeline: parse -> validate -> execute.
-fn execute_sql(db: &Database, sql: &str) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, &HashMap::new())
-}
-
-/// Create a fresh database in a temp directory.
-fn create_test_db() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("test: create temp dir");
-    let db = Database::open(dir.path()).expect("test: open database");
-    (dir, db)
-}
+use super::helpers::{create_test_db, execute_sql};
+use velesdb_core::{DistanceMetric, Point};
 
 // =========================================================================
 // Scenario 1: Vector Collection Full Lifecycle
@@ -64,7 +43,7 @@ fn test_vector_collection_full_lifecycle() {
     ])
     .expect("test: upsert should succeed");
 
-    // Step 4: SELECT via SQL — verify data is accessible through the parser pipeline
+    // Step 4: SELECT via SQL -- verify data is accessible through the parser pipeline
     let results =
         execute_sql(&db, "SELECT * FROM docs LIMIT 10;").expect("test: SELECT should succeed");
     assert_eq!(results.len(), 4, "Should return all 4 inserted points");
@@ -147,7 +126,7 @@ fn test_graph_collection_with_edges_lifecycle() {
     let edges = gc.get_edges(Some("KNOWS"));
     assert_eq!(edges.len(), 2, "Should have 2 KNOWS edges");
 
-    // Step 5: DELETE EDGE via SQL — delete edge 10
+    // Step 5: DELETE EDGE via SQL -- delete edge 10
     execute_sql(&db, "DELETE EDGE 10 FROM kg;").expect("test: DELETE EDGE should succeed");
     assert_eq!(gc.edge_count(), 1, "Should have 1 edge remaining");
 
@@ -224,7 +203,7 @@ fn test_drop_and_recreate_same_name() {
     execute_sql(&db, "DROP COLLECTION reuse_me;").expect("test: DROP");
     assert!(!db.list_collections().contains(&"reuse_me".to_string()));
 
-    // Recreate with same name — should be fresh and empty
+    // Recreate with same name -- should be fresh and empty
     execute_sql(
         &db,
         "CREATE COLLECTION reuse_me (dimension = 8, metric = 'euclidean');",
@@ -313,7 +292,7 @@ fn test_error_recovery_after_invalid_create() {
         "Error should mention invalid metric, got: {msg}"
     );
 
-    // Previous failure should NOT corrupt database state — valid CREATE should succeed
+    // Previous failure should NOT corrupt database state -- valid CREATE should succeed
     execute_sql(
         &db,
         "CREATE COLLECTION good (dimension = 4, metric = 'cosine');",
@@ -364,8 +343,6 @@ fn test_graph_typed_schema_lifecycle() {
     let (_dir, db) = create_test_db();
 
     // CREATE GRAPH COLLECTION with typed schema via SQL.
-    // The grammar requires a parenthesized body before WITH SCHEMA, so we
-    // provide a dummy option; dimension is optional for graphs.
     execute_sql(
         &db,
         "CREATE GRAPH COLLECTION social (dimension = 4, metric = 'cosine') WITH SCHEMA (NODE Person (name: STRING, age: INTEGER), EDGE KNOWS FROM Person TO Person);",
@@ -407,8 +384,6 @@ fn test_multiple_collection_types_coexist() {
     let (_dir, db) = create_test_db();
 
     // Create all 3 collection types via SQL.
-    // Graph without embeddings: use bare CREATE GRAPH COLLECTION (no body = defaults
-    // to schemaless without embeddings).
     execute_sql(
         &db,
         "CREATE COLLECTION vectors (dimension = 4, metric = 'cosine');",
@@ -498,8 +473,7 @@ fn test_insert_edge_into_vector_collection_errors() {
     )
     .expect("test: CREATE vector");
 
-    // INSERT EDGE into a vector collection should error — resolve_graph_collection
-    // only checks the graph registry, so it will return CollectionNotFound.
+    // INSERT EDGE into a vector collection should error
     let err = execute_sql(
         &db,
         "INSERT EDGE INTO not_a_graph (source = 1, target = 2, label = 'REL');",
@@ -574,10 +548,6 @@ fn test_vector_collection_with_hnsw_params_via_sql() {
 fn test_graph_collection_without_embeddings() {
     let (_dir, db) = create_test_db();
 
-    // CREATE GRAPH COLLECTION without dimension — pure graph, no embeddings.
-    // The grammar requires `create_body` (parenthesized) before SCHEMALESS,
-    // and `create_body` is optional. Without it the graph defaults to schemaless.
-    // Use bare: `CREATE GRAPH COLLECTION name;`
     execute_sql(&db, "CREATE GRAPH COLLECTION pure_graph;").expect("test: CREATE pure graph");
 
     let gc = db
@@ -724,7 +694,7 @@ fn test_create_missing_dimension_is_parse_error() {
 }
 
 // =========================================================================
-// Scenario 16: Graph Collection with Embeddings — Full INSERT + SELECT
+// Scenario 16: Graph Collection with Embeddings -- Full INSERT + SELECT
 // =========================================================================
 
 #[test]
@@ -743,9 +713,6 @@ fn test_graph_with_embeddings_insert_and_select() {
     assert!(gc.has_embeddings());
 
     // Upsert nodes with embeddings via the graph collection API.
-    // `upsert_node_payload` stores only metadata. For graph collections with
-    // embeddings, we also need to store the vectors so that nodes appear in
-    // vector storage. We verify payloads via `get_node_payload` instead.
     gc.upsert_node_payload(
         1,
         &serde_json::json!({"name": "Alice", "_labels": ["Person"]}),
@@ -865,14 +832,14 @@ fn test_insert_into_via_sql() {
     )
     .expect("test: CREATE");
 
-    // INSERT INTO via full SQL pipeline — requires id and vector columns.
+    // INSERT INTO via full SQL pipeline -- requires id and vector columns.
     // Uses $vector parameter which must be resolved from params HashMap.
     execute_sql(
         &db,
         "INSERT INTO sql_insert (id, vector, category) VALUES (1, $vector, 'test');",
     )
     .unwrap_or_else(|e| {
-        // INSERT INTO with $vector parameter requires params — this path tests
+        // INSERT INTO with $vector parameter requires params -- this path tests
         // that the parser handles DML correctly. If it errors because of missing
         // parameter, that's the expected parse -> validate -> execute flow.
         let msg = e.to_string();

@@ -1,4 +1,3 @@
-#![cfg(feature = "persistence")]
 //! BDD-style end-to-end tests for `VelesQL` set operations, TRAIN QUANTIZER,
 //! and LET bindings.
 //!
@@ -9,56 +8,17 @@
 //! - **Given**: collections with known, deterministic data
 //! - **When**: a `VelesQL` query is executed through the full pipeline
 //! - **Then**: results match expected behavior
-//!
-//! Run with: `cargo test -p velesdb-core --features persistence
-//!            --test velesql_setops_bdd_tests -- --test-threads=1`
-
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
-
-use std::collections::{HashMap, HashSet};
 
 use serde_json::json;
-use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, Point, SearchResult};
+use velesdb_core::{Database, Point};
+
+use super::helpers::{
+    create_test_db, execute_sql, execute_sql_with_params, result_ids, vector_param,
+};
 
 // =========================================================================
-// Helpers
+// Module-specific setup
 // =========================================================================
-
-/// Execute a `VelesQL` SQL string through the full pipeline: parse -> validate -> execute.
-fn execute_sql(db: &Database, sql: &str) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, &HashMap::new())
-}
-
-/// Execute a `VelesQL` SQL string with named parameters.
-fn execute_sql_with_params(
-    db: &Database,
-    sql: &str,
-    params: &HashMap<String, serde_json::Value>,
-) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, params)
-}
-
-/// Create a fresh database in a temp directory.
-fn create_test_db() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("test: create temp dir");
-    let db = Database::open(dir.path()).expect("test: open database");
-    (dir, db)
-}
-
-/// Build a param map with a single vector parameter named `$v`.
-fn vector_param(v: &[f32]) -> HashMap<String, serde_json::Value> {
-    let mut m = HashMap::new();
-    m.insert("v".to_string(), json!(v));
-    m
-}
-
-/// Extract point IDs from a result set into a `HashSet`.
-fn result_ids(results: &[SearchResult]) -> HashSet<u64> {
-    results.iter().map(|r| r.point.id).collect()
-}
 
 /// Populate two overlapping collections for set operation tests.
 ///
@@ -234,7 +194,6 @@ fn test_union_combines_results_from_two_queries() {
     .expect("UNION should succeed");
 
     let ids = result_ids(&results);
-    // UNION deduplicates by point ID: ids 1, 2, 3, 4, 5 -> 5 unique results.
     assert_eq!(ids.len(), 5, "UNION should deduplicate: got {ids:?}");
     assert!(ids.contains(&1), "should contain id 1 from alpha");
     assert!(ids.contains(&3), "overlapping id 3 should appear once");
@@ -259,14 +218,12 @@ fn test_union_all_keeps_duplicates() {
     )
     .expect("UNION ALL should succeed");
 
-    // UNION ALL does NOT deduplicate: 3 + 3 = 6 rows.
     assert_eq!(
         results.len(),
         6,
         "UNION ALL should keep all rows including duplicates"
     );
 
-    // Id 3 should appear twice (once from each collection).
     let id3_count = results.iter().filter(|r| r.point.id == 3).count();
     assert_eq!(id3_count, 2, "id 3 should appear twice in UNION ALL");
 }
@@ -339,7 +296,6 @@ fn test_union_same_collection_different_where() {
     .expect("same-collection UNION should succeed");
 
     let ids = result_ids(&results);
-    // All 6 ids should be present (no overlap between categories).
     assert_eq!(ids.len(), 6, "should combine both categories: got {ids:?}");
 }
 
@@ -358,7 +314,6 @@ fn test_train_quantizer_on_collection() {
     let results = execute_sql(&db, "TRAIN QUANTIZER ON trainable WITH (m = 2, k = 16)")
         .expect("TRAIN QUANTIZER should succeed on 200 vectors");
 
-    // TRAIN returns a single metadata-only SearchResult with training info.
     assert_eq!(results.len(), 1, "should return one training result");
     let payload = results[0]
         .point
@@ -438,7 +393,6 @@ fn test_let_binding_in_order_by() {
 
     let params = vector_param(&[0.5, 0.5, 0.5, 0.3]);
 
-    // Baseline: ORDER BY similarity() DESC
     let baseline = execute_sql_with_params(
         &db,
         "SELECT * FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5",
@@ -446,7 +400,6 @@ fn test_let_binding_in_order_by() {
     )
     .expect("baseline query");
 
-    // LET version: ORDER BY score DESC
     let let_results = execute_sql_with_params(
         &db,
         "LET score = similarity() SELECT * FROM docs WHERE vector NEAR $v ORDER BY score DESC LIMIT 5",
@@ -520,7 +473,6 @@ fn test_union_with_impossible_filter_returns_partial() {
     .expect("UNION with impossible filter should succeed");
 
     let ids = result_ids(&results);
-    // Only category A results (ids 1, 2, 3); category Z is empty.
     assert!(
         ids.len() <= 3,
         "should return at most category A results: got {ids:?}"

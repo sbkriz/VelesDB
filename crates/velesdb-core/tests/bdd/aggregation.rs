@@ -1,29 +1,19 @@
-#![cfg(feature = "persistence")]
 //! BDD-style end-to-end tests for `VelesQL` aggregation, GROUP BY, HAVING,
 //! ORDER BY, LIMIT/OFFSET, and DISTINCT behaviors.
 //!
 //! These tests exercise the **full pipeline** from the user's perspective:
 //! SQL string -> `Parser::parse()` -> `Database::execute_query()` (or
 //! `VectorCollection::execute_aggregate()` for aggregation) -> verify results.
-//!
-//! Run with: `cargo test -p velesdb-core --features persistence
-//!            --test velesql_aggregation_bdd_tests -- --test-threads=1`
-
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
 
 use std::collections::HashMap;
-use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, Point, SearchResult};
+
+use velesdb_core::{velesql::Parser, Database, Point};
+
+use super::helpers::{create_test_db, execute_sql, payload_f64, payload_str};
 
 // =========================================================================
-// Helpers
+// Module-specific helpers
 // =========================================================================
-
-/// Execute a `VelesQL` SQL string through the full pipeline: parse -> validate -> execute.
-fn execute_sql(db: &Database, sql: &str) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, &HashMap::new())
-}
 
 /// Execute a `VelesQL` aggregation query through the typed collection API.
 ///
@@ -37,13 +27,6 @@ fn execute_aggregate_sql(db: &Database, sql: &str) -> velesdb_core::Result<serde
         .get_vector_collection(collection_name)
         .ok_or_else(|| velesdb_core::Error::CollectionNotFound(collection_name.clone()))?;
     vc.execute_aggregate(&query, &HashMap::new())
-}
-
-/// Create a fresh database in a temp directory.
-fn create_test_db() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("test: create temp dir");
-    let db = Database::open(dir.path()).expect("test: open database");
-    (dir, db)
 }
 
 /// Seed the "orders" collection with 10 orders across 3 categories.
@@ -127,26 +110,6 @@ fn setup_orders_collection(db: &Database) {
     .expect("test: upsert orders");
 }
 
-/// Extract a numeric payload field from a `SearchResult`.
-fn payload_f64(result: &SearchResult, field: &str) -> Option<f64> {
-    result
-        .point
-        .payload
-        .as_ref()
-        .and_then(|p| p.get(field))
-        .and_then(serde_json::Value::as_f64)
-}
-
-/// Extract a string payload field from a `SearchResult`.
-fn payload_str<'a>(result: &'a SearchResult, field: &str) -> Option<&'a str> {
-    result
-        .point
-        .payload
-        .as_ref()
-        .and_then(|p| p.get(field))
-        .and_then(serde_json::Value::as_str)
-}
-
 // =========================================================================
 // Scenario 1: SELECT * LIMIT returns correct count
 // =========================================================================
@@ -180,8 +143,6 @@ fn test_limit_offset_pagination() {
 
     assert_eq!(page1.len(), 3, "Page 1 should have 3 results");
     assert_eq!(page2.len(), 3, "Page 2 should have 3 results");
-    // Page 3: 10 total - 6 offset = 4 remaining, but LIMIT 3 caps it at 3.
-    // However, the last page may have fewer if there aren't enough rows.
     assert!(
         page3.len() <= 3,
         "Page 3 should have at most 3 results, got {}",
@@ -219,7 +180,6 @@ fn test_order_by_field_descending() {
 
     assert_eq!(results.len(), 3, "Should return 3 results");
 
-    // First result should have the highest amount (299.99).
     let first_amount =
         payload_f64(&results[0], "amount").expect("test: first result should have amount");
     assert!(
@@ -228,7 +188,6 @@ fn test_order_by_field_descending() {
         first_amount
     );
 
-    // Verify descending order: each result's amount >= next result's amount.
     for window in results.windows(2) {
         let a = payload_f64(&window[0], "amount").expect("test: amount field");
         let b = payload_f64(&window[1], "amount").expect("test: amount field");
@@ -261,7 +220,6 @@ fn test_group_by_counts_per_category() {
         .expect("test: aggregation should return array");
     assert_eq!(groups.len(), 3, "Should have 3 categories");
 
-    // Build a lookup: category -> count.
     let counts: HashMap<String, i64> = groups
         .iter()
         .filter_map(|g| {
@@ -304,7 +262,6 @@ fn test_group_by_sum_aggregation() {
         .expect("test: aggregation should return array");
     assert_eq!(groups.len(), 3, "Should have 3 categories");
 
-    // Build a lookup: category -> sum.
     let sums: HashMap<String, f64> = groups
         .iter()
         .filter_map(|g| {
@@ -314,7 +271,6 @@ fn test_group_by_sum_aggregation() {
         })
         .collect();
 
-    // electronics: 299.99 + 49.99 + 149.99 = 499.97
     let electronics_sum = sums
         .get("electronics")
         .expect("test: electronics sum should exist");
@@ -324,7 +280,6 @@ fn test_group_by_sum_aggregation() {
         electronics_sum
     );
 
-    // books: 19.99 + 29.99 + 9.99 = 59.97
     let books_sum = sums.get("books").expect("test: books sum should exist");
     assert!(
         (*books_sum - 59.97).abs() < 0.1,
@@ -332,7 +287,6 @@ fn test_group_by_sum_aggregation() {
         books_sum
     );
 
-    // clothing: 59.99 + 39.99 + 79.99 + 19.99 = 199.96
     let clothing_sum = sums
         .get("clothing")
         .expect("test: clothing sum should exist");
@@ -362,7 +316,6 @@ fn test_having_filters_groups() {
         .as_array()
         .expect("test: aggregation should return array");
 
-    // Only clothing has count > 3 (count = 4).
     assert_eq!(
         groups.len(),
         1,
@@ -395,7 +348,6 @@ fn test_distinct_eliminates_duplicates() {
     let results = execute_sql(&db, "SELECT DISTINCT category FROM orders LIMIT 10")
         .expect("test: SELECT DISTINCT");
 
-    // Collect unique category values from results.
     let categories: std::collections::HashSet<&str> = results
         .iter()
         .filter_map(|r| payload_str(r, "category"))
@@ -432,7 +384,6 @@ fn test_distinct_with_filter() {
         .filter_map(|r| payload_str(r, "status"))
         .collect();
 
-    // electronics has statuses: delivered (id 1, 2), pending (id 3).
     assert_eq!(
         statuses.len(),
         2,
@@ -454,7 +405,6 @@ fn test_count_star_without_group_by() {
 
     let result = execute_aggregate_sql(&db, "SELECT COUNT(*) FROM orders").expect("test: COUNT(*)");
 
-    // Without GROUP BY, result is a single JSON object (not an array).
     let count = result
         .get("count")
         .and_then(serde_json::Value::as_i64)
@@ -507,13 +457,11 @@ fn test_order_by_field_ascending() {
     let (_dir, db) = create_test_db();
     setup_orders_collection(&db);
 
-    // Fetch all 10 rows to ensure ORDER BY can sort the complete set.
     let results = execute_sql(&db, "SELECT * FROM orders ORDER BY amount ASC LIMIT 10")
         .expect("test: ORDER BY amount ASC");
 
     assert_eq!(results.len(), 10, "Should return all 10 results");
 
-    // First result should have the lowest amount (9.99).
     let first_amount =
         payload_f64(&results[0], "amount").expect("test: first result should have amount");
     assert!(
@@ -522,7 +470,6 @@ fn test_order_by_field_ascending() {
         first_amount
     );
 
-    // Verify ascending order across all results.
     for window in results.windows(2) {
         let a = payload_f64(&window[0], "amount").expect("test: amount field");
         let b = payload_f64(&window[1], "amount").expect("test: amount field");
@@ -555,7 +502,6 @@ fn test_group_by_avg_aggregation() {
         .expect("test: aggregation should return array");
     assert_eq!(groups.len(), 3, "Should have 3 categories");
 
-    // Build lookup: category -> avg.
     let avgs: HashMap<String, f64> = groups
         .iter()
         .filter_map(|g| {
@@ -565,7 +511,6 @@ fn test_group_by_avg_aggregation() {
         })
         .collect();
 
-    // electronics avg: (299.99 + 49.99 + 149.99) / 3 = 166.6567
     let electronics_avg = avgs
         .get("electronics")
         .expect("test: electronics avg should exist");
@@ -575,7 +520,6 @@ fn test_group_by_avg_aggregation() {
         electronics_avg
     );
 
-    // clothing avg: (59.99 + 39.99 + 79.99 + 19.99) / 4 = 49.99
     let clothing_avg = avgs
         .get("clothing")
         .expect("test: clothing avg should exist");
@@ -622,7 +566,6 @@ fn test_having_with_gte_operator() {
         .as_array()
         .expect("test: aggregation should return array");
 
-    // All three categories have count >= 3 (electronics=3, books=3, clothing=4).
     assert_eq!(
         groups.len(),
         3,

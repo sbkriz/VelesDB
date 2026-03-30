@@ -1,7 +1,5 @@
-#![cfg(feature = "persistence")]
 //! BDD-style end-to-end tests for `VelesQL` operators and statements that are
-//! **not** covered by the existing `velesql_where_bdd_tests` or
-//! `velesql_search_bdd_tests` suites.
+//! **not** covered by the `where_filters` or `vector_search` suites.
 //!
 //! Coverage: UPDATE, comparison operators (`<`, `<=`, `>=`, `!=`, `<>`),
 //! NOT operator, ILIKE, LIKE edge cases, string escaping, and SQL comments.
@@ -9,38 +7,17 @@
 //! Each scenario follows GIVEN (setup data) -> WHEN (execute SQL) -> THEN
 //! (verify results). Tests exercise the **full pipeline**: SQL string ->
 //! `Parser::parse()` -> `Database::execute_query()` -> verify state.
-//!
-//! Run with: `cargo test -p velesdb-core --features persistence -- velesql_operators_bdd --test-threads=1`
 
-#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
-
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use serde_json::json;
-use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, Point, SearchResult};
+use velesdb_core::{Database, Point};
+
+use super::helpers::{create_test_db, execute_sql, result_ids};
 
 // =========================================================================
-// Helpers
+// Module-specific setup
 // =========================================================================
-
-/// Execute a `VelesQL` SQL string through the full pipeline: parse -> execute.
-fn execute_sql(db: &Database, sql: &str) -> velesdb_core::Result<Vec<SearchResult>> {
-    let query = Parser::parse(sql).map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
-    db.execute_query(&query, &HashMap::new())
-}
-
-/// Create a fresh database in a temp directory.
-fn create_test_db() -> (TempDir, Database) {
-    let dir = TempDir::new().expect("test: create temp dir");
-    let db = Database::open(dir.path()).expect("test: open database");
-    (dir, db)
-}
-
-/// Collect result IDs into a `HashSet` for order-independent comparison.
-fn result_ids(results: &[SearchResult]) -> HashSet<u64> {
-    results.iter().map(|r| r.point.id).collect()
-}
 
 /// Populate an `items` collection with diverse test data.
 ///
