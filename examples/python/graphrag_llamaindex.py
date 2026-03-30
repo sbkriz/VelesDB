@@ -19,6 +19,7 @@ Usage:
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -27,7 +28,7 @@ import requests
 
 # LlamaIndex imports
 from llama_index.core import VectorStoreIndex, Settings
-from llama_index.core.schema import TextNode, NodeRelationship, RelatedNodeInfo
+from llama_index.core.schema import NodeWithScore, TextNode, NodeRelationship, RelatedNodeInfo
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
@@ -65,11 +66,12 @@ class VelesDBGraphLoader:
 class VelesDBGraphRetriever:
     """Retrieves nodes with graph expansion via the VelesDB REST API."""
 
-    def __init__(self, index: VectorStoreIndex, server_url: str,
-                 collection: str = "research_papers",
+    def __init__(self, index: VectorStoreIndex, vector_store: VelesDBVectorStore,
+                 server_url: str, collection: str = "research_papers",
                  seed_k: int = 2, expand_k: int = 4, max_depth: int = 2,
                  low_latency: bool = False):
         self.index = index
+        self.vector_store = vector_store
         self.server_url = server_url.rstrip("/")
         self.collection = collection
         self.seed_k = seed_k
@@ -109,13 +111,29 @@ class VelesDBGraphRetriever:
                 for nid in neighbor_ids:
                     if nid not in seen_ids:
                         seen_ids.add(nid)
-                        # Fetch the node from the index by ID
-                        node_retriever = self.index.as_retriever(similarity_top_k=1)
-                        neighbors = node_retriever.retrieve(nid)
-                        for n in neighbors:
-                            n.node.metadata["graph_depth"] = 1
-                            n.node.metadata["retrieval_mode"] = "graph"
-                            expanded.append(n)
+                        # Fetch the neighbor node by its u64 ID directly via
+                        # the collection's get() method.  Using
+                        # retriever.retrieve(nid) would do a vector similarity
+                        # search on the string representation of the integer
+                        # (e.g. "42"), returning semantically unrelated nodes.
+                        points = self.vector_store._collection.get([int(nid)])
+                        for point in points:
+                            payload = point.get("payload", {})
+                            text = payload.get("text", "")
+                            original_node_id = payload.get(
+                                "_node_id", str(point.get("id", ""))
+                            )
+                            meta = {
+                                k: v
+                                for k, v in payload.items()
+                                if k not in ("text", "_node_id")
+                            }
+                            meta["graph_depth"] = 1
+                            meta["retrieval_mode"] = "graph"
+                            node = TextNode(
+                                text=text, metadata=meta, id_=original_node_id
+                            )
+                            expanded.append(NodeWithScore(node=node, score=0.0))
 
             except requests.RequestException:
                 # Graph expansion is best-effort; fall back gracefully
@@ -124,20 +142,20 @@ class VelesDBGraphRetriever:
         return expanded
 
 
-def create_knowledge_graph() -> tuple[VelesDBVectorStore, VectorStoreIndex]:
+def create_knowledge_graph(db_path: str) -> tuple[VelesDBVectorStore, VectorStoreIndex]:
     """Create a knowledge graph with documents and relationships."""
-    
+
     # Configure LlamaIndex settings
     Settings.llm = OpenAI(model="gpt-4o-mini", temperature=0)
     Settings.embed_model = OpenAIEmbedding()
-    
+
     # Create VelesDB vector store
     vector_store = VelesDBVectorStore(
-        path="./graphrag_llamaindex_demo",
+        db_path=db_path,
         collection_name="research_papers",
         dimension=1536,
     )
-    
+
     # Create sample research paper nodes
     nodes = [
         TextNode(
@@ -171,7 +189,7 @@ def create_knowledge_graph() -> tuple[VelesDBVectorStore, VectorStoreIndex]:
             metadata={"title": "GraphRAG", "year": 2024, "topic": "graphrag"},
         ),
     ]
-    
+
     # Add relationships between papers (citations)
     nodes[1].relationships[NodeRelationship.PARENT] = RelatedNodeInfo(
         node_id="paper_1", metadata={"relation": "cites"}
@@ -185,14 +203,17 @@ def create_knowledge_graph() -> tuple[VelesDBVectorStore, VectorStoreIndex]:
     nodes[4].relationships[NodeRelationship.PARENT] = RelatedNodeInfo(
         node_id="paper_4", metadata={"relation": "extends"}
     )
-    
-    # Build index from nodes
-    index = VectorStoreIndex.from_vector_store(vector_store)
-    
-    # Add nodes to index
+
+    # Insert nodes first so the vector store is populated before building
+    # the index.  VectorStoreIndex.from_vector_store() wraps an already-
+    # populated store — calling it before any data is inserted produces an
+    # empty index that returns no results.
     for node in nodes:
         vector_store.add([node])
-    
+
+    # Build the index over the now-populated store
+    index = VectorStoreIndex.from_vector_store(vector_store)
+
     # Load graph relationships via VelesDB REST graph API
     loader = VelesDBGraphLoader(server_url="http://localhost:8080")
 
@@ -201,8 +222,8 @@ def create_knowledge_graph() -> tuple[VelesDBVectorStore, VectorStoreIndex]:
     loader.add_edge(source_id="paper_3", target_id="paper_1", label="CITES")    # GPT-3 cites Transformer
     loader.add_edge(source_id="paper_4", target_id="paper_2", label="EXTENDS")  # RAG extends BERT ideas
     loader.add_edge(source_id="paper_5", target_id="paper_4", label="EXTENDS")  # GraphRAG extends RAG
-    
-    print("✅ Knowledge graph created: 5 papers, 4 citation relationships")
+
+    print("Knowledge graph created: 5 papers, 4 citation relationships")
     return vector_store, index
 
 
@@ -212,90 +233,95 @@ def query_with_graph_expansion(
     query: str,
 ) -> str:
     """Query using GraphRetriever for context expansion."""
-    
+
     # Create graph-enhanced retriever
     retriever = VelesDBGraphRetriever(
         index=index,
+        vector_store=vector_store,
         server_url="http://localhost:8080",  # VelesDB server for graph ops
         seed_k=2,
         expand_k=4,
         max_depth=2,
         low_latency=False,  # Enable graph expansion
     )
-    
+
     # Retrieve with graph expansion
     nodes = retriever.retrieve(query)
-    
-    print(f"\n📚 Retrieved {len(nodes)} nodes:")
+
+    print(f"\nRetrieved {len(nodes)} nodes:")
     for i, node_with_score in enumerate(nodes):
         node = node_with_score.node
         depth = node.metadata.get("graph_depth", 0)
-        mode = node.metadata.get("retrieval_mode", "unknown")
-        marker = "🎯" if depth == 0 else "🔗"
+        mode = node.metadata.get("retrieval_mode", "vector")
+        marker = "seed" if depth == 0 else "graph"
         title = node.metadata.get("title", "Unknown")
-        print(f"  {marker} [{i+1}] {title} (depth={depth}, mode={mode})")
-    
+        print(f"  [{marker}] [{i+1}] {title} (depth={depth}, mode={mode})")
+
     # Create query engine and generate answer
     query_engine = index.as_query_engine(
         retriever=retriever,
         response_mode="compact",
     )
-    
+
     response = query_engine.query(query)
     return str(response)
 
 
 def query_vector_only(index: VectorStoreIndex, query: str) -> str:
     """Query using standard vector search only."""
-    
+
     query_engine = index.as_query_engine(
         similarity_top_k=4,
         response_mode="compact",
     )
-    
+
     response = query_engine.query(query)
     return str(response)
 
 
 def main():
     """Run LlamaIndex GraphRAG demonstration."""
-    
+
     print("=" * 60)
     print("VelesDB GraphRAG Demo (LlamaIndex)")
     print("=" * 60)
-    
+
     # Check for API key
     if not os.getenv("OPENAI_API_KEY"):
-        print("⚠️  Set OPENAI_API_KEY environment variable")
+        print("Warning: Set OPENAI_API_KEY environment variable")
         return
-    
-    # Create knowledge graph
-    vector_store, index = create_knowledge_graph()
-    
-    # Example queries
-    queries = [
-        "What papers built upon the Transformer architecture?",
-        "How does GraphRAG improve upon traditional RAG?",
-    ]
-    
-    for query in queries:
-        print(f"\n{'=' * 60}")
-        print(f"❓ Question: {query}")
+
+    DB_PATH = "./graphrag_llamaindex_demo"
+    try:
+        # Create knowledge graph
+        vector_store, index = create_knowledge_graph(DB_PATH)
+
+        # Example queries
+        queries = [
+            "What papers built upon the Transformer architecture?",
+            "How does GraphRAG improve upon traditional RAG?",
+        ]
+
+        for query in queries:
+            print(f"\n{'=' * 60}")
+            print(f"Question: {query}")
+            print("=" * 60)
+
+            print("\n--- GraphRAG Mode (with citation graph) ---")
+            try:
+                answer = query_with_graph_expansion(index, vector_store, query)
+                print(f"\nAnswer: {answer}")
+            except Exception as e:
+                print(f"Warning: Graph expansion requires VelesDB server: {e}")
+                print("   Falling back to vector-only mode...")
+                answer = query_vector_only(index, query)
+                print(f"\nAnswer: {answer}")
+
+        print("\n" + "=" * 60)
+        print("Demo complete!")
         print("=" * 60)
-        
-        print("\n--- GraphRAG Mode (with citation graph) ---")
-        try:
-            answer = query_with_graph_expansion(index, vector_store, query)
-            print(f"\n💡 Answer: {answer}")
-        except Exception as e:
-            print(f"⚠️  Graph expansion requires VelesDB server: {e}")
-            print("   Falling back to vector-only mode...")
-            answer = query_vector_only(index, query)
-            print(f"\n💡 Answer: {answer}")
-    
-    print("\n" + "=" * 60)
-    print("✅ Demo complete!")
-    print("=" * 60)
+    finally:
+        shutil.rmtree(DB_PATH, ignore_errors=True)
 
 
 if __name__ == "__main__":

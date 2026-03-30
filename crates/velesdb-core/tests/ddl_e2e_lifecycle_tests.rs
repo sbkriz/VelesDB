@@ -5,10 +5,7 @@
 //! `Database::execute_query()` -> verify database state. Each test is isolated
 //! via `tempfile::TempDir` and requires the `persistence` feature.
 
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::uninlined_format_args
-)]
+#![allow(clippy::cast_precision_loss, clippy::uninlined_format_args)]
 
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -68,13 +65,12 @@ fn test_vector_collection_full_lifecycle() {
     .expect("test: upsert should succeed");
 
     // Step 4: SELECT via SQL — verify data is accessible through the parser pipeline
-    let results = execute_sql(&db, "SELECT * FROM docs LIMIT 10;")
-        .expect("test: SELECT should succeed");
+    let results =
+        execute_sql(&db, "SELECT * FROM docs LIMIT 10;").expect("test: SELECT should succeed");
     assert_eq!(results.len(), 4, "Should return all 4 inserted points");
 
     // Step 5: DELETE a single point via SQL
-    execute_sql(&db, "DELETE FROM docs WHERE id = 0;")
-        .expect("test: DELETE single should succeed");
+    execute_sql(&db, "DELETE FROM docs WHERE id = 0;").expect("test: DELETE single should succeed");
     let points = vc.get(&[0, 1, 2, 3]);
     assert!(points[0].is_none(), "Point 0 should be deleted");
     assert!(points[1].is_some(), "Point 1 should remain");
@@ -113,12 +109,21 @@ fn test_graph_collection_with_edges_lifecycle() {
     assert!(gc.has_embeddings());
 
     // Step 2: Insert nodes via API (needed before edges can reference them)
-    gc.upsert_node_payload(1, &serde_json::json!({"name": "Alice", "_labels": ["Person"]}))
-        .expect("test: upsert node 1");
-    gc.upsert_node_payload(2, &serde_json::json!({"name": "Bob", "_labels": ["Person"]}))
-        .expect("test: upsert node 2");
-    gc.upsert_node_payload(3, &serde_json::json!({"name": "Charlie", "_labels": ["Person"]}))
-        .expect("test: upsert node 3");
+    gc.upsert_node_payload(
+        1,
+        &serde_json::json!({"name": "Alice", "_labels": ["Person"]}),
+    )
+    .expect("test: upsert node 1");
+    gc.upsert_node_payload(
+        2,
+        &serde_json::json!({"name": "Bob", "_labels": ["Person"]}),
+    )
+    .expect("test: upsert node 2");
+    gc.upsert_node_payload(
+        3,
+        &serde_json::json!({"name": "Charlie", "_labels": ["Person"]}),
+    )
+    .expect("test: upsert node 3");
 
     // Step 3: INSERT EDGE via SQL with explicit IDs
     execute_sql(
@@ -143,8 +148,7 @@ fn test_graph_collection_with_edges_lifecycle() {
     assert_eq!(edges.len(), 2, "Should have 2 KNOWS edges");
 
     // Step 5: DELETE EDGE via SQL — delete edge 10
-    execute_sql(&db, "DELETE EDGE 10 FROM kg;")
-        .expect("test: DELETE EDGE should succeed");
+    execute_sql(&db, "DELETE EDGE 10 FROM kg;").expect("test: DELETE EDGE should succeed");
     assert_eq!(gc.edge_count(), 1, "Should have 1 edge remaining");
 
     // Step 6: DROP via SQL
@@ -270,8 +274,7 @@ fn test_drop_if_exists_existing_succeeds() {
     .expect("test: CREATE");
     assert!(db.list_collections().contains(&"ephemeral".to_string()));
 
-    execute_sql(&db, "DROP COLLECTION IF EXISTS ephemeral;")
-        .expect("test: DROP IF EXISTS");
+    execute_sql(&db, "DROP COLLECTION IF EXISTS ephemeral;").expect("test: DROP IF EXISTS");
     assert!(
         !db.list_collections().contains(&"ephemeral".to_string()),
         "Collection should be dropped"
@@ -416,8 +419,7 @@ fn test_multiple_collection_types_coexist() {
         "CREATE GRAPH COLLECTION graphs (dimension = 4, metric = 'cosine') SCHEMALESS;",
     )
     .expect("test: CREATE graph");
-    execute_sql(&db, "CREATE METADATA COLLECTION meta;")
-        .expect("test: CREATE metadata");
+    execute_sql(&db, "CREATE METADATA COLLECTION meta;").expect("test: CREATE metadata");
 
     // All 3 should coexist
     let names = db.list_collections();
@@ -425,10 +427,7 @@ fn test_multiple_collection_types_coexist() {
         names.contains(&"vectors".to_string()),
         "vectors should exist"
     );
-    assert!(
-        names.contains(&"graphs".to_string()),
-        "graphs should exist"
-    );
+    assert!(names.contains(&"graphs".to_string()), "graphs should exist");
     assert!(names.contains(&"meta".to_string()), "meta should exist");
 
     // Verify each type is accessible via its typed getter
@@ -517,8 +516,7 @@ fn test_insert_edge_into_vector_collection_errors() {
 fn test_delete_edge_from_metadata_collection_errors() {
     let (_dir, db) = create_test_db();
 
-    execute_sql(&db, "CREATE METADATA COLLECTION not_graph;")
-        .expect("test: CREATE metadata");
+    execute_sql(&db, "CREATE METADATA COLLECTION not_graph;").expect("test: CREATE metadata");
 
     // DELETE EDGE from a metadata collection should error
     let err = execute_sql(&db, "DELETE EDGE 42 FROM not_graph;")
@@ -580,8 +578,7 @@ fn test_graph_collection_without_embeddings() {
     // The grammar requires `create_body` (parenthesized) before SCHEMALESS,
     // and `create_body` is optional. Without it the graph defaults to schemaless.
     // Use bare: `CREATE GRAPH COLLECTION name;`
-    execute_sql(&db, "CREATE GRAPH COLLECTION pure_graph;")
-        .expect("test: CREATE pure graph");
+    execute_sql(&db, "CREATE GRAPH COLLECTION pure_graph;").expect("test: CREATE pure graph");
 
     let gc = db
         .get_graph_collection("pure_graph")
@@ -601,8 +598,7 @@ fn test_graph_collection_without_embeddings() {
     assert_eq!(gc.edge_count(), 1);
 
     // Delete edge via SQL using the known explicit ID
-    execute_sql(&db, "DELETE EDGE 1 FROM pure_graph;")
-        .expect("test: DELETE EDGE should succeed");
+    execute_sql(&db, "DELETE EDGE 1 FROM pure_graph;").expect("test: DELETE EDGE should succeed");
     assert_eq!(gc.edge_count(), 0);
 }
 
@@ -685,8 +681,7 @@ fn test_multiple_edges_selective_delete() {
     assert_eq!(gc.edge_count(), 3);
 
     // Delete only the middle edge
-    execute_sql(&db, "DELETE EDGE 200 FROM multi_edge;")
-        .expect("test: DELETE EDGE 200");
+    execute_sql(&db, "DELETE EDGE 200 FROM multi_edge;").expect("test: DELETE EDGE 200");
     assert_eq!(gc.edge_count(), 2);
 
     // Verify remaining edges
@@ -706,8 +701,7 @@ fn test_sql_parse_error_propagation() {
     let (_dir, db) = create_test_db();
 
     // Syntactically invalid SQL should produce a parse error
-    let err = execute_sql(&db, "INVALID STATEMENT;")
-        .expect_err("invalid SQL should error");
+    let err = execute_sql(&db, "INVALID STATEMENT;").expect_err("invalid SQL should error");
     // The error should be a Query error wrapping the parse failure
     assert!(
         matches!(err, velesdb_core::Error::Query(_)),

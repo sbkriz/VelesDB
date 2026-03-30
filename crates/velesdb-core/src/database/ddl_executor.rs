@@ -14,8 +14,15 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection operation fails.
+    /// Returns an error if the observer rejects the operation (RBAC)
+    /// or if the collection operation itself fails.
     pub(super) fn execute_ddl(&self, ddl: &DdlStatement) -> Result<Vec<SearchResult>> {
+        // RBAC hook — allows premium extensions to reject DDL.
+        if let Some(ref observer) = self.observer {
+            let (operation, name) = ddl_operation_info(ddl);
+            observer.on_ddl_request(operation, &name)?;
+        }
+
         match ddl {
             DdlStatement::CreateCollection(stmt) => self.execute_create_collection(stmt),
             DdlStatement::DropCollection(stmt) => self.execute_drop_collection(stmt),
@@ -119,10 +126,15 @@ impl Database {
         &self,
         stmt: &crate::velesql::InsertEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
+        // RBAC hook — allows premium extensions to reject DML mutations.
+        if let Some(ref observer) = self.observer {
+            observer.on_dml_mutation_request("INSERT_EDGE", &stmt.collection)?;
+        }
+
         let graph = self.resolve_graph_collection(&stmt.collection)?;
         let edge_id = stmt
             .edge_id
-            .unwrap_or_else(|| hash_edge_id(stmt.source, stmt.target));
+            .unwrap_or_else(|| hash_edge_id(stmt.source, stmt.target, &stmt.label));
         let edge =
             crate::collection::GraphEdge::new(edge_id, stmt.source, stmt.target, &stmt.label)?;
 
@@ -150,6 +162,11 @@ impl Database {
         &self,
         stmt: &crate::velesql::DeleteStatement,
     ) -> Result<Vec<SearchResult>> {
+        // RBAC hook — allows premium extensions to reject DML mutations.
+        if let Some(ref observer) = self.observer {
+            observer.on_dml_mutation_request("DELETE", &stmt.table)?;
+        }
+
         let ids = extract_delete_ids(&stmt.where_clause)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
         collection.delete(&ids)?;
@@ -167,6 +184,11 @@ impl Database {
         &self,
         stmt: &crate::velesql::DeleteEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
+        // RBAC hook — allows premium extensions to reject DML mutations.
+        if let Some(ref observer) = self.observer {
+            observer.on_dml_mutation_request("DELETE_EDGE", &stmt.collection)?;
+        }
+
         let graph = self.resolve_graph_collection(&stmt.collection)?;
         let _ = graph.remove_edge(stmt.edge_id);
         Ok(Vec::new())
@@ -184,6 +206,16 @@ impl Database {
 // ---------------------------------------------------------------------------
 // Private helper functions
 // ---------------------------------------------------------------------------
+
+/// Extracts the operation name and collection name from a DDL statement.
+///
+/// Used by the RBAC hook to identify the operation being requested.
+fn ddl_operation_info(ddl: &DdlStatement) -> (&str, String) {
+    match ddl {
+        DdlStatement::CreateCollection(stmt) => ("CREATE", stmt.name.clone()),
+        DdlStatement::DropCollection(stmt) => ("DROP", stmt.name.clone()),
+    }
+}
 
 /// Resolves a metric name string to a `DistanceMetric` enum.
 ///
@@ -262,12 +294,32 @@ fn build_typed_schema(definitions: &[SchemaDefinition]) -> GraphSchema {
     schema
 }
 
-/// Generates a deterministic edge ID from source and target node IDs.
+/// Generates a deterministic edge ID from source, target, and label.
 ///
-/// Uses XOR with bit rotation to avoid collisions when source == target
-/// and to produce distinct IDs for (a, b) vs (b, a).
-fn hash_edge_id(source: u64, target: u64) -> u64 {
-    source.wrapping_mul(6_364_136_223_846_793_005) ^ target.rotate_left(32)
+/// Uses FNV-1a-inspired mixing for collision resistance. The same
+/// (source, target, label) triple always produces the same ID.
+pub(super) fn hash_edge_id(source: u64, target: u64, label: &str) -> u64 {
+    // FNV-1a offset basis and prime for u64
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
+
+    let mut hash = OFFSET_BASIS;
+    // Mix source bytes
+    for byte in source.to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    // Mix target bytes
+    for byte in target.to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    // Mix label bytes
+    for byte in label.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 /// Resolves AST `Value` properties into a `HashMap<String, serde_json::Value>`.

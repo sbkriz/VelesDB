@@ -11,7 +11,9 @@ for production use.
 
 from __future__ import annotations
 
+import hashlib
 import random
+import shutil
 import uuid
 from typing import Any
 
@@ -22,6 +24,17 @@ from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
+
+
+def _str_to_u64(s: str) -> int:
+    """Convert a string to a deterministic u64 ID for VelesDB.
+
+    VelesDB's Rust binding expects ``id`` fields as ``u64``.  This helper
+    hashes the input string with SHA-256 and takes the first 8 bytes as a
+    little-endian unsigned integer, giving a collision-resistant mapping that
+    fits in a ``u64``.
+    """
+    return int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "little")
 
 
 class VelesDBVectorStore(BasePydanticVectorStore):
@@ -80,22 +93,31 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                 dimension index to weight.
 
         Returns:
-            List of node IDs.
+            List of original node IDs (strings).  The original string ID is
+            stored in the payload under ``_node_id`` so it can be recovered
+            from query results via :meth:`query`.
         """
         sparse_vectors = kwargs.get("sparse_vectors")
         points = []
         result_ids = []
 
         for i, node in enumerate(nodes):
+            # Keep the original string node ID for the caller.
             node_id = node.node_id or str(uuid.uuid4())
             result_ids.append(node_id)
 
-            payload = {"text": node.get_content()}
+            # VelesDB requires u64 point IDs — hash the string ID.
+            point_id = _str_to_u64(node_id)
+
+            payload: dict[str, Any] = {
+                "text": node.get_content(),
+                "_node_id": node_id,
+            }
             if node.metadata:
                 payload.update(node.metadata)
 
             point: dict[str, Any] = {
-                "id": node_id,
+                "id": point_id,
                 "payload": payload,
             }
 
@@ -151,7 +173,9 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             payload = result.get("payload", {})
             text = payload.pop("text", "")
             score = result.get("score", 0.0)
-            node_id = str(result.get("id", ""))
+            # Recover the original string node ID stored by add(); fall back
+            # to the numeric u64 if the payload entry is missing.
+            node_id = payload.pop("_node_id", str(result.get("id", "")))
 
             node = TextNode(text=text, metadata=payload, id_=node_id)
             nodes.append(node)
@@ -255,72 +279,76 @@ if __name__ == "__main__":
         for _ in range(NUM_DOCS)
     ]
 
-    # -- Initialize store --
-    store = VelesDBVectorStore(
-        collection_name="llamaindex_hybrid_demo",
-        db_path="./demo_velesdb_data",
-        dimension=DIM,
-    )
-
-    # Build LlamaIndex TextNodes with embeddings
-    nodes = []
-    for i, (text, embedding) in enumerate(zip(documents, dense_vectors)):
-        node = TextNode(
-            text=text,
-            metadata={"source": f"doc_{i}", "topic": "ai"},
-            id_=f"node_{i}",
-            embedding=embedding,
-        )
-        nodes.append(node)
-
-    # Insert nodes with sparse vectors
-    ids = store.add(nodes, sparse_vectors=sparse_vectors)
-    print(f"Inserted {len(ids)} nodes\n")
-
-    # -- Train Product Quantization --
-    # PQ compresses vectors for ~8x memory reduction.
-    # Requires sufficient vectors for meaningful centroid training.
-    print("=== Training Product Quantization ===")
+    DB_PATH = "./demo_velesdb_data"
     try:
-        status = store.train_pq(m=8, k=256)
-        print(f"  PQ training: {status}")
-    except Exception as e:
-        print(f"  PQ training skipped (expected with small dataset): {e}")
+        # -- Initialize store --
+        store = VelesDBVectorStore(
+            collection_name="llamaindex_hybrid_demo",
+            db_path=DB_PATH,
+            dimension=DIM,
+        )
 
-    # -- Dense-only search --
-    query_dense = [random.gauss(0, 1) for _ in range(DIM)]
-    print("\n=== Dense-Only Search ===")
-    query_obj = VectorStoreQuery(
-        query_embedding=query_dense,
-        similarity_top_k=3,
-    )
-    result = store.query(query_obj)
-    for node_with_score in result.nodes:
-        text_preview = node_with_score.node.get_content()[:80]
-        print(f"  [{node_with_score.score:.4f}] {text_preview}")
+        # Build LlamaIndex TextNodes with embeddings
+        nodes = []
+        for i, (text, embedding) in enumerate(zip(documents, dense_vectors)):
+            node = TextNode(
+                text=text,
+                metadata={"source": f"doc_{i}", "topic": "ai"},
+                id_=f"node_{i}",
+                embedding=embedding,
+            )
+            nodes.append(node)
 
-    # -- Sparse-only search --
-    query_sparse = {42: 2.5, 100: 1.8, 7777: 0.9}
-    print("\n=== Sparse-Only Search ===")
-    query_obj = VectorStoreQuery(
-        query_embedding=None,
-        similarity_top_k=3,
-    )
-    result = store.query(query_obj, sparse_vector=query_sparse)
-    for node_with_score in result.nodes:
-        text_preview = node_with_score.node.get_content()[:80]
-        print(f"  [{node_with_score.score:.4f}] {text_preview}")
+        # Insert nodes with sparse vectors
+        ids = store.add(nodes, sparse_vectors=sparse_vectors)
+        print(f"Inserted {len(ids)} nodes\n")
 
-    # -- Hybrid search (dense + sparse fused via RRF) --
-    print("\n=== Hybrid Search (Dense + Sparse) ===")
-    query_obj = VectorStoreQuery(
-        query_embedding=query_dense,
-        similarity_top_k=5,
-    )
-    result = store.query(query_obj, sparse_vector=query_sparse)
-    for node_with_score in result.nodes:
-        text_preview = node_with_score.node.get_content()[:80]
-        print(f"  [{node_with_score.score:.4f}] {text_preview}")
+        # -- Train Product Quantization --
+        # PQ compresses vectors for ~8x memory reduction.
+        # Requires sufficient vectors for meaningful centroid training.
+        print("=== Training Product Quantization ===")
+        try:
+            status = store.train_pq(m=8, k=256)
+            print(f"  PQ training: {status}")
+        except Exception as e:
+            print(f"  PQ training skipped (expected with small dataset): {e}")
 
-    print("\nVelesDB handles dense + sparse + PQ compression in a single engine.")
-    print("No separate systems needed for hybrid search or quantization.")
+        # -- Dense-only search --
+        query_dense = [random.gauss(0, 1) for _ in range(DIM)]
+        print("\n=== Dense-Only Search ===")
+        query_obj = VectorStoreQuery(
+            query_embedding=query_dense,
+            similarity_top_k=3,
+        )
+        result = store.query(query_obj)
+        for node_with_score in result.nodes:
+            text_preview = node_with_score.node.get_content()[:80]
+            print(f"  [{node_with_score.score:.4f}] {text_preview}")
+
+        # -- Sparse-only search --
+        query_sparse = {42: 2.5, 100: 1.8, 7777: 0.9}
+        print("\n=== Sparse-Only Search ===")
+        query_obj = VectorStoreQuery(
+            query_embedding=None,
+            similarity_top_k=3,
+        )
+        result = store.query(query_obj, sparse_vector=query_sparse)
+        for node_with_score in result.nodes:
+            text_preview = node_with_score.node.get_content()[:80]
+            print(f"  [{node_with_score.score:.4f}] {text_preview}")
+
+        # -- Hybrid search (dense + sparse fused via RRF) --
+        print("\n=== Hybrid Search (Dense + Sparse) ===")
+        query_obj = VectorStoreQuery(
+            query_embedding=query_dense,
+            similarity_top_k=5,
+        )
+        result = store.query(query_obj, sparse_vector=query_sparse)
+        for node_with_score in result.nodes:
+            text_preview = node_with_score.node.get_content()[:80]
+            print(f"  [{node_with_score.score:.4f}] {text_preview}")
+
+        print("\nVelesDB handles dense + sparse + PQ compression in a single engine.")
+        print("No separate systems needed for hybrid search or quantization.")
+    finally:
+        shutil.rmtree(DB_PATH, ignore_errors=True)

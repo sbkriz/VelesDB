@@ -1,5 +1,6 @@
 //! Tests for DDL and extended DML executor (Phase 5).
 
+use super::ddl_executor::hash_edge_id;
 use super::*;
 use crate::velesql::{
     CompareOp, Comparison, Condition, CreateCollectionKind, CreateCollectionStatement,
@@ -566,4 +567,227 @@ fn test_insert_edge_auto_generates_id_when_none() {
 
     let gc = db.get_graph_collection("autoid_g").expect("get");
     assert_eq!(gc.edge_count(), 1);
+}
+
+// =========================================================================
+// RBAC observer hooks
+// =========================================================================
+
+/// Observer that rejects all DDL and DML mutation requests.
+struct RejectingObserver;
+
+impl crate::observer::DatabaseObserver for RejectingObserver {
+    fn on_ddl_request(&self, operation: &str, collection_name: &str) -> crate::Result<()> {
+        Err(crate::Error::Query(format!(
+            "RBAC: {operation} on '{collection_name}' denied"
+        )))
+    }
+
+    fn on_dml_mutation_request(&self, operation: &str, collection_name: &str) -> crate::Result<()> {
+        Err(crate::Error::Query(format!(
+            "RBAC: {operation} on '{collection_name}' denied"
+        )))
+    }
+}
+
+/// Observer with default implementations — allows everything.
+struct DefaultObserver;
+
+impl crate::observer::DatabaseObserver for DefaultObserver {}
+
+#[test]
+fn test_default_observer_allows_ddl() {
+    let dir = tempdir().expect("tempdir");
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(DefaultObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("open");
+
+    let ddl = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "allowed".to_string(),
+        kind: CreateCollectionKind::Metadata,
+    });
+
+    execute_ddl(&db, ddl).expect("default observer should allow DDL");
+    assert!(db.list_collections().contains(&"allowed".to_string()));
+}
+
+#[test]
+fn test_rejecting_observer_blocks_create() {
+    let dir = tempdir().expect("tempdir");
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("open");
+
+    let ddl = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "blocked".to_string(),
+        kind: CreateCollectionKind::Metadata,
+    });
+
+    let err = execute_ddl(&db, ddl).expect_err("should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: CREATE on 'blocked' denied"),
+        "Unexpected error: {msg}"
+    );
+    assert!(
+        !db.list_collections().contains(&"blocked".to_string()),
+        "Collection should not have been created"
+    );
+}
+
+#[test]
+fn test_rejecting_observer_blocks_drop() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    // Create without observer so collection exists.
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "to_protect".to_string(),
+        kind: CreateCollectionKind::Metadata,
+    });
+    execute_ddl(&db, create).expect("create");
+    drop(db);
+
+    // Re-open with rejecting observer.
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("reopen");
+
+    let drop_ddl = DdlStatement::DropCollection(DropCollectionStatement {
+        name: "to_protect".to_string(),
+        if_exists: false,
+    });
+
+    let err = execute_ddl(&db, drop_ddl).expect_err("should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: DROP on 'to_protect' denied"),
+        "Unexpected error: {msg}"
+    );
+    assert!(
+        db.list_collections().contains(&"to_protect".to_string()),
+        "Collection should still exist"
+    );
+}
+
+#[test]
+fn test_rejecting_observer_blocks_insert_edge() {
+    let dir = tempdir().expect("tempdir");
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("open");
+
+    let dml = DmlStatement::InsertEdge(InsertEdgeStatement {
+        collection: "some_graph".to_string(),
+        edge_id: Some(1),
+        source: 10,
+        target: 20,
+        label: "REL".to_string(),
+        properties: Vec::new(),
+    });
+
+    let err = execute_dml(&db, dml).expect_err("should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: INSERT_EDGE on 'some_graph' denied"),
+        "Unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn test_rejecting_observer_blocks_delete() {
+    let dir = tempdir().expect("tempdir");
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("open");
+
+    let dml = DmlStatement::Delete(DeleteStatement {
+        table: "some_coll".to_string(),
+        where_clause: Condition::Comparison(Comparison {
+            column: "id".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::Integer(1),
+        }),
+    });
+
+    let err = execute_dml(&db, dml).expect_err("should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: DELETE on 'some_coll' denied"),
+        "Unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn test_rejecting_observer_blocks_delete_edge() {
+    let dir = tempdir().expect("tempdir");
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("open");
+
+    let dml = DmlStatement::DeleteEdge(DeleteEdgeStatement {
+        collection: "some_graph".to_string(),
+        edge_id: 42,
+    });
+
+    let err = execute_dml(&db, dml).expect_err("should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: DELETE_EDGE on 'some_graph' denied"),
+        "Unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn test_default_observer_allows_dml_mutations() {
+    let dir = tempdir().expect("tempdir");
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(DefaultObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("open");
+
+    // Create a graph collection for the INSERT EDGE test.
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "dml_graph".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    // INSERT EDGE should succeed.
+    let dml = DmlStatement::InsertEdge(InsertEdgeStatement {
+        collection: "dml_graph".to_string(),
+        edge_id: Some(1),
+        source: 10,
+        target: 20,
+        label: "KNOWS".to_string(),
+        properties: Vec::new(),
+    });
+    execute_dml(&db, dml).expect("default observer should allow INSERT EDGE");
+
+    let gc = db.get_graph_collection("dml_graph").expect("get");
+    assert_eq!(gc.edge_count(), 1);
+}
+
+// =========================================================================
+// hash_edge_id — collision resistance
+// =========================================================================
+
+#[test]
+fn test_hash_edge_id_collision_resistance() {
+    // Same source/target, different labels should produce different IDs.
+    let id1 = hash_edge_id(1, 2, "KNOWS");
+    let id2 = hash_edge_id(1, 2, "LIKES");
+    assert_ne!(id1, id2);
+
+    // Same label, different source/target should produce different IDs.
+    let id3 = hash_edge_id(1, 2, "KNOWS");
+    let id4 = hash_edge_id(2, 1, "KNOWS");
+    assert_ne!(id3, id4);
+
+    // Deterministic: same inputs always give same output.
+    let id5 = hash_edge_id(1, 2, "KNOWS");
+    assert_eq!(id1, id5);
 }

@@ -228,15 +228,7 @@ impl Parser {
 fn parse_edge_fields(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<Vec<(String, Value)>, ParseError> {
-    let mut fields = Vec::new();
-
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::edge_field {
-            fields.push(parse_single_edge_field(inner)?);
-        }
-    }
-
-    Ok(fields)
+    super::helpers::extract_key_value_list(pair, Rule::edge_field, parse_single_edge_field)
 }
 
 /// Parses a single `edge_field`: `identifier = value`.
@@ -264,19 +256,17 @@ fn parse_single_edge_field(
 fn parse_edge_properties(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<Vec<(String, Value)>, ParseError> {
-    let mut properties = Vec::new();
-
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::create_option_list {
-            for opt_pair in inner.into_inner() {
-                if opt_pair.as_rule() == Rule::create_option {
-                    properties.push(parse_option_as_value(opt_pair)?);
-                }
-            }
+            return super::helpers::extract_key_value_list(
+                inner,
+                Rule::create_option,
+                parse_option_as_value,
+            );
         }
     }
 
-    Ok(properties)
+    Ok(Vec::new())
 }
 
 /// Parses a `create_option` into a `(String, Value)` pair.

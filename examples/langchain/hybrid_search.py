@@ -11,7 +11,9 @@ for production use.
 
 from __future__ import annotations
 
+import hashlib
 import random
+import shutil
 import uuid
 from typing import Any, Iterable, Optional
 
@@ -19,6 +21,17 @@ import velesdb
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
+
+
+def _str_to_u64(s: str) -> int:
+    """Convert a string to a deterministic u64 ID for VelesDB.
+
+    VelesDB's Rust binding expects ``id`` fields as ``u64``.  This helper
+    hashes the input string with SHA-256 and takes the first 8 bytes as a
+    little-endian unsigned integer, giving a collision-resistant mapping that
+    fits in a ``u64``.
+    """
+    return int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "little")
 
 
 class VelesDBVectorStore(VectorStore):
@@ -66,10 +79,12 @@ class VelesDBVectorStore(VectorStore):
                 function is set, embeddings are generated automatically.
             sparse_vectors: Optional sparse vectors for hybrid search.
                 Each is a dict mapping dimension index to weight.
-            ids: Document IDs. Generated if not provided.
+            ids: Document IDs (arbitrary strings). Generated if not provided.
+                The original string ID is stored in the payload under
+                ``_original_id`` so it can be recovered from search results.
 
         Returns:
-            List of document IDs.
+            List of original document IDs (strings).
         """
         text_list = list(texts)
 
@@ -87,15 +102,20 @@ class VelesDBVectorStore(VectorStore):
         points = []
         result_ids = []
         for i, text in enumerate(text_list):
+            # Keep the original string ID for the caller and store it in
+            # the payload so it is recoverable from search results.
             doc_id = ids[i] if ids else str(uuid.uuid4())
             result_ids.append(doc_id)
 
-            payload = {"text": text}
+            # VelesDB requires u64 point IDs — hash the string ID.
+            point_id = _str_to_u64(doc_id)
+
+            payload: dict[str, Any] = {"text": text, "_original_id": doc_id}
             if metadatas and i < len(metadatas):
                 payload.update(metadatas[i])
 
             point: dict[str, Any] = {
-                "id": doc_id,
+                "id": point_id,
                 "payload": payload,
             }
 
@@ -168,6 +188,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.pop("text", "")
             score = result.get("score", 0.0)
+            # Recover the original caller-visible string ID from the payload
+            # when available; fall back to the numeric u64 stored by VelesDB.
+            original_id = payload.pop("_original_id", str(result.get("id", "")))
+            payload["id"] = original_id
             doc = Document(page_content=text, metadata=payload)
             docs_and_scores.append((doc, score))
 
@@ -255,54 +279,58 @@ if __name__ == "__main__":
 
     metadatas = [{"source": f"doc_{i}", "topic": "ai"} for i in range(NUM_DOCS)]
 
-    # -- Initialize store --
-    store = VelesDBVectorStore(
-        collection_name="langchain_hybrid_demo",
-        db_path="./demo_velesdb_data",
-        dimension=DIM,
-    )
+    DB_PATH = "./demo_velesdb_data"
+    try:
+        # -- Initialize store --
+        store = VelesDBVectorStore(
+            collection_name="langchain_hybrid_demo",
+            db_path=DB_PATH,
+            dimension=DIM,
+        )
 
-    # Insert documents with both dense and sparse vectors
-    ids = store.add_texts(
-        texts=documents,
-        embeddings=dense_vectors,
-        sparse_vectors=sparse_vectors,
-        metadatas=metadatas,
-    )
-    print(f"Inserted {len(ids)} documents\n")
+        # Insert documents with both dense and sparse vectors
+        ids = store.add_texts(
+            texts=documents,
+            embeddings=dense_vectors,
+            sparse_vectors=sparse_vectors,
+            metadatas=metadatas,
+        )
+        print(f"Inserted {len(ids)} documents\n")
 
-    # -- Dense-only search --
-    query_dense = [random.gauss(0, 1) for _ in range(DIM)]
-    print("=== Dense-Only Search ===")
-    results = store.similarity_search_with_score(
-        query="semantic search",
-        k=3,
-        query_embedding=query_dense,
-    )
-    for doc, score in results:
-        print(f"  [{score:.4f}] {doc.page_content[:80]}")
+        # -- Dense-only search --
+        query_dense = [random.gauss(0, 1) for _ in range(DIM)]
+        print("=== Dense-Only Search ===")
+        results = store.similarity_search_with_score(
+            query="semantic search",
+            k=3,
+            query_embedding=query_dense,
+        )
+        for doc, score in results:
+            print(f"  [{score:.4f}] {doc.page_content[:80]}")
 
-    # -- Sparse-only search --
-    query_sparse = {42: 2.5, 100: 1.8, 7777: 0.9}
-    print("\n=== Sparse-Only Search ===")
-    results = store.similarity_search_with_score(
-        query="keyword matching",
-        k=3,
-        sparse_vector=query_sparse,
-    )
-    for doc, score in results:
-        print(f"  [{score:.4f}] {doc.page_content[:80]}")
+        # -- Sparse-only search --
+        query_sparse = {42: 2.5, 100: 1.8, 7777: 0.9}
+        print("\n=== Sparse-Only Search ===")
+        results = store.similarity_search_with_score(
+            query="keyword matching",
+            k=3,
+            sparse_vector=query_sparse,
+        )
+        for doc, score in results:
+            print(f"  [{score:.4f}] {doc.page_content[:80]}")
 
-    # -- Hybrid search (dense + sparse fused via RRF) --
-    print("\n=== Hybrid Search (Dense + Sparse) ===")
-    results = store.similarity_search_with_score(
-        query="hybrid retrieval",
-        k=5,
-        query_embedding=query_dense,
-        sparse_vector=query_sparse,
-    )
-    for doc, score in results:
-        print(f"  [{score:.4f}] {doc.page_content[:80]}")
+        # -- Hybrid search (dense + sparse fused via RRF) --
+        print("\n=== Hybrid Search (Dense + Sparse) ===")
+        results = store.similarity_search_with_score(
+            query="hybrid retrieval",
+            k=5,
+            query_embedding=query_dense,
+            sparse_vector=query_sparse,
+        )
+        for doc, score in results:
+            print(f"  [{score:.4f}] {doc.page_content[:80]}")
 
-    print("\nVelesDB handles dense + sparse + fusion in a single engine.")
-    print("No separate Elasticsearch, no glue code, no extra infrastructure.")
+        print("\nVelesDB handles dense + sparse + fusion in a single engine.")
+        print("No separate Elasticsearch, no glue code, no extra infrastructure.")
+    finally:
+        shutil.rmtree(DB_PATH, ignore_errors=True)

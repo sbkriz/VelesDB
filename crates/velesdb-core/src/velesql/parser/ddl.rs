@@ -103,7 +103,7 @@ fn parse_create_body(pair: pest::iterators::Pair<Rule>) -> Result<CreateBody, Pa
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::create_option_list => options = parse_create_options(inner),
+            Rule::create_option_list => options = parse_create_options(inner)?,
             Rule::create_suffix => suffix = Some(parse_create_suffix(inner)?),
             _ => {}
         }
@@ -113,11 +113,12 @@ fn parse_create_body(pair: pest::iterators::Pair<Rule>) -> Result<CreateBody, Pa
 }
 
 /// Extracts key=value pairs from `create_option_list`.
-fn parse_create_options(pair: pest::iterators::Pair<Rule>) -> Vec<(String, String)> {
-    pair.into_inner()
-        .filter(|p| p.as_rule() == Rule::create_option)
-        .map(parse_single_create_option)
-        .collect()
+fn parse_create_options(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Vec<(String, String)>, ParseError> {
+    super::helpers::extract_key_value_list(pair, Rule::create_option, |p| {
+        Ok(parse_single_create_option(p))
+    })
 }
 
 /// Parses a single `create_option`: `identifier = create_option_value`.

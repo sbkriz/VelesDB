@@ -136,6 +136,27 @@ pub(crate) fn unescape_string_literal(raw: &str) -> String {
     raw[1..raw.len() - 1].replace("''", "'")
 }
 
+/// Extracts key-value pairs from a list of pest pairs.
+///
+/// Iterates `list_pair.into_inner()`, filters by `item_rule`, and applies
+/// `extractor` to each matching pair. Used by both DDL and DML parsers
+/// to avoid structural duplication in option/field list parsing.
+///
+/// # Errors
+///
+/// Returns [`ParseError`] if any individual `extractor` call fails.
+pub(crate) fn extract_key_value_list<T>(
+    list_pair: pest::iterators::Pair<'_, super::Rule>,
+    item_rule: super::Rule,
+    extractor: impl Fn(pest::iterators::Pair<'_, super::Rule>) -> Result<T, ParseError>,
+) -> Result<Vec<T>, ParseError> {
+    list_pair
+        .into_inner()
+        .filter(|p| p.as_rule() == item_rule)
+        .map(extractor)
+        .collect()
+}
+
 /// Strips surrounding backticks or double-quotes from an identifier segment.
 ///
 /// - `` `name` `` becomes `name`

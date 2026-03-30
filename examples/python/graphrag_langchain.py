@@ -16,6 +16,7 @@ Usage:
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import List
@@ -73,14 +74,31 @@ class GraphRetriever:
                 response.raise_for_status()
                 neighbor_ids = response.json().get("node_ids", [])
                 for neighbor_id in neighbor_ids:
-                    neighbor_docs = self._vector_store.similarity_search(
-                        str(neighbor_id), k=1
+                    # Fetch the neighbor document by its u64 ID directly,
+                    # not via similarity search on the string representation
+                    # of the integer (which would match arbitrary text instead
+                    # of retrieving the correct node).
+                    neighbor_points = self._vector_store._collection.get(
+                        [int(neighbor_id)]
                     )
-                    for neighbor_doc in neighbor_docs:
-                        if neighbor_doc.page_content not in seen_texts:
-                            seen_texts.add(neighbor_doc.page_content)
-                            neighbor_doc.metadata["graph_depth"] = 1
-                            expanded.append(neighbor_doc)
+                    for point in neighbor_points:
+                        payload = point.get("payload", {})
+                        text = payload.get("text", "")
+                        if text and text not in seen_texts:
+                            seen_texts.add(text)
+                            original_id = payload.get(
+                                "_original_id", str(point.get("id", ""))
+                            )
+                            meta = {
+                                k: v
+                                for k, v in payload.items()
+                                if k not in ("text", "_original_id")
+                            }
+                            meta["id"] = original_id
+                            meta["graph_depth"] = 1
+                            expanded.append(
+                                Document(page_content=text, metadata=meta)
+                            )
             except httpx.HTTPError:
                 # Graph expansion is best-effort; fall back gracefully.
                 pass
@@ -104,10 +122,10 @@ def add_graph_edge(collection: str, edge_id: int, source: int, target: int, labe
         response = httpx.post(url, json=payload, timeout=5.0)
         response.raise_for_status()
     except httpx.HTTPError as e:
-        print(f"⚠️  Could not add edge {edge_id}: {e}")
+        print(f"Warning: Could not add edge {edge_id}: {e}")
 
 
-def create_sample_knowledge_base() -> VelesDBVectorStore:
+def create_sample_knowledge_base(db_path: str) -> VelesDBVectorStore:
     """Create a sample knowledge base with documents and relations."""
 
     embeddings = OpenAIEmbeddings()
@@ -135,28 +153,28 @@ def create_sample_knowledge_base() -> VelesDBVectorStore:
             {"id": 7, "topic": "VectorDB", "category": "infrastructure"},
             {"id": 8, "topic": "VelesDB", "category": "infrastructure"},
         ],
-        db_path="./graphrag_demo",
+        db_path=db_path,
         collection_name="knowledge_base",
         dimension=1536,
     )
-    
+
     # Add graph edges via HTTP API (concept relationships)
     collection_name = "knowledge_base"
-    
-    # ML → DL (ML includes DL)
+
+    # ML -> DL (ML includes DL)
     add_graph_edge(collection_name, 1, source=1, target=2, label="INCLUDES")
-    # ML → NLP (ML includes NLP)
+    # ML -> NLP (ML includes NLP)
     add_graph_edge(collection_name, 2, source=1, target=3, label="INCLUDES")
-    # NLP → Transformers (NLP uses Transformers)
+    # NLP -> Transformers (NLP uses Transformers)
     add_graph_edge(collection_name, 3, source=3, target=4, label="USES")
-    # Transformers → GPT (Transformers basis for GPT)
+    # Transformers -> GPT (Transformers basis for GPT)
     add_graph_edge(collection_name, 4, source=4, target=5, label="BASIS_FOR")
-    # Transformers → BERT (Transformers basis for BERT)
+    # Transformers -> BERT (Transformers basis for BERT)
     add_graph_edge(collection_name, 5, source=4, target=6, label="BASIS_FOR")
-    # VelesDB → VectorDB (VelesDB is a VectorDB)
+    # VelesDB -> VectorDB (VelesDB is a VectorDB)
     add_graph_edge(collection_name, 6, source=8, target=7, label="IS_A")
-    
-    print("✅ Knowledge base created with 8 documents and 6 relationships")
+
+    print("Knowledge base created with 8 documents and 6 relationships")
     return vectorstore
 
 
@@ -167,16 +185,16 @@ def graphrag_query(
 ) -> str:
     """
     Execute a GraphRAG query.
-    
+
     Args:
         vectorstore: VelesDB vector store with graph layer
         query: User question
         use_graph: Whether to use graph expansion (True) or vector-only (False)
-    
+
     Returns:
         LLM-generated answer
     """
-    
+
     # Create retriever (with or without graph expansion)
     if use_graph:
         retriever = GraphRetriever(
@@ -190,71 +208,75 @@ def graphrag_query(
     else:
         retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
         mode = "Standard RAG (vector only)"
-    
+
     # Retrieve relevant documents
     docs: List[Document] = retriever.invoke(query)
-    
-    print(f"\n📚 Retrieved {len(docs)} documents using {mode}:")
+
+    print(f"\nRetrieved {len(docs)} documents using {mode}:")
     for i, doc in enumerate(docs):
         depth = doc.metadata.get("graph_depth", 0)
-        marker = "🎯" if depth == 0 else "🔗"
-        print(f"  {marker} [{i+1}] {doc.page_content[:60]}...")
-    
+        marker = "seed" if depth == 0 else "graph"
+        print(f"  [{marker}] [{i+1}] {doc.page_content[:60]}...")
+
     # Create prompt with retrieved context
     context = "\n".join([doc.page_content for doc in docs])
-    
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a helpful AI assistant. Answer based on the context provided."),
         ("human", "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"),
     ])
-    
+
     # Generate answer with LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     chain = prompt | llm
-    
+
     response = chain.invoke({"context": context, "question": query})
     return response.content
 
 
 def main():
     """Run GraphRAG demonstration."""
-    
+
     print("=" * 60)
     print("VelesDB GraphRAG Demo")
     print("=" * 60)
-    
+
     # Check for API key
     if not os.getenv("OPENAI_API_KEY"):
-        print("⚠️  Set OPENAI_API_KEY environment variable")
+        print("Warning: Set OPENAI_API_KEY environment variable")
         print("   For demo without LLM, the retrieval still works.")
         return
-    
-    # Create knowledge base
-    vectorstore = create_sample_knowledge_base()
-    
-    # Query examples
-    queries = [
-        "What is the relationship between transformers and GPT?",
-        "How does VelesDB differ from other vector databases?",
-    ]
-    
-    for query in queries:
-        print(f"\n{'=' * 60}")
-        print(f"❓ Question: {query}")
+
+    DB_PATH = "./graphrag_demo"
+    try:
+        # Create knowledge base
+        vectorstore = create_sample_knowledge_base(DB_PATH)
+
+        # Query examples
+        queries = [
+            "What is the relationship between transformers and GPT?",
+            "How does VelesDB differ from other vector databases?",
+        ]
+
+        for query in queries:
+            print(f"\n{'=' * 60}")
+            print(f"Question: {query}")
+            print("=" * 60)
+
+            # Compare GraphRAG vs Standard RAG
+            print("\n--- GraphRAG Mode ---")
+            answer_graph = graphrag_query(vectorstore, query, use_graph=True)
+            print(f"\nAnswer: {answer_graph}")
+
+            print("\n--- Standard RAG Mode ---")
+            answer_vector = graphrag_query(vectorstore, query, use_graph=False)
+            print(f"\nAnswer: {answer_vector}")
+
+        print("\n" + "=" * 60)
+        print("Demo complete!")
         print("=" * 60)
-        
-        # Compare GraphRAG vs Standard RAG
-        print("\n--- GraphRAG Mode ---")
-        answer_graph = graphrag_query(vectorstore, query, use_graph=True)
-        print(f"\n💡 Answer: {answer_graph}")
-        
-        print("\n--- Standard RAG Mode ---")
-        answer_vector = graphrag_query(vectorstore, query, use_graph=False)
-        print(f"\n💡 Answer: {answer_vector}")
-    
-    print("\n" + "=" * 60)
-    print("✅ Demo complete!")
-    print("=" * 60)
+    finally:
+        shutil.rmtree(DB_PATH, ignore_errors=True)
 
 
 if __name__ == "__main__":
