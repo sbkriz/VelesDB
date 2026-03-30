@@ -344,7 +344,6 @@ impl Database {
         self.compiled_plan_cache.insert(post_exec_key, compiled);
     }
 
-    /// Dispatches a DML statement (INSERT or UPDATE).
     /// Dispatches a DML statement (INSERT, UPSERT, UPDATE, DELETE, or edge mutations).
     pub(super) fn execute_dml(
         &self,

@@ -551,24 +551,16 @@ fn build_node_payload(fields: &[(String, Value)]) -> Result<serde_json::Value, P
         if key == "id" {
             continue;
         }
-        let json_val = field_value_to_json(value)?;
-        map.insert(key.clone(), json_val);
+        match value {
+            Value::Parameter(_) | Value::Temporal(_) | Value::Subquery(_) => {
+                return Err(ParseError::syntax(
+                    0,
+                    "",
+                    "Node payload fields must be literal values",
+                ));
+            }
+            _ => map.insert(key.clone(), value.to_json()),
+        };
     }
     Ok(serde_json::Value::Object(map))
-}
-
-/// Converts a DML field `Value` to `serde_json::Value`.
-fn field_value_to_json(val: &Value) -> Result<serde_json::Value, ParseError> {
-    match val {
-        Value::Integer(v) => Ok(serde_json::json!(v)),
-        Value::Float(v) => Ok(serde_json::json!(v)),
-        Value::String(v) => Ok(serde_json::json!(v)),
-        Value::Boolean(v) => Ok(serde_json::json!(v)),
-        Value::Null => Ok(serde_json::Value::Null),
-        Value::Parameter(_) | Value::Temporal(_) | Value::Subquery(_) => Err(ParseError::syntax(
-            0,
-            "",
-            "Node payload fields must be literal values",
-        )),
-    }
 }

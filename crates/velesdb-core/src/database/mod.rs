@@ -6,7 +6,8 @@
 //! - [`vector_ops`] — Vector collection create/get
 //! - [`graph_ops`] — Graph collection create/get
 //! - [`metadata_ops`] — Metadata-only collection create/get
-//! - [`query_engine`] — `VelesQL` query execution, plan caching, DML
+//! - [`query_engine`] — `VelesQL` query execution, plan caching, DML dispatch
+//! - [`dml_executor`] — DML mutations (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES, INSERT NODE)
 //! - [`persistence`] — Loading collections from disk at startup
 //! - [`training`] — `TRAIN QUANTIZER` statement execution
 //! - [`stats`] — Collection statistics (analyze, cache)
@@ -21,6 +22,7 @@ use crate::{Collection, ColumnStore, Error, Result};
 mod admin_executor;
 mod collection_ops;
 mod ddl_executor;
+mod dml_executor;
 mod graph_ops;
 mod introspection_executor;
 mod metadata_ops;

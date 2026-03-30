@@ -1,6 +1,6 @@
 //! Tests for DDL and extended DML executor (Phase 5).
 
-use super::ddl_executor::hash_edge_id;
+use super::dml_executor::hash_edge_id;
 use super::*;
 use crate::velesql::{
     CompareOp, Comparison, Condition, CreateCollectionKind, CreateCollectionStatement,

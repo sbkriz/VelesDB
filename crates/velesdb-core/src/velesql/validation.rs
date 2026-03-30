@@ -13,7 +13,14 @@ pub use super::validation_types::{
     ComplexityStats, ValidationConfig, ValidationError, ValidationErrorKind,
 };
 
-/// Stateless validator for semantic and complexity checks.
+/// Stateless validator for VelesQL semantic and complexity checks.
+///
+/// Performs validation passes on parsed [`Query`] ASTs:
+/// - LET binding legality (DDL/DML/admin cannot use LET)
+/// - Similarity context (similarity() requires a score-producing WHERE clause)
+/// - Qualified wildcard alias resolution
+/// - Compound query validation across UNION/INTERSECT/EXCEPT operands
+/// - Complexity budget enforcement (AST depth, LIKE/ILIKE terms, graph hops)
 pub struct QueryValidator;
 
 impl QueryValidator {
@@ -35,61 +42,32 @@ impl QueryValidator {
         query: &Query,
         config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
-        // LET bindings are only meaningful for SELECT/MATCH queries.
-        // Reject them on DDL, DML, introspection, and admin statements where
-        // they are nonsensical.
-        if (query.is_ddl_query()
-            || query.is_dml_query()
-            || query.is_introspection_query()
-            || query.is_admin_query())
-            && !query.let_bindings.is_empty()
-        {
-            return Err(ValidationError::new(
-                ValidationErrorKind::InvalidLetBinding,
-                None,
-                "LET clause",
-                "LET bindings are not supported with DDL, DML, introspection, or admin statements",
-            ));
-        }
-
-        // DDL statements (CREATE/DROP COLLECTION) bypass SELECT-specific
-        // validation -- they have no FROM clause, no similarity conditions, etc.
-        if query.is_ddl_query() {
-            return Ok(());
-        }
-
-        // Introspection statements (SHOW/DESCRIBE/EXPLAIN) bypass SELECT-specific
-        // validation -- they have no FROM clause or similarity conditions.
-        if query.is_introspection_query() {
-            return Ok(());
-        }
-
-        // Admin statements (FLUSH) bypass SELECT-specific validation.
-        if query.is_admin_query() {
-            return Ok(());
-        }
-
-        // DML statements bypass SELECT-specific validation.
-        if query.is_dml_query() {
-            return Ok(());
+        // Non-SELECT statements: only check LET bindings.
+        if !requires_select_validation(query) {
+            return if query.let_bindings.is_empty() {
+                Ok(())
+            } else {
+                Err(ValidationError::new(
+                    ValidationErrorKind::InvalidLetBinding,
+                    None,
+                    "LET clause",
+                    "LET bindings are not supported with DDL, DML, introspection, or admin statements",
+                ))
+            };
         }
 
         if let Some(ref condition) = query.select.where_clause {
             Self::validate_condition(condition, query.select.limit, config)?;
         }
+        Self::validate_similarity_context(&query.select)?;
+        Self::validate_qualified_wildcards(&query.select)?;
+
+        // Validate compound operands (UNION, INTERSECT, EXCEPT) in a single pass.
         if let Some(ref compound) = query.compound {
             for (_, right_select) in &compound.operations {
                 if let Some(ref condition) = right_select.where_clause {
                     Self::validate_condition(condition, right_select.limit, config)?;
                 }
-            }
-        }
-
-        Self::validate_similarity_context(&query.select)?;
-        Self::validate_qualified_wildcards(&query.select)?;
-
-        if let Some(ref compound) = query.compound {
-            for (_, right_select) in &compound.operations {
                 Self::validate_similarity_context(right_select)?;
                 Self::validate_qualified_wildcards(right_select)?;
             }
@@ -415,4 +393,16 @@ impl QueryValidator {
             _ => false,
         }
     }
+}
+
+/// Returns `true` if the query requires SELECT-specific validation passes.
+///
+/// DDL, DML, introspection, admin, and TRAIN statements bypass SELECT
+/// validation (no FROM clause, no similarity conditions, etc.).
+fn requires_select_validation(query: &Query) -> bool {
+    !query.is_ddl_query()
+        && !query.is_dml_query()
+        && !query.is_train()
+        && !query.is_introspection_query()
+        && !query.is_admin_query()
 }
