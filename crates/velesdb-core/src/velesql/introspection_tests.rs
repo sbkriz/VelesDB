@@ -231,3 +231,48 @@ fn test_let_with_introspection_parses_but_validation_rejects() {
         "Validator should reject LET + introspection"
     );
 }
+
+// ============================================================================
+// Additional coverage: complex inner queries, quoted identifiers
+// ============================================================================
+
+#[test]
+fn test_explain_with_vector_near_in_inner_query() {
+    let sql = "EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10";
+    let query = Parser::parse(sql).expect("EXPLAIN with NEAR should parse");
+    assert!(query.is_introspection_query());
+
+    let IntrospectionStatement::Explain(inner) = query
+        .introspection
+        .as_ref()
+        .expect("introspection should be present")
+    else {
+        panic!("Expected Explain variant");
+    };
+    assert!(inner.select.where_clause.is_some(), "inner WHERE present");
+    assert_eq!(inner.select.limit, Some(10));
+}
+
+#[test]
+fn test_describe_with_quoted_identifier() {
+    let sql = "DESCRIBE COLLECTION `select`";
+    let query = Parser::parse(sql).expect("DESCRIBE with quoted keyword should parse");
+
+    let IntrospectionStatement::DescribeCollection(desc) = query
+        .introspection
+        .as_ref()
+        .expect("introspection should be present")
+    else {
+        panic!("Expected DescribeCollection variant");
+    };
+    assert_eq!(desc.name, "select", "quoted keyword should be unquoted in AST");
+}
+
+#[test]
+fn test_explain_match_is_rejected() {
+    let result = Parser::parse("EXPLAIN MATCH (a)-[:REL]->(b) RETURN a");
+    assert!(
+        result.is_err(),
+        "EXPLAIN MATCH should fail (only compound_query supported)"
+    );
+}

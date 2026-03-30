@@ -44,7 +44,7 @@ impl Database {
             .into_iter()
             .enumerate()
             .map(|(idx, name)| {
-                let coll_type = self.resolve_collection_type(&name);
+                let coll_type = self.resolve_collection_type(&name).unwrap_or("unknown");
                 build_show_result(idx, &name, coll_type)
             })
             .collect();
@@ -53,15 +53,20 @@ impl Database {
 
     /// Determines the type string for a named collection.
     ///
-    /// Checks registries in order: graph, metadata, then vector (default).
-    fn resolve_collection_type(&self, name: &str) -> &'static str {
+    /// Returns `None` if the collection does not exist in any registry.
+    /// Checks registries in order: graph → metadata → vector → legacy.
+    #[allow(deprecated)] // Uses legacy Collection for backward compat.
+    fn resolve_collection_type(&self, name: &str) -> Option<&'static str> {
         if self.get_graph_collection(name).is_some() {
-            return "graph";
+            return Some("graph");
         }
         if self.get_metadata_collection(name).is_some() {
-            return "metadata";
+            return Some("metadata");
         }
-        "vector"
+        if self.get_vector_collection(name).is_some() || self.get_collection(name).is_some() {
+            return Some("vector");
+        }
+        None
     }
 
     /// Executes `DESCRIBE COLLECTION <name>` -- returns collection metadata.
@@ -69,18 +74,10 @@ impl Database {
     /// # Errors
     ///
     /// Returns `CollectionNotFound` if the collection does not exist.
-    #[allow(deprecated)] // Uses legacy Collection internally for diagnostics.
     fn execute_describe_collection(&self, name: &str) -> Result<Vec<SearchResult>> {
-        let coll_type = if self.get_graph_collection(name).is_some() {
-            "graph"
-        } else if self.get_metadata_collection(name).is_some() {
-            "metadata"
-        } else if self.get_vector_collection(name).is_some() || self.get_collection(name).is_some()
-        {
-            "vector"
-        } else {
-            return Err(Error::CollectionNotFound(name.to_string()));
-        };
+        let coll_type = self
+            .resolve_collection_type(name)
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
 
         let payload = build_describe_payload(self, name, coll_type);
         let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);

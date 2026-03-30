@@ -1,5 +1,5 @@
 {
-  "version": "3.3.0",
+  "version": "3.4.0",
   "cases": [
     {
       "id": "P001",
@@ -430,6 +430,21 @@
     {
       "id": "P085",
       "query": "SHOW TABLES",
+      "should_parse": false
+    },
+    {
+      "id": "P086",
+      "query": "DESCRIBE COLLECTION",
+      "should_parse": false
+    },
+    {
+      "id": "P087",
+      "query": "EXPLAIN",
+      "should_parse": false
+    },
+    {
+      "id": "P088",
+      "query": "EXPLAIN MATCH (a)-[:REL]->(b) RETURN a",
       "should_parse": false
     }
   ]
