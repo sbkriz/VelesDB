@@ -166,6 +166,11 @@ engines:
       # and branch-heavy. Covered by extensive unit tests.
       - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
 
+      # --- MATCH executor (Lizard false positive: merges adjacent fns) ---
+      # accept_traversal_hit is 30 NLOC / CC=3 but Lizard reports "70 lines"
+      # by merging it with the preceding execute_for_start_nodes function.
+      - "crates/velesdb-core/src/collection/search/query/match_exec/mod.rs"
+
       # --- Query execution internals (parameter-heavy dispatch) ---
       # These functions pass through many query context fields; wrapping
       # in a struct would add indirection without clarity gain.

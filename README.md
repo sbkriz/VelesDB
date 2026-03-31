@@ -25,7 +25,7 @@
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.10.0">Download v1.10.0</a> &bull;
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.11.0">Download v1.11.0</a> &bull;
   <a href="#getting-started-in-60-seconds">Quick Start</a> &bull;
   <a href="https://velesdb.com/en/">Documentation</a> &bull;
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB">DeepWiki</a>
@@ -724,6 +724,7 @@ Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph
 
 | Version | Status | Highlights |
 |---------|--------|------------|
+| **v1.11.0** | Released | VelesQL v3.6 — 15 new SQL statements (SHOW, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE, ALTER, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE), 203 BDD tests, full ecosystem propagation. |
 | **v1.10.0** | Released | VelesQL v3.2 — WITH options wiring, component scores, LET clause, Agent Memory VelesQL bridge. All 5 pillars accessible via SQL. |
 | **v1.9.3** | Released | VelesQL ecosystem completion — OFFSET fix, MATCH propagation to Python/CLI/tauri/mobile, aggregation routing, DRY refactoring |
 | **v1.9.0** | Released | VelesQL ORDER BY arithmetic expressions, MATCH graph documentation, conformance cases P046-P052 |
@@ -736,6 +737,8 @@ Your feedback shapes the roadmap. Whether it's a RAG pipeline, a knowledge graph
 
 <details>
 <summary>Detailed release history</summary>
+
+**v1.11.0** — VelesQL v3.6: 15 new SQL statements — SHOW COLLECTIONS, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE (incl. graph collections), ALTER COLLECTION, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE. 203 BDD E2E tests. Grammar word-boundary fix for COLLECTION keyword. Tauri query routing aligned with server architecture. Cyclomatic complexity reduced to CC≤8 across 6 hotspots. Full ecosystem propagation across all 8 crates. Python `execute_query()` method. VelesQL spec v3.6.
 
 **v1.10.0** — VelesQL v3.2: WITH options wired to execution (mode, timeout_ms, rerank were parsed but silently ignored — now functional). Independent component scores (`vector_score`, `bm25_score` resolve independently in ORDER BY arithmetic). LET clause for named score bindings (`LET hybrid = 0.7 * vector_score + 0.3 * bm25_score`). Agent Memory VelesQL bridge (`query_semantic/episodic/procedural()` convenience API). USING FUSION configurable for vector+text hybrid queries. 100+ new tests, grammar v3.2.0 with 7 conformance cases.
 

@@ -1667,7 +1667,7 @@ DELETE FROM logs WHERE level = 'debug'
 DELETE FROM events WHERE status = 'expired' AND created_at < 1000
 ```
 
-> VelesQL rejects `DELETE FROM <table>` without a WHERE predicate as a safety
+> VelesQL rejects `DELETE FROM <collection>` without a WHERE predicate as a safety
 > measure.
 
 ### INSERT EDGE (v3.3+)
@@ -2019,7 +2019,7 @@ SELECT "col""name" FROM docs
 ### Examples
 
 ```sql
--- Reserved keyword as table name
+-- Reserved keyword as collection name
 SELECT * FROM `order`
 
 -- Reserved keywords in WHERE

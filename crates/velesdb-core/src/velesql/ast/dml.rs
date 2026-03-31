@@ -9,7 +9,7 @@ use super::{Condition, Value};
 /// INSERT or UPSERT statement (supports multi-row).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InsertStatement {
-    /// Target collection/table name.
+    /// Target collection name.
     pub table: String,
     /// Target columns.
     pub columns: Vec<String>,
@@ -36,7 +36,7 @@ pub struct UpdateAssignment {
 /// UPDATE statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateStatement {
-    /// Target collection/table name.
+    /// Target collection name.
     pub table: String,
     /// SET assignments.
     pub assignments: Vec<UpdateAssignment>,
@@ -64,7 +64,7 @@ pub struct InsertEdgeStatement {
 /// DELETE FROM statement (VelesQL v3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteStatement {
-    /// Target collection/table name.
+    /// Target collection name.
     pub table: String,
     /// WHERE clause (mandatory — prevents accidental full deletion).
     pub where_clause: Condition,

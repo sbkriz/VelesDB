@@ -37,7 +37,7 @@ impl Parser {
 
     /// Shared body parser for INSERT and UPSERT statements.
     ///
-    /// Extracts table name, column list, and one or more value rows from a
+    /// Extracts collection name, column list, and one or more value rows from a
     /// `insert_stmt` or `upsert_stmt` grammar pair.
     #[allow(clippy::type_complexity)] // Reason: one-off tuple for internal parser helper.
     fn parse_insert_or_upsert_body(
@@ -297,7 +297,7 @@ fn validate_insert_rows(
     Ok(())
 }
 
-/// Extracts table name and WHERE clause from a DELETE pair.
+/// Extracts collection name and WHERE clause from a DELETE pair.
 ///
 /// Grammar guarantees at most one identifier and one where_clause,
 /// so guards are unnecessary.

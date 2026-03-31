@@ -201,10 +201,10 @@ impl ParsedStatement {
         self.collection_name()
     }
 
-    /// Get the table alias if present (for self-joins).
+    /// Get the collection alias if present (for self-joins).
     ///
     /// Returns:
-    ///     str or None: First table alias, or None if not aliased
+    ///     str or None: First collection alias, or None if not aliased
     #[getter]
     fn table_alias(&self) -> Option<String> {
         self.inner.select.from_alias.first().cloned()
@@ -377,7 +377,7 @@ impl ParsedStatement {
         parts.push(format!("Type: {}", self.query_type_label()));
 
         if let Some(table) = self.table_name() {
-            parts.push(format!("Table: {}", table));
+            parts.push(format!("Collection: {}", table));
         }
 
         let cols = self.columns();

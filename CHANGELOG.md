@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-03-31
+
+### Added
+- **VelesQL v3.6 — 15 new SQL statements** covering the full DDL/DML surface:
+  - `SHOW COLLECTIONS` / `DESCRIBE COLLECTION` / `EXPLAIN` — introspection queries
+  - `CREATE INDEX` / `DROP INDEX` — secondary index management
+  - `ANALYZE` — collection statistics and health checks
+  - `TRUNCATE` — collection data reset (including graph collections: nodes + edges)
+  - `ALTER COLLECTION` — runtime configuration changes
+  - `FLUSH` — explicit WAL flush (FULL / PARTIAL modes)
+  - Multi-row `INSERT` — `INSERT INTO ... VALUES (...), (...), (...)`
+  - `UPSERT` — `UPSERT INTO ... VALUES (...)`
+  - `SELECT EDGES` — graph edge queries with source/target filters
+  - `INSERT NODE` — graph node creation via VelesQL
+- **Python `Database.execute_query()`** — full VelesQL execution from Python bindings
+- **TRUNCATE on graph collections** — clears both nodes and edges in a single operation
+- **203 BDD E2E tests** — comprehensive behavior-driven test coverage for all VelesQL features
+- **27 DDL/DML lifecycle tests** — end-to-end pipeline tests for CREATE→INSERT→SELECT→DROP flows
+- **14 hybrid BDD tests** — NEAR+filter, NEAR+BM25, multi-condition WHERE combinations
+- **13 BDD regression tests** — covering all Devin Review bug fix scenarios
+
+### Fixed
+- **Grammar word-boundary lookahead** — `COLLECTION` keyword no longer matches as prefix
+  of identifiers (e.g., `collection_name` was incorrectly split)
+- **WITH clause storage option propagation** — `CREATE COLLECTION ... WITH (storage='mmap')`
+  now correctly passes storage mode to collection creation
+- **Vocabulary consistency** — "collection" terminology used everywhere, never "table"
+- **CI coverage reporting** — Codacy coverage reporter properly configured with API token auth
+- **Test badge accuracy** — reflects real workspace total (5,495 tests incl. 203 BDD)
+
+### Refactored
+- **Cyclomatic complexity ≤ 8** — reduced CC across 6 hotspots (`extract_delete_fields`,
+  `extract_delete_edge_fields`, and 4 others) for Codacy compliance
+- **Tauri query routing** — aligned with server architecture for consistent DML/DDL handling
+- **BDD test structure** — reorganized into `tests/bdd/` module for maintainability
+- **VelesQL spec v3.6** — complete spec rewrite with 206 unit tests + 83 conformance tests
+
+### Documentation
+- **VelesQL spec v3.6** — full rewrite covering all 15 new statements with examples
+- **4 obsolete reference files removed** — cleaned stale VelesQL docs, fixed all dead links
+- **Archive notices updated** — migration guides point to current version
+
 ## [1.10.0] - 2026-03-29
 
 ### Fixed

@@ -162,7 +162,7 @@ def test_velesql_parsed_str():
     str_output = str(parsed)
     
     assert "Type: SELECT" in str_output
-    assert "Table: users" in str_output
+    assert "Collection: users" in str_output
     assert "LIMIT: 10" in str_output
 
 
