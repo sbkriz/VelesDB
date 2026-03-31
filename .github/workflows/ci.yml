@@ -278,18 +278,19 @@ jobs:
             --lcov --output-path lcov.info \
             -- --test-threads=1
 
-      - uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
-        continue-on-error: true
-        with:
-          files: lcov.info
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
+      # Codecov upload disabled — no CODECOV_TOKEN configured.
+      # Coverage is reported via Codacy (see below).
+      # To re-enable: add CODECOV_TOKEN to repository secrets and uncomment.
+      # - uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
+      #   with:
+      #     files: lcov.info
+      #     token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload coverage to Codacy
         uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
         continue-on-error: true
         with:
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          api-token: ${{ secrets.CODACY_API_TOKEN }}
           coverage-reports: lcov.info
 
       - name: Upload lcov for SonarCloud
