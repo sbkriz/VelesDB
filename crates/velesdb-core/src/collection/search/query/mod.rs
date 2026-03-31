@@ -240,74 +240,135 @@ impl Collection {
         // Phase 1: Pre-checks and context setup.
         let ctx = self.prepare_query_context(query, client_id)?;
 
-        // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
-        if let Some(match_clause) = query.match_clause.as_ref() {
-            // LET bindings are not yet supported with MATCH queries (v1.10).
-            // MATCH results are MatchResult, not SearchResult, so the LET
-            // evaluation pipeline does not apply. Return an explicit error
-            // instead of silently discarding the bindings.
-            if !query.let_bindings.is_empty() {
-                return Err(crate::error::Error::Query(
-                    "LET bindings are not supported with MATCH queries in this version".to_string(),
-                ));
-            }
-            return self.dispatch_match_query(match_clause, params, &ctx);
+        // MATCH queries take a completely separate path (no extraction needed).
+        if let Some(results) = self.try_dispatch_match(query, params, &ctx)? {
+            return Ok(results);
         }
 
+        // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
+        self.execute_select_pipeline(query, params, &ctx)
+    }
+
+    /// Runs the full SELECT pipeline: extraction, early-return check, dispatch,
+    /// and post-processing.
+    ///
+    /// Called only after MATCH dispatch has been ruled out. Extracts query components
+    /// once and shares them across early-return paths and the main dispatch.
+    fn execute_select_pipeline(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
-        let limit = usize::try_from(stmt.limit.unwrap_or(10))
-            .unwrap_or(MAX_LIMIT)
-            .min(MAX_LIMIT);
-
-        // When OFFSET is present, fetch limit+offset rows so post-processing
-        // can skip `offset` rows and still return `limit` results.
-        let offset_val = stmt
-            .offset
-            .map_or(0, |o| usize::try_from(o).unwrap_or(MAX_LIMIT));
-        let fetch_limit = limit.saturating_add(offset_val).min(MAX_LIMIT);
-
+        let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let extracted = self.extract_query_components(stmt, params)?;
 
-        // Early-return paths for special query shapes.
-        // LET bindings require finalize_query_results() which early-return paths bypass.
-        if query.let_bindings.is_empty() {
-            if let Some(results) =
-                self.try_early_return_path(stmt, params, &extracted, fetch_limit, &ctx)?
-            {
-                return Ok(results);
-            }
-        } else {
-            // Guard: LET + unsupported query shapes → explicit error (not silent fallthrough).
-            let unsupported = if extracted.sparse_vector_search.is_some() {
-                Some("SPARSE_NEAR")
-            } else if extracted.is_not_similarity_query {
-                Some("NOT similarity()")
-            } else if extracted.is_union_query {
-                Some("OR/union")
-            } else {
-                None
-            };
-            if let Some(shape) = unsupported {
-                return Err(crate::error::Error::Query(format!(
-                    "LET bindings are not supported with {shape} queries in this version"
-                )));
-            }
+        // Early-return paths or LET-binding guard for special query shapes.
+        if let Some(results) =
+            self.try_early_return_or_guard_let(query, stmt, params, &extracted, fetch_limit, ctx)?
+        {
+            return Ok(results);
         }
 
-        // Phase 2: Main dispatch.
-        let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, &ctx)?;
-
-        // Phase 3: Post-processing and finalization (includes LET evaluation).
+        // Main dispatch + post-processing.
+        let mut results = self.dispatch_main_select(stmt, params, &extracted, fetch_limit, ctx)?;
         self.finalize_query_results(
             stmt,
             &mut results,
             params,
             limit,
             &extracted,
-            &ctx,
+            ctx,
             &query.let_bindings,
         )?;
         Ok(results)
+    }
+
+    /// Dispatches a MATCH query if the query contains a `match_clause`.
+    ///
+    /// Returns `Ok(Some(results))` when the MATCH path was taken, `Ok(None)` otherwise.
+    /// LET bindings are not yet supported with MATCH queries (v1.10) -- an explicit
+    /// error is returned instead of silently discarding them.
+    fn try_dispatch_match(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        let Some(match_clause) = query.match_clause.as_ref() else {
+            return Ok(None);
+        };
+        if !query.let_bindings.is_empty() {
+            return Err(crate::error::Error::Query(
+                "LET bindings are not supported with MATCH queries in this version".to_string(),
+            ));
+        }
+        Ok(Some(self.dispatch_match_query(match_clause, params, ctx)?))
+    }
+
+    /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
+    ///
+    /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]).
+    /// `fetch_limit` adds the OFFSET so that post-processing can skip rows and still
+    /// return `limit` results.
+    fn compute_fetch_limit(stmt: &crate::velesql::SelectStatement) -> (usize, usize) {
+        let limit = usize::try_from(stmt.limit.unwrap_or(10))
+            .unwrap_or(MAX_LIMIT)
+            .min(MAX_LIMIT);
+        let offset_val = stmt
+            .offset
+            .map_or(0, |o| usize::try_from(o).unwrap_or(MAX_LIMIT));
+        let fetch_limit = limit.saturating_add(offset_val).min(MAX_LIMIT);
+        (limit, fetch_limit)
+    }
+
+    /// Attempts early-return paths or validates LET-binding compatibility.
+    ///
+    /// When `let_bindings` is empty, delegates to [`try_early_return_path`] for
+    /// NOT-similarity, union, and sparse fast paths. When LET bindings are present,
+    /// checks that the query shape is compatible -- unsupported shapes get an explicit
+    /// error instead of silent fallthrough.
+    ///
+    /// Returns `Ok(Some(results))` if an early path was taken, `Ok(None)` to continue
+    /// to the main dispatch.
+    #[allow(clippy::too_many_arguments)]
+    fn try_early_return_or_guard_let(
+        &self,
+        query: &crate::velesql::Query,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        fetch_limit: usize,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        if query.let_bindings.is_empty() {
+            return self.try_early_return_path(stmt, params, extracted, fetch_limit, ctx);
+        }
+        Self::validate_let_binding_support(extracted)?;
+        Ok(None)
+    }
+
+    /// Validates that LET bindings are compatible with the extracted query shape.
+    ///
+    /// LET bindings require [`finalize_query_results`] which early-return paths
+    /// bypass. Returns an explicit error for unsupported combinations.
+    fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
+        let unsupported = if extracted.sparse_vector_search.is_some() {
+            Some("SPARSE_NEAR")
+        } else if extracted.is_not_similarity_query {
+            Some("NOT similarity()")
+        } else if extracted.is_union_query {
+            Some("OR/union")
+        } else {
+            None
+        };
+        if let Some(shape) = unsupported {
+            return Err(crate::error::Error::Query(format!(
+                "LET bindings are not supported with {shape} queries in this version"
+            )));
+        }
+        Ok(())
     }
 
     /// Phase 1: Guard-rail pre-checks, context creation, and query validation.

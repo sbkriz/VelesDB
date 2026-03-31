@@ -367,23 +367,10 @@ impl SnapshotManager {
             return Ok(Vec::new());
         }
 
-        let mut versions = Vec::new();
-        for entry in std::fs::read_dir(&self.base_path)? {
-            let entry = entry?;
-            let filename = entry.file_name();
-            let filename_str = filename.to_string_lossy();
-
-            if filename_str.starts_with("snapshot_") && filename_str.ends_with(".vamm") {
-                if let Some(version_str) = filename_str
-                    .strip_prefix("snapshot_")
-                    .and_then(|s| s.strip_suffix(".vamm"))
-                {
-                    if let Ok(version) = version_str.parse::<u64>() {
-                        versions.push(version);
-                    }
-                }
-            }
-        }
+        let mut versions: Vec<u64> = std::fs::read_dir(&self.base_path)?
+            .filter_map(Result::ok)
+            .filter_map(|e| parse_snapshot_version(&e.file_name().to_string_lossy()))
+            .collect();
 
         versions.sort_unstable();
         Ok(versions)
@@ -415,4 +402,12 @@ impl SnapshotManager {
 
         Ok(())
     }
+}
+
+/// Extracts a snapshot version number from a filename like `snapshot_00000001.vamm`.
+fn parse_snapshot_version(filename: &str) -> Option<u64> {
+    filename
+        .strip_prefix("snapshot_")
+        .and_then(|s| s.strip_suffix(".vamm"))
+        .and_then(|s| s.parse::<u64>().ok())
 }

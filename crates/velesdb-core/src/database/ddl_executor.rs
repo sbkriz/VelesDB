@@ -185,7 +185,7 @@ impl Database {
     fn execute_truncate(&self, stmt: &TruncateStatement) -> Result<Vec<SearchResult>> {
         // Graph collections have both nodes and edges — handle separately.
         if let Some(gc) = self.get_graph_collection(&stmt.collection) {
-            return Self::truncate_graph(gc);
+            return Self::truncate_graph(&gc);
         }
         // Vector/legacy + metadata fallback.
         let collection = self
@@ -202,12 +202,12 @@ impl Database {
     }
 
     /// Truncates a graph collection: removes all edges then all nodes.
-    fn truncate_graph(gc: crate::collection::GraphCollection) -> Result<Vec<SearchResult>> {
+    fn truncate_graph(gc: &crate::collection::GraphCollection) -> Result<Vec<SearchResult>> {
         // Remove all edges first (edges reference nodes).
         let edges = gc.get_edges(None);
         let edge_count = edges.len();
         for edge in &edges {
-            gc.remove_edge(edge.id());
+            let _ = gc.remove_edge(edge.id());
         }
         // Remove all node payloads.
         let node_ids = gc.all_node_ids();

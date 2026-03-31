@@ -51,6 +51,74 @@ impl PineconeConnector {
         let host = self.host.as_deref().unwrap_or("localhost");
         format!("https://{host}")
     }
+
+    /// Lists vector IDs from Pinecone with optional pagination.
+    async fn list_vector_ids(
+        &self,
+        base: &str,
+        batch_size: usize,
+        pagination_token: Option<&str>,
+    ) -> Result<ListResponse> {
+        let list_url = format!("{base}/vectors/list");
+        let mut params: Vec<(&str, String)> = vec![("limit", batch_size.to_string())];
+        if let Some(token) = pagination_token {
+            params.push(("paginationToken", token.to_string()));
+        }
+        if let Some(ref ns) = self.config.namespace {
+            params.push(("namespace", ns.clone()));
+        }
+        debug!("Listing Pinecone vectors, limit={}", batch_size);
+        let resp = self
+            .api_request(reqwest::Method::GET, &list_url)
+            .query(&params)
+            .send()
+            .await?;
+        let checked = check_response(resp, "Pinecone", "list").await?;
+        Ok(checked.json().await?)
+    }
+
+    /// Fetches full vector data for a batch of IDs from Pinecone.
+    async fn fetch_full_vectors(
+        &self,
+        base: &str,
+        ids: &[String],
+    ) -> Result<Vec<ExtractedPoint>> {
+        let fetch_url = format!("{base}/vectors/fetch");
+        let mut params: Vec<(&str, String)> =
+            ids.iter().map(|id| ("ids", id.clone())).collect();
+        if let Some(ref ns) = self.config.namespace {
+            params.push(("namespace", ns.clone()));
+        }
+        let resp = self
+            .api_request(reqwest::Method::GET, &fetch_url)
+            .query(&params)
+            .send()
+            .await?;
+        let checked = check_response(resp, "Pinecone", "fetch").await?;
+        let fetch_resp: FetchResponse = checked.json().await?;
+        Ok(fetch_resp
+            .vectors
+            .into_values()
+            .map(pinecone_vec_to_point)
+            .collect())
+    }
+}
+
+/// Converts a Pinecone vector response into an `ExtractedPoint`.
+fn pinecone_vec_to_point(v: PineconeVector) -> ExtractedPoint {
+    let sparse = v.sparse_values.and_then(|sv| {
+        if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+            Some(sv.indices.into_iter().zip(sv.values).collect())
+        } else {
+            None
+        }
+    });
+    ExtractedPoint {
+        id: v.id,
+        vector: v.values,
+        payload: v.metadata.unwrap_or_default(),
+        sparse_vector: sparse,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,36 +252,16 @@ impl SourceConnector for PineconeConnector {
         offset: Option<serde_json::Value>,
         batch_size: usize,
     ) -> Result<ExtractedBatch> {
-        let _host = self
-            .host
+        self.host
             .as_ref()
             .ok_or_else(|| Error::SourceConnection("Not connected to Pinecone".to_string()))?;
 
         let pagination_token = offset.and_then(|v| v.as_str().map(String::from));
-
-        // First, list vector IDs
         let base = self.data_plane_url();
-        let list_url = format!("{base}/vectors/list");
 
-        let mut list_params: Vec<(&str, String)> = vec![("limit", batch_size.to_string())];
-        if let Some(ref token) = pagination_token {
-            list_params.push(("paginationToken", token.clone()));
-        }
-        if let Some(ref ns) = self.config.namespace {
-            list_params.push(("namespace", ns.clone()));
-        }
-
-        debug!("Listing Pinecone vectors, limit={}", batch_size);
-
-        let resp = self
-            .api_request(reqwest::Method::GET, &list_url)
-            .query(&list_params)
-            .send()
+        let list_resp = self
+            .list_vector_ids(&base, batch_size, pagination_token.as_deref())
             .await?;
-
-        let checked = check_response(resp, "Pinecone", "list").await?;
-
-        let list_resp: ListResponse = checked.json().await?;
 
         let ids: Vec<String> = list_resp
             .vectors
@@ -230,48 +278,11 @@ impl SourceConnector for PineconeConnector {
             });
         }
 
-        // Fetch full vectors — Pinecone expects repeated `ids` query params
-        let fetch_url = format!("{base}/vectors/fetch");
-        let mut fetch_params: Vec<(&str, String)> =
-            ids.iter().map(|id| ("ids", id.clone())).collect();
-        if let Some(ref ns) = self.config.namespace {
-            fetch_params.push(("namespace", ns.clone()));
-        }
-        let resp = self
-            .api_request(reqwest::Method::GET, &fetch_url)
-            .query(&fetch_params)
-            .send()
-            .await?;
-
-        let checked = check_response(resp, "Pinecone", "fetch").await?;
-
-        let fetch_resp: FetchResponse = checked.json().await?;
-
-        let points: Vec<ExtractedPoint> = fetch_resp
-            .vectors
-            .into_values()
-            .map(|v| {
-                let sparse = v.sparse_values.and_then(|sv| {
-                    if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
-                        Some(sv.indices.into_iter().zip(sv.values).collect())
-                    } else {
-                        None
-                    }
-                });
-                ExtractedPoint {
-                    id: v.id,
-                    vector: v.values,
-                    payload: v.metadata.unwrap_or_default(),
-                    sparse_vector: sparse,
-                }
-            })
-            .collect();
-
+        let points = self.fetch_full_vectors(&base, &ids).await?;
         let next_offset = list_resp
             .pagination
             .and_then(|p| p.next)
             .map(serde_json::Value::String);
-
         let has_more = next_offset.is_some();
 
         debug!("Extracted {} points from Pinecone", points.len());

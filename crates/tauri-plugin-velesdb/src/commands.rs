@@ -430,60 +430,74 @@ pub async fn query<R: Runtime>(
         )));
     }
 
-    // Aggregation queries need a separate execution path (collection-level).
-    let collection_name = &parsed.select.from;
-    let is_aggregation = is_aggregation_query(&parsed);
-
-    if is_aggregation && !collection_name.is_empty() {
-        let agg_json = state
-            .with_db(|db| {
-                let coll = require_collection(&db, collection_name)?;
-                coll.execute_aggregate(&parsed, &request.params)
-                    .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
-            })
-            .map_err(CommandError::from)?;
-
-        let results = vec![HybridResult {
-            node_id: 0,
-            vector_score: None,
-            graph_score: None,
-            fused_score: 0.0,
-            bindings: None,
-            column_data: Some(agg_json),
-        }];
-        return Ok(QueryResponse {
-            results,
-            timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-        });
-    }
-
-    // All other queries (SELECT, DDL, DML, introspection, admin, TRAIN)
-    // go through Database::execute_query which handles dispatch internally.
-    // This is the same path as the server handler's standard + mutation paths.
-    let results = state
-        .with_db(|db| {
-            let search_results = db
-                .execute_query(&parsed, &request.params)
-                .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
-
-            Ok(search_results
-                .into_iter()
-                .map(|r| HybridResult {
-                    node_id: r.point.id,
-                    vector_score: Some(r.score),
-                    graph_score: None,
-                    fused_score: r.score,
-                    bindings: r.point.payload.clone(),
-                    column_data: None,
-                })
-                .collect::<Vec<_>>())
-        })
-        .map_err(CommandError::from)?;
+    let results = dispatch_tauri_query(&state, &parsed, &request)?;
 
     Ok(QueryResponse {
         results,
         timing_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+/// Dispatches a tauri query to aggregation or standard execution path.
+fn dispatch_tauri_query(
+    state: &VelesDbState,
+    parsed: &velesdb_core::velesql::Query,
+    request: &QueryRequest,
+) -> std::result::Result<Vec<HybridResult>, CommandError> {
+    let collection_name = &parsed.select.from;
+
+    if is_aggregation_query(parsed) && !collection_name.is_empty() {
+        return execute_tauri_aggregation(state, parsed, request, collection_name);
+    }
+
+    state
+        .with_db(|db| {
+            let search_results = db
+                .execute_query(parsed, &request.params)
+                .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
+            Ok(search_results
+                .into_iter()
+                .map(|r| search_result_to_hybrid(&r))
+                .collect())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Executes an aggregation query through the collection API.
+fn execute_tauri_aggregation(
+    state: &VelesDbState,
+    parsed: &velesdb_core::velesql::Query,
+    request: &QueryRequest,
+    collection_name: &str,
+) -> std::result::Result<Vec<HybridResult>, CommandError> {
+    let agg_json = state
+        .with_db(|db| {
+            let coll = require_collection(&db, collection_name)?;
+            coll.execute_aggregate(parsed, &request.params)
+                .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
+        })
+        .map_err(CommandError::from)?;
+
+    Ok(vec![HybridResult {
+        node_id: 0,
+        vector_score: None,
+        graph_score: None,
+        fused_score: 0.0,
+        bindings: None,
+        column_data: Some(agg_json),
+    }])
+}
+
+/// Converts a `SearchResult` to a `HybridResult`.
+fn search_result_to_hybrid(r: &velesdb_core::SearchResult) -> HybridResult {
+    HybridResult {
+        node_id: r.point.id,
+        vector_score: Some(r.score),
+        graph_score: None,
+        fused_score: r.score,
+        bindings: r.point.payload.clone(),
+        column_data: None,
+    }
 }
 
 /// Checks if a collection is empty.
