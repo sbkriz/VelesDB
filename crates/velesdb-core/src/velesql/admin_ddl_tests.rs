@@ -4,6 +4,7 @@
 //! keyword, edge cases (missing names, unknown options), and query type flags.
 
 use crate::velesql::ast::DdlStatement;
+use crate::velesql::IntrospectionStatement;
 use crate::velesql::Parser;
 
 // ============================================================================
@@ -103,6 +104,52 @@ fn test_parse_truncate_case_insensitive() {
         panic!("Expected Truncate variant");
     };
     assert_eq!(stmt.collection, "My_Coll");
+}
+
+// ============================================================================
+// Word-boundary regression: collection names starting with "collection"
+// Bug: TRUNCATE collection_data → was parsed as TRUNCATE COLLECTION + _data
+// ============================================================================
+
+#[test]
+fn test_truncate_collection_prefixed_name() {
+    let query =
+        Parser::parse("TRUNCATE collection_data").expect("collection-prefixed name should parse");
+    let DdlStatement::Truncate(stmt) = query.ddl.expect("DDL") else {
+        panic!("Expected Truncate");
+    };
+    assert_eq!(
+        stmt.collection, "collection_data",
+        "must target 'collection_data', not '_data'"
+    );
+}
+
+#[test]
+fn test_analyze_collection_prefixed_name() {
+    let query =
+        Parser::parse("ANALYZE collections").expect("collection-prefixed name should parse");
+    let DdlStatement::Analyze(stmt) = query.ddl.expect("DDL") else {
+        panic!("Expected Analyze");
+    };
+    assert_eq!(
+        stmt.collection, "collections",
+        "must target 'collections', not 's'"
+    );
+}
+
+#[test]
+fn test_describe_collection_prefixed_name() {
+    let query = Parser::parse("DESCRIBE collection_metadata")
+        .expect("collection-prefixed name should parse");
+    let IntrospectionStatement::DescribeCollection(desc) =
+        query.introspection.expect("introspection")
+    else {
+        panic!("Expected DescribeCollection");
+    };
+    assert_eq!(
+        desc.name, "collection_metadata",
+        "must target 'collection_metadata', not '_metadata'"
+    );
 }
 
 // ============================================================================

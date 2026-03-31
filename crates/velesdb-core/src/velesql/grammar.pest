@@ -26,16 +26,22 @@ query = { SOI ~ let_clause* ~ (show_collections_stmt | describe_stmt | explain_s
 show_collections_stmt = { ^"SHOW" ~ ^"COLLECTIONS" }
 
 // DESCRIBE [COLLECTION] name — returns collection metadata
-describe_stmt = { ^"DESCRIBE" ~ ^"COLLECTION"? ~ identifier }
+// collection_kw uses word-boundary lookahead to prevent "collection_data"
+// being parsed as COLLECTION + "_data" (same pattern as flush_full_kw).
+describe_stmt = { ^"DESCRIBE" ~ collection_kw? ~ identifier }
 
 // EXPLAIN <query> — returns the query execution plan without executing
 explain_stmt = { ^"EXPLAIN" ~ compound_query }
 
 // ANALYZE [COLLECTION] name — computes CBO statistics for query optimizer
-analyze_stmt = { ^"ANALYZE" ~ ^"COLLECTION"? ~ identifier }
+analyze_stmt = { ^"ANALYZE" ~ collection_kw? ~ identifier }
 
 // TRUNCATE [COLLECTION] name — deletes all rows from a collection
-truncate_stmt = { ^"TRUNCATE" ~ ^"COLLECTION"? ~ identifier }
+truncate_stmt = { ^"TRUNCATE" ~ collection_kw? ~ identifier }
+
+// Word-boundary-safe COLLECTION keyword. Prevents "collection_data" from
+// being parsed as COLLECTION + "_data". Same pattern as flush_full_kw.
+collection_kw = @{ ^"COLLECTION" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // ALTER COLLECTION name SET (options) — modifies collection settings
 alter_collection_stmt = { ^"ALTER" ~ ^"COLLECTION" ~ identifier ~ ^"SET" ~ "(" ~ create_option_list ~ ")" }
