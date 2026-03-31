@@ -9,6 +9,16 @@ use crate::helpers::{
     storage_mode_to_string, timed_search_response,
 };
 use crate::state::VelesDbState;
+use velesdb_core::velesql::SelectColumns;
+
+/// Detects aggregation queries (COUNT, SUM, AVG, etc. in SELECT).
+fn is_aggregation_query(parsed: &velesdb_core::velesql::Query) -> bool {
+    match &parsed.select.columns {
+        SelectColumns::Aggregations(_) => true,
+        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
+        _ => false,
+    }
+}
 #[cfg(feature = "persistence")]
 use crate::types::StreamInsertRequest;
 pub use crate::types::{
@@ -420,65 +430,11 @@ pub async fn query<R: Runtime>(
         )));
     }
 
-    // Non-SELECT statements are dispatched through Database::execute_query
-    // which handles them internally (no collection lookup needed).
-    //
-    // This includes ALL DML (INSERT INTO, UPSERT, UPDATE, INSERT EDGE, etc.)
-    // because the Tauri plugin has no standard query path that calls
-    // db.execute_query — it goes through collection-scoped methods instead.
-    // INSERT INTO/UPSERT/UPDATE MUST be included here; without the bypass
-    // they fall to `parsed.select.from` (empty) → require_collection → error.
-    //
-    // The server handler uses a narrower is_ast_routed_dml() because its
-    // standard path also calls db.execute_query, so INSERT/UPSERT/UPDATE
-    // are handled there. The Tauri plugin's standard path calls
-    // collection.execute_query, which does NOT handle DML.
-    if parsed.is_ddl_query()
-        || parsed.is_dml_query()
-        || parsed.is_train()
-        || parsed.is_introspection_query()
-        || parsed.is_admin_query()
-    {
-        let results = state
-            .with_db(|db| {
-                let search_results = db
-                    .execute_query(&parsed, &request.params)
-                    .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
-
-                Ok(search_results
-                    .into_iter()
-                    .map(|r| HybridResult {
-                        node_id: r.point.id,
-                        vector_score: Some(r.score),
-                        graph_score: None,
-                        fused_score: r.score,
-                        bindings: r.point.payload.clone(),
-                        column_data: None,
-                    })
-                    .collect::<Vec<_>>())
-            })
-            .map_err(CommandError::from)?;
-
-        return Ok(QueryResponse {
-            results,
-            timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-        });
-    }
-
+    // Aggregation queries need a separate execution path (collection-level).
     let collection_name = &parsed.select.from;
+    let is_aggregation = is_aggregation_query(&parsed);
 
-    // Detect aggregation queries: require actual aggregation functions in SELECT.
-    // GROUP BY alone (without COUNT/SUM/etc.) is processed by execute_query().
-    let is_aggregation = match &parsed.select.columns {
-        velesdb_core::velesql::SelectColumns::Aggregations(_) => true,
-        velesdb_core::velesql::SelectColumns::Mixed { aggregations, .. } => {
-            !aggregations.is_empty()
-        }
-        _ => false,
-    };
-
-    if is_aggregation {
-        // Aggregation path: returns JSON result instead of HybridResult rows.
+    if is_aggregation && !collection_name.is_empty() {
         let agg_json = state
             .with_db(|db| {
                 let coll = require_collection(&db, collection_name)?;
@@ -487,7 +443,6 @@ pub async fn query<R: Runtime>(
             })
             .map_err(CommandError::from)?;
 
-        // Wrap aggregation JSON as a single HybridResult with column_data.
         let results = vec![HybridResult {
             node_id: 0,
             vector_score: None,
@@ -502,11 +457,12 @@ pub async fn query<R: Runtime>(
         });
     }
 
+    // All other queries (SELECT, DDL, DML, introspection, admin, TRAIN)
+    // go through Database::execute_query which handles dispatch internally.
+    // This is the same path as the server handler's standard + mutation paths.
     let results = state
         .with_db(|db| {
-            let coll = require_collection(&db, collection_name)?;
-
-            let search_results = coll
+            let search_results = db
                 .execute_query(&parsed, &request.params)
                 .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
 
