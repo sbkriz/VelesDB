@@ -2,17 +2,17 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.10.0** | Node.js >= 18 | Browser (WASM) | MIT License
+**v1.11.0** | Node.js >= 18 | Browser (WASM) | MIT License
 
-## What's New in v1.10.0
+## What's New in v1.11.0
 
-- **VelesQL LET clause** -- named score bindings for custom scoring formulas
-- **Component scores** -- `vector_score`, `bm25_score`, `graph_score` resolve independently in ORDER BY
-- **WITH options functional** -- `mode`, `timeout_ms`, `rerank` now wired to execution (were parsed but ignored)
-- **Agent Memory VelesQL** -- query semantic/episodic/procedural memory via standard VelesQL
-- **USING FUSION k parameter** -- configurable RRF constant for hybrid text search
+- **15 new VelesQL statements** -- SHOW COLLECTIONS, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE, ALTER COLLECTION, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE
+- **203 BDD E2E tests** -- comprehensive end-to-end test coverage for all VelesQL features
+- **TRUNCATE on graph collections** -- clears nodes + edges in a single statement
+- **Python `execute_query()`** -- full VelesQL execution from Python bindings
+- **Cyclomatic complexity ≤ 8** -- refactored 6 hotspots for Codacy compliance
 
-### Previous (v1.9.2)
+### Previous (v1.10.0)
 
 - **SearchQuality type** -- `SearchQuality` type and `quality` field in `SearchOptions`
 - **StorageMode in HnswParams** -- `storageMode` field in HNSW configuration

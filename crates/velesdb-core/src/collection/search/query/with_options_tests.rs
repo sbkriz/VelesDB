@@ -609,3 +609,76 @@ fn test_query_with_offset_and_with_clause() {
         .expect("OFFSET + WITH should work together");
     assert_eq!(results.len(), 5);
 }
+
+// ============================================================================
+// I. WITH (quality='...') alias for mode (VelesQL v3.5 Phase 4)
+// ============================================================================
+
+#[test]
+fn test_with_quality_fast_returns_results() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (quality='fast')",
+            &params,
+        )
+        .expect("quality='fast' should work like mode='fast'");
+    assert_eq!(results.len(), 5);
+}
+
+#[test]
+fn test_with_quality_accurate_returns_results() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (quality='accurate')",
+            &params,
+        )
+        .expect("quality='accurate' should work like mode='accurate'");
+    assert_eq!(results.len(), 5);
+}
+
+#[test]
+fn test_with_quality_option_maps_to_search_quality() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "quality",
+        crate::velesql::WithValue::String("fast".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(
+        matches!(opts.quality, Some(crate::SearchQuality::Fast)),
+        "quality='fast' should map to SearchQuality::Fast"
+    );
+}
+
+#[test]
+fn test_with_quality_balanced() {
+    let with = crate::velesql::WithClause::new().with_option(
+        "quality",
+        crate::velesql::WithValue::String("balanced".to_string()),
+    );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(matches!(opts.quality, Some(crate::SearchQuality::Balanced)));
+}
+
+#[test]
+fn test_with_mode_overrides_quality() {
+    let with = crate::velesql::WithClause::new()
+        .with_option(
+            "quality",
+            crate::velesql::WithValue::String("fast".to_string()),
+        )
+        .with_option(
+            "mode",
+            crate::velesql::WithValue::String("accurate".to_string()),
+        );
+    let opts = QuerySearchOptions::from_with_clause(Some(&with));
+    assert!(
+        matches!(opts.quality, Some(crate::SearchQuality::Accurate)),
+        "mode should take precedence over quality"
+    );
+}

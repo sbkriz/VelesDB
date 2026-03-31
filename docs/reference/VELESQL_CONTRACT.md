@@ -2,8 +2,8 @@
 
 Canonical contract for VelesQL server endpoints and payloads.
 
-- Contract version: `3.0.0`
-- Last updated: `2026-03-04`
+- Contract version: `3.6.0`
+- Last updated: `2026-03-31`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
@@ -55,7 +55,7 @@ Success response shape:
   "result": [{ "category": "tech", "count": 42 }],
   "timing_ms": 1.12,
   "meta": {
-    "velesql_contract_version": "3.0.0",
+    "velesql_contract_version": "3.3.0",
     "count": 1
   }
 }
@@ -78,11 +78,62 @@ Success response shape:
   "took_ms": 1,
   "rows_returned": 1,
   "meta": {
-    "velesql_contract_version": "3.0.0",
+    "velesql_contract_version": "3.3.0",
     "count": 1
   }
 }
 ```
+
+### DDL and Mutation Statements via `/query`
+
+DDL statements (`CREATE COLLECTION`, `DROP COLLECTION`, `CREATE INDEX`, `DROP INDEX`,
+`ANALYZE`, `TRUNCATE`, `ALTER COLLECTION`) and graph/delete mutation statements
+(`INSERT EDGE`, `DELETE EDGE`, `DELETE FROM`, `INSERT NODE`, `SELECT EDGES`) are
+submitted through the same `POST /query` endpoint.
+
+Request body (DDL example):
+
+```json
+{
+  "query": "CREATE COLLECTION documents (dimension = 768, metric = 'cosine') WITH (storage = 'sq8')",
+  "params": {},
+  "collection": ""
+}
+```
+
+Request body (graph mutation example — `collection` is optional, extracted from SQL):
+
+```json
+{
+  "query": "INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY') WITH PROPERTIES (year = 2026)",
+  "params": {}
+}
+```
+
+DDL success response shape (standard `QueryResponse` with zero rows):
+
+```json
+{
+  "results": [],
+  "timing_ms": 2.31,
+  "took_ms": 2,
+  "rows_returned": 0,
+  "meta": {
+    "velesql_contract_version": "3.3.0",
+    "count": 0
+  }
+}
+```
+
+DDL error response shape uses the standard VelesQL error model (see below).
+
+Rules:
+
+- DDL and graph/delete mutation statements always route to `/query`, never to `/aggregate`.
+- DDL statements (`CREATE COLLECTION`, `DROP COLLECTION`, `CREATE INDEX`, `DROP INDEX`, `ANALYZE`, `TRUNCATE`, `ALTER COLLECTION`) do not require a `collection` field in the body (the collection name is embedded in the SQL statement).
+- `DROP COLLECTION IF EXISTS` returns success even if the collection does not exist.
+- Graph/delete mutation statements (`INSERT EDGE`, `DELETE EDGE`, `DELETE FROM`, `INSERT NODE`, `SELECT EDGES`) extract the collection name from the SQL statement; the `collection` field in the request body is ignored.
+- `INSERT INTO` and `UPDATE` statements flow through the standard query path and return result rows in the `results` array.
 
 ### `POST /collections/{name}/match`
 
@@ -103,7 +154,7 @@ Success response shape:
   "took_ms": 4,
   "count": 1,
   "meta": {
-    "velesql_contract_version": "3.0.0"
+    "velesql_contract_version": "3.3.0"
   }
 }
 ```
@@ -148,8 +199,7 @@ These syntax profiles are frozen for this contract version:
 
 Reference grammar:
 
-- `docs/reference/VELESQL_SPEC.md`
-- `docs/VELESQL_SPEC.md`
+- `docs/VELESQL_SPEC.md` (canonical, v3.6)
 
 ## Stable vs Experimental
 
@@ -165,12 +215,32 @@ Reference grammar:
 | `LEFT/RIGHT/FULL JOIN` | Stable | Stable |
 | `GROUP BY` / `HAVING` | Stable | Stable |
 | `UNION/INTERSECT/EXCEPT` | Stable | Stable |
+| `CREATE COLLECTION` | Stable | Stable |
+| `DROP COLLECTION [IF EXISTS]` | Stable | Stable |
+| `CREATE INDEX ON` | Stable | Stable |
+| `DROP INDEX ON` | Stable | Stable |
+| `ANALYZE` | Stable | Stable |
+| `TRUNCATE` | Stable | Stable |
+| `ALTER COLLECTION ... SET` | Stable | Stable |
+| `INSERT INTO` | Stable | Stable |
+| `UPSERT INTO` | Stable | Stable |
+| `UPDATE ... SET` | Stable | Stable |
+| `INSERT EDGE INTO` | Stable | Stable |
+| `DELETE FROM` | Stable | Stable |
+| `DELETE EDGE ... FROM` | Stable | Stable |
+| `SELECT EDGES FROM` | Stable | Stable |
+| `INSERT NODE INTO` | Stable | Stable |
+| `SHOW COLLECTIONS` | Stable | Stable |
+| `DESCRIBE COLLECTION` | Stable | Stable |
+| `EXPLAIN` | Stable | Stable |
+| `FLUSH` | Stable | Stable |
 
 ## Validation Matrix
 
 Contract test cases are listed in:
 
-- `docs/reference/VELESQL_CONFORMANCE_CASES.md`
+- `conformance/velesql_parser_cases.json` (parser conformance, v3.6)
+- `conformance/velesql_contract_cases.json` (runtime contract)
 
 Each invalid case maps to an expected HTTP status and an expected error shape.
 
@@ -184,6 +254,25 @@ Each invalid case maps to an expected HTTP status and an expected error shape.
 | `GROUP BY`, `HAVING` | Supported | Supported |
 | `ORDER BY similarity()` | Supported | Supported |
 | `UNION/INTERSECT/EXCEPT` | Supported | Supported |
+| `CREATE COLLECTION` | Supported | Supported |
+| `DROP COLLECTION [IF EXISTS]` | Supported | Supported |
+| `CREATE INDEX ON` | Supported | Supported |
+| `DROP INDEX ON` | Supported | Supported |
+| `ANALYZE` | Supported | Supported |
+| `TRUNCATE` | Supported | Supported |
+| `ALTER COLLECTION ... SET` | Supported | Supported |
+| `INSERT INTO` | Supported | Supported |
+| `UPSERT INTO` | Supported | Supported |
+| `UPDATE ... SET` | Supported | Supported |
+| `INSERT EDGE INTO` | Supported | Supported |
+| `DELETE FROM` | Supported | Supported |
+| `DELETE EDGE ... FROM` | Supported | Supported |
+| `SELECT EDGES FROM` | Supported | Supported |
+| `INSERT NODE INTO` | Supported | Supported |
+| `SHOW COLLECTIONS` | Supported | Supported |
+| `DESCRIBE COLLECTION` | Supported | Supported |
+| `EXPLAIN` | Supported | Supported |
+| `FLUSH` | Supported | Supported |
 
 ## Compatibility Notes
 

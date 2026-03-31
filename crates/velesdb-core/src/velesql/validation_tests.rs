@@ -238,6 +238,9 @@ fn create_query_with_multiple_similarity() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -277,6 +280,9 @@ fn create_query_with_multiple_similarity_or() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -309,6 +315,9 @@ fn create_query_with_single_similarity() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -346,6 +355,9 @@ fn create_query_with_similarity_or_metadata() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -383,6 +395,9 @@ fn create_query_with_similarity_and_metadata() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -415,6 +430,9 @@ fn create_query_with_not_similarity() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -440,6 +458,9 @@ fn create_simple_query() -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -481,6 +502,9 @@ fn test_validate_vector_search_near_with_or_detected() {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     };
 
     // Should detect multiple vector search with OR
@@ -525,6 +549,9 @@ fn test_validate_vector_search_or_now_passes() {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     };
 
     // EPIC-044 US-002: NEAR OR metadata is now supported
@@ -593,6 +620,9 @@ fn test_validate_compound_query_where_clause() {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     };
 
     // Should detect multiple similarity in OR in compound query
@@ -630,6 +660,9 @@ fn make_query(where_clause: Option<Condition>) -> Query {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -697,6 +730,13 @@ fn test_validation_error_kind_codes() {
     assert_eq!(ValidationErrorKind::NotSimilarity.code(), "V003");
     assert_eq!(ValidationErrorKind::ReservedKeyword.code(), "V004");
     assert_eq!(ValidationErrorKind::StringEscaping.code(), "V005");
+    assert_eq!(ValidationErrorKind::SimilarityWithoutContext.code(), "V006");
+    assert_eq!(ValidationErrorKind::UndeclaredAlias.code(), "V007");
+    assert_eq!(
+        ValidationErrorKind::UnsupportedArithmeticSimilarity.code(),
+        "V008"
+    );
+    assert_eq!(ValidationErrorKind::InvalidLetBinding.code(), "V009");
 }
 
 #[test]
@@ -958,6 +998,9 @@ fn test_complexity_rejects_like_budget() {
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     };
 
     let cfg = ValidationConfig {
@@ -1023,6 +1066,9 @@ fn make_query_with_arithmetic_order_by(
         match_clause: None,
         dml: None,
         train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
     }
 }
 
@@ -1137,4 +1183,270 @@ fn test_validate_arithmetic_without_similarity_passes() {
     let query = make_query_with_arithmetic_order_by(None, expr);
     let result = QueryValidator::validate(&query);
     assert!(result.is_ok(), "arithmetic without similarity should pass");
+}
+
+// ============================================================================
+// DDL / DML validation bypass and LET rejection (VelesQL v3.3)
+// ============================================================================
+
+/// Helper: builds a DDL query (CREATE COLLECTION).
+fn make_ddl_create_query() -> Query {
+    use super::ast::{
+        CreateCollectionKind, CreateCollectionStatement, DdlStatement, VectorCollectionParams,
+    };
+    Query {
+        let_bindings: vec![],
+        select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: vec![],
+            joins: vec![],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: None,
+        train: None,
+        ddl: Some(DdlStatement::CreateCollection(CreateCollectionStatement {
+            name: "docs".to_string(),
+            kind: CreateCollectionKind::Vector(VectorCollectionParams {
+                dimension: 768,
+                metric: "cosine".to_string(),
+                storage: None,
+                m: None,
+                ef_construction: None,
+            }),
+        })),
+        introspection: None,
+        admin: None,
+    }
+}
+
+/// Helper: builds a DDL query (DROP COLLECTION).
+fn make_ddl_drop_query() -> Query {
+    use super::ast::{DdlStatement, DropCollectionStatement};
+    Query {
+        let_bindings: vec![],
+        select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: vec![],
+            joins: vec![],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: None,
+        train: None,
+        ddl: Some(DdlStatement::DropCollection(DropCollectionStatement {
+            name: "docs".to_string(),
+            if_exists: false,
+        })),
+        introspection: None,
+        admin: None,
+    }
+}
+
+/// Helper: builds a DML INSERT EDGE query.
+fn make_dml_insert_edge_query() -> Query {
+    use super::ast::{DmlStatement, InsertEdgeStatement};
+    Query {
+        let_bindings: vec![],
+        select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: vec![],
+            joins: vec![],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: Some(DmlStatement::InsertEdge(InsertEdgeStatement {
+            collection: "kg".to_string(),
+            edge_id: None,
+            source: 1,
+            target: 2,
+            label: "KNOWS".to_string(),
+            properties: vec![],
+        })),
+        train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
+    }
+}
+
+/// Helper: builds a DML DELETE FROM query.
+fn make_dml_delete_query() -> Query {
+    use super::ast::{DeleteStatement, DmlStatement};
+    Query {
+        let_bindings: vec![],
+        select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: vec![],
+            joins: vec![],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+        match_clause: None,
+        dml: Some(DmlStatement::Delete(DeleteStatement {
+            table: "docs".to_string(),
+            where_clause: Condition::Comparison(Comparison {
+                column: "id".to_string(),
+                operator: CompareOp::Eq,
+                value: Value::Integer(42),
+            }),
+        })),
+        train: None,
+        ddl: None,
+        introspection: None,
+        admin: None,
+    }
+}
+
+#[test]
+fn test_validate_ddl_create_collection_passes() {
+    // Given: a CREATE COLLECTION DDL statement
+    let query = make_ddl_create_query();
+
+    // When: validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: DDL bypasses SELECT-specific validation
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_ddl_drop_collection_passes() {
+    // Given: a DROP COLLECTION DDL statement
+    let query = make_ddl_drop_query();
+
+    // When: validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: DDL bypasses SELECT-specific validation
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_dml_insert_edge_passes() {
+    // Given: an INSERT EDGE DML statement
+    let query = make_dml_insert_edge_query();
+
+    // When: validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: DML bypasses SELECT-specific validation
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_dml_delete_from_passes() {
+    // Given: a DELETE FROM DML statement
+    let query = make_dml_delete_query();
+
+    // When: validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: DML bypasses SELECT-specific validation
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_let_with_ddl_rejected() {
+    use super::ast::LetBinding;
+
+    // Given: a DDL statement with a LET binding (nonsensical)
+    let mut query = make_ddl_create_query();
+    query.let_bindings = vec![LetBinding {
+        name: "x".to_string(),
+        expr: ArithmeticExpr::Literal(0.5),
+    }];
+
+    // When: validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: rejected — LET is not supported with DDL
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind, ValidationErrorKind::InvalidLetBinding);
+    assert!(err.suggestion.contains("LET bindings are not supported"));
+}
+
+#[test]
+fn test_validate_let_with_dml_rejected() {
+    use super::ast::LetBinding;
+
+    // Given: a DML statement with a LET binding (nonsensical)
+    let mut query = make_dml_delete_query();
+    query.let_bindings = vec![LetBinding {
+        name: "x".to_string(),
+        expr: ArithmeticExpr::Literal(1.0),
+    }];
+
+    // When: validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: rejected — LET is not supported with DML
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind, ValidationErrorKind::InvalidLetBinding);
+}
+
+#[test]
+fn test_validate_ddl_with_config_passes() {
+    // Given: a DDL query with custom validation config
+    let query = make_ddl_create_query();
+    let config = ValidationConfig::strict();
+
+    // When: validated with strict config
+    let result = QueryValidator::validate_with_config(&query, &config);
+
+    // Then: DDL still bypasses validation
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validation_error_kind_code_v009() {
+    assert_eq!(ValidationErrorKind::InvalidLetBinding.code(), "V009");
+}
+
+#[test]
+fn test_validation_error_kind_message_invalid_let() {
+    assert!(ValidationErrorKind::InvalidLetBinding
+        .message()
+        .contains("LET"));
 }

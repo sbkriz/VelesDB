@@ -399,6 +399,38 @@ velesdb[test_collection]> SELECT * WHERE vector NEAR $v LIMIT 10;
 velesdb[test_collection]> \bench test_collection 100 10
 ```
 
+### Introspection and Administration (v3.4+)
+
+```
+velesdb> SHOW COLLECTIONS;
++---------+----------+
+| name    | type     |
++---------+----------+
+| docs    | vector   |
+| kg      | graph    |
+| tags    | metadata |
++---------+----------+
+
+velesdb> DESCRIBE COLLECTION docs;
++------+--------+-----------+--------+-------------+
+| name | type   | dimension | metric | point_count |
++------+--------+-----------+--------+-------------+
+| docs | vector | 768       | Cosine | 15432       |
++------+--------+-----------+--------+-------------+
+
+velesdb> CREATE INDEX ON docs (category);
+OK
+
+velesdb> ANALYZE docs;
+{row_count: 15432, ...}
+
+velesdb> TRUNCATE docs;
+{deleted_count: 15432}
+
+velesdb> FLUSH FULL;
+{status: "flushed", full: true}
+```
+
 ### Export JSON
 
 ```

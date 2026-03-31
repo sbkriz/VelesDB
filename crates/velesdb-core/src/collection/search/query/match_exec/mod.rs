@@ -100,6 +100,18 @@ struct SingleNodeCtx<'a> {
     limit: usize,
 }
 
+/// Mutable state carried through BFS traversal of a single pattern.
+struct TraversalCtx<'a> {
+    match_clause: &'a MatchClause,
+    params: &'a HashMap<String, serde_json::Value>,
+    guardrail: Option<&'a QueryContext>,
+    seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
+    all_results: &'a mut Vec<MatchResult>,
+    limit: usize,
+    iteration_count: &'a mut u32,
+    reported_cardinality: &'a mut usize,
+}
+
 impl Collection {
     /// Executes a MATCH query on this collection (EPIC-045 US-002).
     ///
@@ -155,14 +167,13 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
-        let limit = match_clause.return_clause.limit.map_or(100, |l| l as usize);
-
         if match_clause.patterns.is_empty() {
             return Err(Error::Config(
                 "MATCH query must have at least one pattern".to_string(),
             ));
         }
 
+        let limit = match_clause.return_clause.limit.map_or(100, |l| l as usize);
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
         let mut reported_cardinality: usize = 0;
@@ -172,86 +183,155 @@ impl Collection {
             if all_results.len() >= limit {
                 break;
             }
-
-            let mut seen_pairs: std::collections::HashSet<(u64, u64)> =
-                std::collections::HashSet::new();
-
-            let start_nodes = self.find_start_nodes(pattern)?;
-            if start_nodes.is_empty() {
-                continue;
-            }
-
-            if pattern.relationships.is_empty() {
-                let mut ctx = SingleNodeCtx {
-                    match_clause,
-                    params,
-                    seen_pairs: &mut seen_pairs,
-                    all_results: &mut all_results,
-                    limit,
-                };
-                self.collect_single_node_results(&start_nodes, &mut ctx)?;
-                continue;
-            }
-
-            let max_depth = Self::compute_max_depth(pattern);
-            let rel_types = Self::extract_rel_types(pattern);
-
-            for (start_id, start_bindings) in start_nodes {
-                if all_results.len() >= limit {
-                    break;
-                }
-
-                let config = StreamingConfig::default()
-                    .with_limit(limit.saturating_sub(all_results.len()))
-                    .with_max_depth(max_depth)
-                    .with_rel_types(rel_types.clone());
-
-                for traversal_result in bfs_stream(&edge_store, start_id, config) {
-                    if all_results.len() >= limit {
-                        break;
-                    }
-
-                    iteration_count += 1;
-                    self.check_periodic_guardrails(
-                        ctx,
-                        iteration_count,
-                        &all_results,
-                        &mut reported_cardinality,
-                    )?;
-
-                    let match_result = self.build_traversal_match_result(
-                        &traversal_result,
-                        &start_bindings,
-                        pattern,
-                        ctx,
-                    )?;
-
-                    if let Some(ref where_clause) = match_clause.where_clause {
-                        if !self.evaluate_where_condition(
-                            traversal_result.target_id,
-                            Some(&match_result.bindings),
-                            where_clause,
-                            params,
-                        )? {
-                            continue;
-                        }
-                    }
-
-                    if seen_pairs.contains(&(start_id, traversal_result.target_id)) {
-                        continue;
-                    }
-                    seen_pairs.insert((start_id, traversal_result.target_id));
-
-                    let mut final_result = match_result;
-                    final_result.projected = self
-                        .project_properties(&final_result.bindings, &match_clause.return_clause);
-
-                    all_results.push(final_result);
-                }
-            }
+            self.execute_single_pattern(
+                pattern,
+                match_clause,
+                params,
+                ctx,
+                &edge_store,
+                limit,
+                &mut all_results,
+                &mut iteration_count,
+                &mut reported_cardinality,
+            )?;
         }
 
         Ok(all_results)
+    }
+
+    /// Executes a single graph pattern: finds start nodes, then dispatches to
+    /// single-node collection or BFS traversal.
+    #[allow(clippy::too_many_arguments)]
+    fn execute_single_pattern(
+        &self,
+        pattern: &GraphPattern,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        edge_store: &crate::collection::graph::EdgeStore,
+        limit: usize,
+        all_results: &mut Vec<MatchResult>,
+        iteration_count: &mut u32,
+        reported_cardinality: &mut usize,
+    ) -> Result<()> {
+        let start_nodes = self.find_start_nodes(pattern)?;
+        if start_nodes.is_empty() {
+            return Ok(());
+        }
+
+        let mut seen_pairs: std::collections::HashSet<(u64, u64)> =
+            std::collections::HashSet::new();
+
+        if pattern.relationships.is_empty() {
+            let mut sn_ctx = SingleNodeCtx {
+                match_clause,
+                params,
+                seen_pairs: &mut seen_pairs,
+                all_results,
+                limit,
+            };
+            return self.collect_single_node_results(&start_nodes, &mut sn_ctx);
+        }
+
+        let mut trav_ctx = TraversalCtx {
+            match_clause,
+            params,
+            guardrail: ctx,
+            seen_pairs: &mut seen_pairs,
+            all_results,
+            limit,
+            iteration_count,
+            reported_cardinality,
+        };
+        self.traverse_pattern(pattern, &start_nodes, edge_store, &mut trav_ctx)
+    }
+
+    /// Traverses a single graph pattern via BFS for each start node.
+    fn traverse_pattern(
+        &self,
+        pattern: &GraphPattern,
+        start_nodes: &[(u64, HashMap<String, u64>)],
+        edge_store: &crate::collection::graph::EdgeStore,
+        ctx: &mut TraversalCtx<'_>,
+    ) -> Result<()> {
+        let max_depth = Self::compute_max_depth(pattern);
+        let rel_types = Self::extract_rel_types(pattern);
+
+        for (start_id, start_bindings) in start_nodes {
+            if ctx.all_results.len() >= ctx.limit {
+                break;
+            }
+
+            let config = StreamingConfig::default()
+                .with_limit(ctx.limit.saturating_sub(ctx.all_results.len()))
+                .with_max_depth(max_depth)
+                .with_rel_types(rel_types.clone());
+
+            for traversal_result in bfs_stream(edge_store, *start_id, config) {
+                if ctx.all_results.len() >= ctx.limit {
+                    break;
+                }
+
+                *ctx.iteration_count += 1;
+                self.check_periodic_guardrails(
+                    ctx.guardrail,
+                    *ctx.iteration_count,
+                    ctx.all_results,
+                    ctx.reported_cardinality,
+                )?;
+
+                self.accept_traversal_hit(
+                    *start_id,
+                    &traversal_result,
+                    start_bindings,
+                    pattern,
+                    ctx,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluates a single BFS hit: guard-rails, WHERE filter, dedup, and projection.
+    ///
+    /// Pushes the result into `ctx.all_results` when all checks pass.
+    fn accept_traversal_hit(
+        &self,
+        start_id: u64,
+        traversal_result: &crate::collection::graph::TraversalResult,
+        start_bindings: &HashMap<String, u64>,
+        pattern: &GraphPattern,
+        ctx: &mut TraversalCtx<'_>,
+    ) -> Result<()> {
+        let match_result = self.build_traversal_match_result(
+            traversal_result,
+            start_bindings,
+            pattern,
+            ctx.guardrail,
+        )?;
+
+        if let Some(ref where_clause) = ctx.match_clause.where_clause {
+            if !self.evaluate_where_condition(
+                traversal_result.target_id,
+                Some(&match_result.bindings),
+                where_clause,
+                ctx.params,
+            )? {
+                return Ok(());
+            }
+        }
+
+        let pair = (start_id, traversal_result.target_id);
+        if !ctx.seen_pairs.insert(pair) {
+            return Ok(());
+        }
+
+        let mut final_result = match_result;
+        final_result.projected = self
+            .project_properties(&final_result.bindings, &ctx.match_clause.return_clause);
+
+        ctx.all_results.push(final_result);
+        Ok(())
     }
 
     /// Collects results for single-node patterns (no relationships).

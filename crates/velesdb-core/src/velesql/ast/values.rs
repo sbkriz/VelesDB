@@ -145,6 +145,27 @@ impl IntervalValue {
     }
 }
 
+impl Value {
+    /// Converts this VelesQL value to a JSON value.
+    ///
+    /// Literal values (integer, float, string, boolean, null) map directly
+    /// to their JSON equivalents. Parameters serialize as `"$name"` strings.
+    /// Temporal expressions evaluate to epoch-seconds integers.
+    /// Subqueries are not serializable and produce `Value::Null`.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Integer(i) => serde_json::json!(i),
+            Self::Float(f) => serde_json::json!(f),
+            Self::String(s) => serde_json::json!(s),
+            Self::Boolean(b) => serde_json::json!(b),
+            Self::Parameter(p) => serde_json::json!(format!("${p}")),
+            Self::Temporal(t) => serde_json::json!(t.to_epoch_seconds()),
+            Self::Null | Self::Subquery(_) => serde_json::Value::Null,
+        }
+    }
+}
+
 /// Time unit for INTERVAL expressions (EPIC-038).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IntervalUnit {

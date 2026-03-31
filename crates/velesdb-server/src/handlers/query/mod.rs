@@ -10,7 +10,9 @@ use std::sync::Arc;
 use velesdb_core::collection::search::query::projection;
 #[cfg(test)]
 use velesdb_core::velesql;
-use velesdb_core::velesql::{Query, SelectColumns};
+use velesdb_core::velesql::{
+    DdlStatement, DmlStatement, IntrospectionStatement, Query, SelectColumns,
+};
 
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
@@ -21,6 +23,37 @@ use crate::AppState;
 
 use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+
+/// Returns `true` when the query should bypass collection resolution and go
+/// directly through `Database::execute_query` — DDL, introspection, admin,
+/// TRAIN, or graph/edge/delete DML that resolves its own collection from the AST.
+fn requires_mutation_dispatch(parsed: &Query) -> bool {
+    parsed.is_ddl_query()
+        || parsed.is_introspection_query()
+        || parsed.is_admin_query()
+        || parsed.is_train()
+        || is_ast_routed_dml(parsed)
+}
+
+/// Returns `true` for DML statements that resolve their collection name from
+/// the AST rather than from the request body's `FROM` clause:
+/// `INSERT EDGE`, `DELETE`, `DELETE EDGE`, `SELECT EDGES`, `INSERT NODE`.
+///
+/// `INSERT INTO`, `UPSERT`, and `UPDATE` return result rows and must flow
+/// through the standard query path (they use `stmt.table` which maps to
+/// the SELECT `FROM`).
+fn is_ast_routed_dml(parsed: &Query) -> bool {
+    matches!(
+        parsed.dml,
+        Some(
+            DmlStatement::InsertEdge(_)
+                | DmlStatement::Delete(_)
+                | DmlStatement::DeleteEdge(_)
+                | DmlStatement::SelectEdges(_)
+                | DmlStatement::InsertNode(_)
+        )
+    )
+}
 
 fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
     let has_aggs = match &select.columns {
@@ -84,6 +117,9 @@ fn execute_aggregation_query(
 ///
 /// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
 /// and routes them to execute_aggregate for proper handling.
+///
+/// DDL statements (CREATE/DROP COLLECTION) are intercepted before collection
+/// resolution and dispatched directly through `Database::execute_query`.
 #[utoipa::path(
     post,
     path = "/query",
@@ -108,6 +144,13 @@ pub async fn query(
         Err(resp) => return resp,
     };
 
+    // DDL/Introspection/Admin/graph-mutation bypass: these extract collection from
+    // the SQL AST, not from the request body.  INSERT INTO, UPSERT, and UPDATE flow
+    // through the standard path because they return meaningful result rows.
+    if requires_mutation_dispatch(&parsed) {
+        return execute_mutation_query(&state, &parsed, &req.params, start);
+    }
+
     let collection_name = match resolve_collection_name(&parsed, &req) {
         Ok(name) => name,
         Err(resp) => return resp,
@@ -130,6 +173,113 @@ pub async fn query(
         results,
         &parsed.select.columns,
     )
+}
+
+/// Extract the collection name targeted by a mutation/DDL/introspection query.
+///
+/// Returns `"_system"` for global operations that do not target a specific
+/// collection (SHOW COLLECTIONS, EXPLAIN, FLUSH without collection).
+fn extract_mutation_collection_name(parsed: &Query) -> String {
+    if let Some(name) = extract_ddl_collection(parsed) {
+        return name;
+    }
+    if let Some(name) = extract_dml_collection(parsed) {
+        return name;
+    }
+    if let Some(ref intro) = parsed.introspection {
+        return match intro {
+            IntrospectionStatement::DescribeCollection(d) => d.name.clone(),
+            IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
+                "_system".to_string()
+            }
+        };
+    }
+    if let Some(ref admin) = parsed.admin {
+        let velesdb_core::velesql::AdminStatement::Flush(f) = admin;
+        return f
+            .collection
+            .clone()
+            .unwrap_or_else(|| "_system".to_string());
+    }
+    if let Some(ref train) = parsed.train {
+        return train.collection.clone();
+    }
+    "_system".to_string()
+}
+
+/// Extract collection name from a DDL statement.
+fn extract_ddl_collection(parsed: &Query) -> Option<String> {
+    parsed.ddl.as_ref().map(|ddl| match ddl {
+        DdlStatement::CreateCollection(s) => s.name.clone(),
+        DdlStatement::DropCollection(s) => s.name.clone(),
+        DdlStatement::CreateIndex(s) => s.collection.clone(),
+        DdlStatement::DropIndex(s) => s.collection.clone(),
+        DdlStatement::Analyze(s) => s.collection.clone(),
+        DdlStatement::Truncate(s) => s.collection.clone(),
+        DdlStatement::AlterCollection(s) => s.collection.clone(),
+    })
+}
+
+/// Extract collection name from a DML statement.
+fn extract_dml_collection(parsed: &Query) -> Option<String> {
+    parsed.dml.as_ref().map(|dml| match dml {
+        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => s.table.clone(),
+        DmlStatement::Update(s) => s.table.clone(),
+        DmlStatement::InsertEdge(s) => s.collection.clone(),
+        DmlStatement::Delete(s) => s.table.clone(),
+        DmlStatement::DeleteEdge(s) => s.collection.clone(),
+        DmlStatement::SelectEdges(s) => s.collection.clone(),
+        DmlStatement::InsertNode(s) => s.collection.clone(),
+    })
+}
+
+/// Execute a DDL, graph/delete DML, introspection, admin, or TRAIN query.
+///
+/// DDL (CREATE/DROP/ALTER/ANALYZE/TRUNCATE), graph/delete DML mutations
+/// (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES, INSERT NODE),
+/// introspection (SHOW/DESCRIBE/EXPLAIN), admin (FLUSH), and TRAIN
+/// statements extract collection names from the SQL AST — no FROM clause
+/// needed.
+///
+/// Results from `Database::execute_query` are propagated into the response
+/// so that introspection (SHOW, DESCRIBE, EXPLAIN), ANALYZE, and SELECT
+/// EDGES return their data to the caller.
+fn execute_mutation_query(
+    state: &Arc<AppState>,
+    parsed: &Query,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+    start: std::time::Instant,
+) -> axum::response::Response {
+    match state.db.execute_query(parsed, params) {
+        Ok(results) => {
+            let coll_name = extract_mutation_collection_name(parsed);
+            notify_query_timing(state, &coll_name, start);
+            let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
+            let took_ms = timing_ms.round() as u64;
+            let projected = projection::project_results(&results, &parsed.select.columns);
+            let rows_returned = projected.len();
+            Json(QueryResponse {
+                results: projected,
+                timing_ms,
+                took_ms,
+                rows_returned,
+                meta: QueryResponseMeta {
+                    velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+                    count: rows_returned,
+                },
+            })
+            .into_response()
+        }
+        Err(e) => velesql_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VELESQL_MUTATION_ERROR",
+            &e.to_string(),
+            "Check collection name, statement syntax, and target existence",
+            None,
+        ),
+    }
 }
 
 /// Determine the target collection from the parsed query and request body.
@@ -297,12 +447,22 @@ fn resolve_aggregate_collection(
 /// Detect query type from parsed AST (EPIC-052 US-006).
 ///
 /// Priority order:
-/// 1. MATCH clause -> Graph
-/// 2. GROUP BY or aggregates -> Aggregation
-/// 3. Vector search -> Search
-/// 4. Default -> Rows
+/// 1. DDL (CREATE/DROP COLLECTION) -> Ddl
+/// 2. DML (INSERT/UPDATE/DELETE) -> Dml
+/// 3. MATCH clause -> Graph
+/// 4. GROUP BY or aggregates -> Aggregation
+/// 5. Vector search -> Search
+/// 6. Default -> Rows
 #[allow(dead_code)] // Used in tests, will be used in unified handler
 pub fn detect_query_type(query: &Query) -> QueryType {
+    if query.is_ddl_query() {
+        return QueryType::Ddl;
+    }
+
+    if query.is_dml_query() {
+        return QueryType::Dml;
+    }
+
     if query.is_match_query() {
         return QueryType::Graph;
     }
@@ -369,5 +529,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(detect_query_type(&parsed), QueryType::Aggregation);
+    }
+
+    #[test]
+    fn test_detect_query_type_ddl_create() {
+        let parsed =
+            velesql::Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'cosine');")
+                .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Ddl);
+    }
+
+    #[test]
+    fn test_detect_query_type_ddl_drop() {
+        let parsed = velesql::Parser::parse("DROP COLLECTION docs;").unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Ddl);
+    }
+
+    #[test]
+    fn test_detect_query_type_dml_insert_edge() {
+        let parsed = velesql::Parser::parse(
+            "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS');",
+        )
+        .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Dml);
+    }
+
+    #[test]
+    fn test_detect_query_type_dml_delete() {
+        let parsed = velesql::Parser::parse("DELETE FROM docs WHERE id = 1;").unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Dml);
     }
 }

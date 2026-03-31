@@ -377,7 +377,11 @@ export interface AggregationQueryResponse {
   stats: QueryStats;
 }
 
-/** Unified response type for `query()` (rows or aggregation). */
+/** Unified response type for `query()` (rows, aggregation, or DDL).
+ *
+ * DDL statements (CREATE, DROP) and mutations (INSERT EDGE, DELETE) return
+ * a standard `QueryResponse` with an empty `results` array.
+ */
 export type QueryApiResponse = QueryResponse | AggregationQueryResponse;
 
 // ============================================================================

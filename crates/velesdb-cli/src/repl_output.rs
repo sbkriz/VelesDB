@@ -7,12 +7,20 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use std::collections::HashMap;
 
-use crate::repl::QueryResult;
+use crate::repl::{QueryKind, QueryResult};
 
 /// Print query results in the specified format
 pub fn print_result(result: &QueryResult, format: &str) {
     if result.rows.is_empty() {
-        println!("{}", "No results.".dimmed());
+        let msg = match result.kind {
+            QueryKind::Ddl => "DDL statement executed successfully.",
+            QueryKind::Dml => "DML statement executed successfully.",
+            QueryKind::Train => "TRAIN statement executed successfully.",
+            QueryKind::Admin => "Admin statement executed successfully.",
+            QueryKind::Introspection => "No collections found.",
+            QueryKind::Select => "No results.",
+        };
+        println!("{}", msg.dimmed());
         return;
     }
 

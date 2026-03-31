@@ -1,5 +1,5 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 3.2.0 — LET clause for named score bindings (v1.10 Phase 3)
+// Version 3.6.0 — FLUSH + ANALYZE, TRUNCATE, ALTER COLLECTION + DDL + graph mutations + DELETE FROM + multi-row INSERT + UPSERT
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -8,9 +8,50 @@ COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 // LET clause: named score bindings evaluated once (VelesQL v1.10 Phase 3)
 let_clause = { ^"LET" ~ identifier ~ "=" ~ order_by_arithmetic }
 
-// Main entry point - supports SELECT, MATCH and DML (INSERT/UPDATE)
+// Main entry point - supports SELECT, MATCH, DML (INSERT/UPSERT/UPDATE/DELETE), DDL (CREATE/DROP), admin (ANALYZE/TRUNCATE/ALTER/FLUSH), and introspection (SHOW/DESCRIBE/EXPLAIN)
 // LET clauses appear zero or more times before the main statement.
-query = { SOI ~ let_clause* ~ (match_query | compound_query | train_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
+// Order matters (PEG ordered choice):
+//   - select_edges_stmt before compound_query (both start with SELECT; EDGES disambiguates)
+//   - insert_node_stmt before insert_edge_stmt (both start with INSERT; NODE vs EDGE disambiguates)
+//   - insert_edge_stmt before insert_stmt, delete_edge_stmt before delete_stmt
+// upsert_stmt placed after insert_stmt since UPSERT and INSERT have distinct first tokens.
+// Introspection and admin statements placed first since SHOW/DESCRIBE/EXPLAIN/ANALYZE/TRUNCATE/ALTER/FLUSH do not conflict with any existing first-token.
+query = { SOI ~ let_clause* ~ (show_collections_stmt | describe_stmt | explain_stmt | analyze_stmt | truncate_stmt | alter_collection_stmt | flush_stmt | match_query | select_edges_stmt | compound_query | train_stmt | create_index_stmt | create_collection_stmt | drop_index_stmt | drop_collection_stmt | insert_node_stmt | insert_edge_stmt | delete_edge_stmt | delete_stmt | insert_stmt | upsert_stmt | update_stmt) ~ ";"? ~ EOI }
+
+// ──────────────────────────────────────────────────────────────
+// Introspection statements (VelesQL v3.4)
+// ──────────────────────────────────────────────────────────────
+
+// SHOW COLLECTIONS — lists all collections in the database
+show_collections_stmt = { ^"SHOW" ~ ^"COLLECTIONS" }
+
+// DESCRIBE [COLLECTION] name — returns collection metadata
+// collection_kw uses word-boundary lookahead to prevent "collection_data"
+// being parsed as COLLECTION + "_data" (same pattern as flush_full_kw).
+describe_stmt = { ^"DESCRIBE" ~ collection_kw? ~ identifier }
+
+// EXPLAIN <query> — returns the query execution plan without executing
+explain_stmt = { ^"EXPLAIN" ~ compound_query }
+
+// ANALYZE [COLLECTION] name — computes CBO statistics for query optimizer
+analyze_stmt = { ^"ANALYZE" ~ collection_kw? ~ identifier }
+
+// TRUNCATE [COLLECTION] name — deletes all rows from a collection
+truncate_stmt = { ^"TRUNCATE" ~ collection_kw? ~ identifier }
+
+// Word-boundary-safe COLLECTION keyword. Prevents "collection_data" from
+// being parsed as COLLECTION + "_data". Same pattern as flush_full_kw.
+collection_kw = @{ ^"COLLECTION" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// ALTER COLLECTION name SET (options) — modifies collection settings
+alter_collection_stmt = { ^"ALTER" ~ ^"COLLECTION" ~ identifier ~ ^"SET" ~ "(" ~ create_option_list ~ ")" }
+
+// FLUSH [FULL] [collection] — persist all or specific collection to disk
+// flush_full_kw is a named rule so the parser can detect it in inner pairs.
+// Negative lookahead (!ASCII_ALPHANUMERIC) prevents matching "FULL" prefix
+// of identifiers like "fulltext" as the FULL keyword.
+flush_stmt = { ^"FLUSH" ~ flush_full_kw? ~ identifier? }
+flush_full_kw = @{ ^"FULL" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // MATCH query for graph pattern matching (EPIC-045 US-001)
 // Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]
@@ -60,13 +101,24 @@ property_access = @{ identifier ~ "." ~ identifier }
 compound_query = { select_stmt ~ (set_operator ~ select_stmt)* }
 set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
 
-// INSERT statement: INSERT INTO table (col1, col2) VALUES (v1, v2)
+// INSERT statement: INSERT INTO table (col1, col2) VALUES (v1, v2)[, (v3, v4)]
 insert_stmt = {
     ^"INSERT" ~ ^"INTO" ~ identifier ~
     "(" ~ identifier ~ ("," ~ identifier)* ~ ")" ~
     ^"VALUES" ~
-    "(" ~ value ~ ("," ~ value)* ~ ")"
+    values_row ~ ("," ~ values_row)*
 }
+
+// UPSERT statement: UPSERT INTO table (col1, col2) VALUES (v1, v2)[, (v3, v4)]
+upsert_stmt = {
+    ^"UPSERT" ~ ^"INTO" ~ identifier ~
+    "(" ~ identifier ~ ("," ~ identifier)* ~ ")" ~
+    ^"VALUES" ~
+    values_row ~ ("," ~ values_row)*
+}
+
+// A single parenthesised row of values
+values_row = { "(" ~ value ~ ("," ~ value)* ~ ")" }
 
 // UPDATE statement: UPDATE table SET col1 = v1, col2 = v2 [WHERE ...]
 update_stmt = {
@@ -79,6 +131,84 @@ assignment = { identifier ~ "=" ~ value }
 // TRAIN statement: TRAIN QUANTIZER ON collection WITH (params)
 train_stmt = {
     ^"TRAIN" ~ ^"QUANTIZER" ~ ^"ON" ~ identifier ~ with_clause
+}
+
+// ──────────────────────────────────────────────────────────────
+// DDL statements (VelesQL v3.3)
+// ──────────────────────────────────────────────────────────────
+
+// CREATE INDEX ON collection (field) — secondary metadata index
+create_index_stmt = { ^"CREATE" ~ ^"INDEX" ~ ^"ON" ~ identifier ~ "(" ~ identifier ~ ")" }
+
+// DROP INDEX ON collection (field) — remove secondary metadata index
+drop_index_stmt = { ^"DROP" ~ ^"INDEX" ~ ^"ON" ~ identifier ~ "(" ~ identifier ~ ")" }
+
+// CREATE COLLECTION: vector (default), graph, or metadata-only
+// Examples:
+//   CREATE COLLECTION docs (dimension = 768, metric = 'cosine');
+//   CREATE COLLECTION docs (dimension = 768, metric = 'cosine') WITH (storage = 'sq8', m = 16);
+//   CREATE GRAPH COLLECTION kg (dimension = 768, metric = 'cosine') SCHEMALESS;
+//   CREATE METADATA COLLECTION tags;
+create_collection_stmt = {
+    ^"CREATE" ~ collection_kind_kw? ~ ^"COLLECTION" ~ identifier ~
+    create_body?
+}
+collection_kind_kw = { ^"GRAPH" | ^"METADATA" }
+create_body = { "(" ~ create_option_list ~ ")" ~ create_suffix? }
+create_option_list = { create_option ~ ("," ~ create_option)* }
+create_option = { identifier ~ "=" ~ create_option_value }
+create_option_value = { string | float | integer | boolean | identifier }
+create_suffix = { schemaless_clause | with_schema_clause | with_clause }
+schemaless_clause = { ^"SCHEMALESS" }
+
+// WITH SCHEMA for typed graph collections
+with_schema_clause = { ^"WITH" ~ ^"SCHEMA" ~ "(" ~ schema_def_list ~ ")" }
+schema_def_list = { schema_def ~ ("," ~ schema_def)* }
+schema_def = { node_type_def | edge_type_def }
+node_type_def = { ^"NODE" ~ identifier ~ "(" ~ property_def_list ~ ")" }
+edge_type_def = { ^"EDGE" ~ identifier ~ ^"FROM" ~ identifier ~ ^"TO" ~ identifier }
+property_def_list = { property_def ~ ("," ~ property_def)* }
+property_def = { identifier ~ ":" ~ type_name }
+type_name = { ^"STRING" | ^"INTEGER" | ^"FLOAT" | ^"BOOLEAN" | ^"VECTOR" }
+
+// DROP COLLECTION [IF EXISTS] name
+drop_collection_stmt = {
+    ^"DROP" ~ ^"COLLECTION" ~ if_exists_clause? ~ identifier
+}
+if_exists_clause = { ^"IF" ~ ^"EXISTS" }
+
+// INSERT EDGE INTO collection (source = N, target = N, label = 'L')
+//   [WITH PROPERTIES (key = val, ...)]
+insert_edge_stmt = {
+    ^"INSERT" ~ ^"EDGE" ~ ^"INTO" ~ identifier ~
+    "(" ~ edge_field_list ~ ")" ~
+    edge_properties_clause?
+}
+edge_field_list = { edge_field ~ ("," ~ edge_field)* }
+edge_field = { identifier ~ "=" ~ value }
+edge_properties_clause = { ^"WITH" ~ ^"PROPERTIES" ~ "(" ~ create_option_list ~ ")" }
+
+// DELETE FROM collection WHERE condition
+// WHERE is mandatory to prevent accidental full-collection deletion.
+delete_stmt = {
+    ^"DELETE" ~ ^"FROM" ~ identifier ~ where_clause
+}
+
+// DELETE EDGE edge_id FROM collection
+delete_edge_stmt = {
+    ^"DELETE" ~ ^"EDGE" ~ value ~ ^"FROM" ~ identifier
+}
+
+// SELECT EDGES FROM collection [WHERE source=N / target=N / label='X'] [LIMIT n]
+// Queries edges from a graph collection with optional filtering.
+select_edges_stmt = {
+    ^"SELECT" ~ ^"EDGES" ~ ^"FROM" ~ identifier ~ where_clause? ~ limit_clause?
+}
+
+// INSERT NODE INTO collection (id = N, payload = '{"key": "value"}')
+// Inserts or updates a node payload in a graph collection.
+insert_node_stmt = {
+    ^"INSERT" ~ ^"NODE" ~ ^"INTO" ~ identifier ~ "(" ~ edge_field_list ~ ")"
 }
 
 // SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses

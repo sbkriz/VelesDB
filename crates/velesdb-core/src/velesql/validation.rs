@@ -13,7 +13,14 @@ pub use super::validation_types::{
     ComplexityStats, ValidationConfig, ValidationError, ValidationErrorKind,
 };
 
-/// Stateless validator for semantic and complexity checks.
+/// Stateless validator for VelesQL semantic and complexity checks.
+///
+/// Performs validation passes on parsed [`Query`] ASTs:
+/// - LET binding legality (DDL/DML/admin cannot use LET)
+/// - Similarity context (similarity() requires a score-producing WHERE clause)
+/// - Qualified wildcard alias resolution
+/// - Compound query validation across UNION/INTERSECT/EXCEPT operands
+/// - Complexity budget enforcement (AST depth, LIKE/ILIKE terms, graph hops)
 pub struct QueryValidator;
 
 impl QueryValidator {
@@ -35,32 +42,32 @@ impl QueryValidator {
         query: &Query,
         config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
-        if query.is_dml_query() {
-            return Ok(());
+        // Non-SELECT statements: only check LET bindings.
+        if !requires_select_validation(query) {
+            return reject_let_on_non_select(query);
         }
 
-        if let Some(ref condition) = query.select.where_clause {
-            Self::validate_condition(condition, query.select.limit, config)?;
-        }
-        if let Some(ref compound) = query.compound {
-            for (_, right_select) in &compound.operations {
-                if let Some(ref condition) = right_select.where_clause {
-                    Self::validate_condition(condition, right_select.limit, config)?;
-                }
-            }
-        }
-
-        Self::validate_similarity_context(&query.select)?;
-        Self::validate_qualified_wildcards(&query.select)?;
+        Self::validate_select(&query.select, config)?;
 
         if let Some(ref compound) = query.compound {
             for (_, right_select) in &compound.operations {
-                Self::validate_similarity_context(right_select)?;
-                Self::validate_qualified_wildcards(right_select)?;
+                Self::validate_select(right_select, config)?;
             }
         }
 
         Ok(())
+    }
+
+    /// Validates a single SELECT statement (main or compound operand).
+    fn validate_select(
+        stmt: &super::ast::SelectStatement,
+        config: &ValidationConfig,
+    ) -> Result<(), ValidationError> {
+        if let Some(ref condition) = stmt.where_clause {
+            Self::validate_condition(condition, stmt.limit, config)?;
+        }
+        Self::validate_similarity_context(stmt)?;
+        Self::validate_qualified_wildcards(stmt)
     }
 
     /// Validates that `similarity()` in SELECT or ORDER BY has a score context.
@@ -379,5 +386,31 @@ impl QueryValidator {
             }
             _ => false,
         }
+    }
+}
+
+/// Returns `true` if the query requires SELECT-specific validation passes.
+///
+/// DDL, DML, introspection, admin, and TRAIN statements bypass SELECT
+/// validation (no FROM clause, no similarity conditions, etc.).
+fn requires_select_validation(query: &Query) -> bool {
+    !query.is_ddl_query()
+        && !query.is_dml_query()
+        && !query.is_train()
+        && !query.is_introspection_query()
+        && !query.is_admin_query()
+}
+
+/// Returns `Ok(())` if there are no LET bindings, otherwise rejects.
+fn reject_let_on_non_select(query: &Query) -> Result<(), ValidationError> {
+    if query.let_bindings.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            ValidationErrorKind::InvalidLetBinding,
+            None,
+            "LET clause",
+            "LET bindings are not supported with DDL, DML, introspection, or admin statements",
+        ))
     }
 }

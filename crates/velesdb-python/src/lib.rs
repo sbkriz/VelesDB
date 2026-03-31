@@ -504,6 +504,59 @@ impl Database {
         Ok(PyGraphCollection::new(coll, name.to_string()))
     }
 
+    /// Execute a VelesQL query string (SELECT, DDL, or DML).
+    ///
+    /// Supports all VelesQL statements including:
+    ///
+    /// - ``SELECT … FROM … WHERE …``
+    /// - ``CREATE [GRAPH|METADATA] COLLECTION …``
+    /// - ``DROP COLLECTION [IF EXISTS] …``
+    /// - ``INSERT EDGE INTO …``
+    /// - ``DELETE FROM … WHERE …``
+    /// - ``DELETE EDGE … FROM …``
+    ///
+    /// Args:
+    ///     sql: VelesQL query string.
+    ///     params: Optional parameter bindings (e.g., ``{"$v": [0.1, 0.2]}``).
+    ///             Pass ``None`` or omit to run with no bindings.
+    ///
+    /// Returns:
+    ///     List of result dicts for SELECT queries.
+    ///     Each dict contains ``node_id``, ``vector_score``, ``graph_score``,
+    ///     ``fused_score``, ``bindings``, ``column_data``, ``id``, ``score``,
+    ///     and ``payload`` fields.
+    ///     Returns an empty list for DDL/DML statements.
+    ///
+    /// Raises:
+    ///     ValueError: If the SQL string fails to parse.
+    ///     RuntimeError: If execution fails.
+    ///
+    /// Example:
+    ///     >>> results = db.execute_query("SELECT * FROM docs LIMIT 5")
+    ///     >>> db.execute_query("CREATE COLLECTION notes (dimension=128, metric=cosine)")
+    ///     >>> db.execute_query(
+    ///     ...     "SELECT * FROM docs WHERE vector NEAR $q LIMIT 10",
+    ///     ...     params={"$q": [0.1, 0.2]},
+    ///     ... )
+    #[pyo3(signature = (sql, params = None))]
+    fn execute_query(
+        &self,
+        py: Python<'_>,
+        sql: &str,
+        params: Option<std::collections::HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<PyObject>> {
+        use collection::query::{convert_params, parse_velesql};
+        use collection_helpers::search_results_to_multimodel_dicts;
+
+        let parsed = parse_velesql(sql)?;
+        let rust_params = convert_params(py, params)?;
+        let inner = Arc::clone(&self.inner);
+        let results = py
+            .allow_threads(move || inner.execute_query(&parsed, &rust_params))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(search_results_to_multimodel_dicts(py, results))
+    }
+
     /// Get plan cache statistics.
     ///
     /// Returns a dict with keys:

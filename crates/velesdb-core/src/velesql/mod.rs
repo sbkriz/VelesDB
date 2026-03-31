@@ -40,6 +40,8 @@ mod complex_parser_tests;
 #[cfg(feature = "persistence")]
 mod cost_estimator;
 #[cfg(test)]
+mod ddl_tests;
+#[cfg(test)]
 mod distinct_tests;
 #[cfg(test)]
 mod dml_tests;
@@ -110,13 +112,48 @@ mod velesql_v2_integration_tests;
 #[cfg(test)]
 mod with_options_tests;
 
+#[cfg(test)]
+mod admin_ddl_tests;
+#[cfg(test)]
+mod flush_tests;
+#[cfg(test)]
+mod index_ddl_tests;
+#[cfg(test)]
+mod introspection_tests;
+
+#[cfg(test)]
+mod clause_edge_tests;
+#[cfg(test)]
+mod comment_tests;
+#[cfg(test)]
+mod dml_extended_tests;
+#[cfg(test)]
+mod dml_v2_tests;
+#[cfg(test)]
+mod graph_query_tests;
+#[cfg(test)]
+mod like_edge_tests;
+#[cfg(test)]
+mod match_text_extended_tests;
+#[cfg(test)]
+mod negative_edge_tests;
+#[cfg(test)]
+mod operator_edge_tests;
+#[cfg(test)]
+mod temporal_extended_tests;
+
 pub use aggregator::{AggregateResult, Aggregator};
 // Explicit AST exports (replaces `pub use ast::*` — prevents accidental internal type leakage)
 pub use ast::{
+    // Admin (VelesQL v3.6 -- FLUSH)
+    AdminStatement,
     // Aggregation
     AggregateArg,
     AggregateFunction,
     AggregateType,
+    // DDL (VelesQL v3.3 -- used by database ddl_executor)
+    AlterCollectionStatement,
+    AnalyzeStatement,
     // Arithmetic (EPIC-042)
     ArithmeticExpr,
     ArithmeticOp,
@@ -133,21 +170,38 @@ pub use ast::{
     Condition,
     // Values (used by cli, wasm)
     CorrelatedColumn,
-    DistinctMode,
+    CreateCollectionKind,
+    CreateCollectionStatement,
+    CreateIndexStatement,
+    DdlStatement,
     // DML (used by database execute_dml)
+    DeleteEdgeStatement,
+    DeleteStatement,
+    // Introspection (VelesQL v3.4 -- SHOW/DESCRIBE/EXPLAIN)
+    DescribeCollectionStatement,
+    DistinctMode,
     DmlStatement,
+    DropCollectionStatement,
+    DropIndexStatement,
     // Fusion
+    FlushStatement,
     FusionClause,
     FusionConfig,
     FusionStrategyType,
+    GraphCollectionParams,
     GraphMatchPredicate,
+    GraphSchemaMode,
     GroupByClause,
     HavingClause,
     HavingCondition,
     InCondition,
+    InsertEdgeStatement,
+    // Graph query extensions (VelesQL v3.5 Phase 5)
+    InsertNodeStatement,
     InsertStatement,
     IntervalUnit,
     IntervalValue,
+    IntrospectionStatement,
     IsNullCondition,
     JoinClause,
     JoinCondition,
@@ -161,7 +215,9 @@ pub use ast::{
     // WITH clause
     QuantizationMode,
     Query,
+    SchemaDefinition,
     SelectColumns,
+    SelectEdgesStatement,
     SelectOrderBy,
     SelectStatement,
     SetOperator,
@@ -174,9 +230,11 @@ pub use ast::{
     TemporalExpr,
     // TRAIN statement
     TrainStatement,
+    TruncateStatement,
     UpdateAssignment,
     UpdateStatement,
     Value,
+    VectorCollectionParams,
     VectorExpr,
     VectorFusedSearch,
     VectorSearch,

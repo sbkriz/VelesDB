@@ -204,9 +204,7 @@ When combining vector and graph results:
 
 ## See Also
 
-- [VelesQL Specification](../reference/VELESQL_SPEC.md)
-- [JOIN Reference](../reference/VELESQL_JOIN.md)
-- [ORDER BY Reference](../reference/VELESQL_ORDERBY.md)
+- [VelesQL Specification](../VELESQL_SPEC.md)
 - [Search Modes](./SEARCH_MODES.md)
 - [Benchmarks](../BENCHMARKS.md)
 

@@ -80,9 +80,14 @@ impl WithClause {
     }
 
     /// Gets the search mode if specified.
+    ///
+    /// Checks both `mode` and `quality` keys (VelesQL v3.5 Phase 4).
+    /// `quality` is an alias for `mode`; if both are set, `mode` takes precedence.
     #[must_use]
     pub fn get_mode(&self) -> Option<&str> {
-        self.get("mode").and_then(|v| v.as_str())
+        self.get("mode")
+            .or_else(|| self.get("quality"))
+            .and_then(|v| v.as_str())
     }
 
     /// Gets ef_search if specified.

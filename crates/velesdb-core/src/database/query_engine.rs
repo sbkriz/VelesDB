@@ -1,8 +1,45 @@
 //! Query execution: `execute_query`, `explain_query`, plan caching, and DML dispatch.
 
+use crate::velesql::{
+    AdminStatement, DdlStatement, DmlStatement, IntrospectionStatement, Query, TrainStatement,
+};
 use crate::{Error, Result, SearchResult};
 
 use super::Database;
+
+/// Statement type classification for dispatch routing.
+enum StatementType<'a> {
+    Admin(&'a AdminStatement),
+    Introspection(&'a IntrospectionStatement),
+    Ddl(&'a DdlStatement),
+    Train(&'a TrainStatement),
+    Dml(&'a DmlStatement),
+    Match,
+    Select,
+}
+
+/// Classifies a query into its statement type for routing.
+fn classify_statement(query: &Query) -> StatementType<'_> {
+    if let Some(admin) = query.admin.as_ref() {
+        return StatementType::Admin(admin);
+    }
+    if let Some(intro) = query.introspection.as_ref() {
+        return StatementType::Introspection(intro);
+    }
+    if let Some(ddl) = query.ddl.as_ref() {
+        return StatementType::Ddl(ddl);
+    }
+    if let Some(train) = query.train.as_ref() {
+        return StatementType::Train(train);
+    }
+    if let Some(dml) = query.dml.as_ref() {
+        return StatementType::Dml(dml);
+    }
+    if query.is_match_query() {
+        return StatementType::Match;
+    }
+    StatementType::Select
+}
 
 #[allow(deprecated)] // Uses legacy Collection internally for query routing.
 impl Database {
@@ -138,7 +175,6 @@ impl Database {
     /// # Errors
     ///
     /// Returns an error if the base collection or any JOIN collection is missing.
-    #[allow(clippy::too_many_lines)]
     pub fn execute_query(
         &self,
         query: &crate::velesql::Query,
@@ -146,19 +182,8 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
-        if let Some(train) = query.train.as_ref() {
-            return self.execute_train(train);
-        }
-
-        if let Some(dml) = query.dml.as_ref() {
-            return self.execute_dml(dml, params);
-        }
-
-        if query.is_match_query() {
-            return Err(Error::Query(
-                "Database::execute_query does not support top-level MATCH queries. Use Collection::execute_query or pass the collection name."
-                    .to_string(),
-            ));
+        if let Some(results) = self.dispatch_non_select(query, params)? {
+            return Ok(results);
         }
 
         // Build plan key and check cache WITHOUT recording hit/miss metrics (CACHE-02).
@@ -186,6 +211,31 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Classifies and dispatches non-SELECT statement types.
+    ///
+    /// Returns `Ok(Some(results))` if handled, `Ok(None)` for SELECT queries.
+    fn dispatch_non_select(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        // Classify the statement type (at most one is Some).
+        let stmt_type = classify_statement(query);
+        match stmt_type {
+            StatementType::Admin(admin) => Ok(Some(self.execute_admin(admin)?)),
+            StatementType::Introspection(intro) => Ok(Some(self.execute_introspection(intro)?)),
+            StatementType::Ddl(ddl) => Ok(Some(self.execute_ddl(ddl)?)),
+            StatementType::Train(train) => Ok(Some(self.execute_train(train)?)),
+            StatementType::Dml(dml) => Ok(Some(self.execute_dml(dml, params)?)),
+            StatementType::Match => Err(Error::Query(
+                "Database::execute_query does not support top-level MATCH queries. \
+                 Use Collection::execute_query or pass the collection name."
+                    .to_string(),
+            )),
+            StatementType::Select => Ok(None),
+        }
     }
 
     /// Executes the SELECT portion of a query, resolving JOINs if present.
@@ -332,19 +382,25 @@ impl Database {
         self.compiled_plan_cache.insert(post_exec_key, compiled);
     }
 
-    /// Dispatches a DML statement (INSERT or UPDATE).
+    /// Dispatches a DML statement (INSERT, UPSERT, UPDATE, DELETE, or edge mutations).
     pub(super) fn execute_dml(
         &self,
         dml: &crate::velesql::DmlStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         match dml {
-            crate::velesql::DmlStatement::Insert(stmt) => self.execute_insert(stmt, params),
+            crate::velesql::DmlStatement::Insert(stmt)
+            | crate::velesql::DmlStatement::Upsert(stmt) => self.execute_insert(stmt, params),
             crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
+            crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
+            crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),
+            crate::velesql::DmlStatement::DeleteEdge(stmt) => self.execute_delete_edge(stmt),
+            crate::velesql::DmlStatement::SelectEdges(stmt) => self.execute_select_edges(stmt),
+            crate::velesql::DmlStatement::InsertNode(stmt) => self.execute_insert_node(stmt),
         }
     }
 
-    /// Executes an INSERT statement.
+    /// Executes an INSERT or UPSERT statement (single or multi-row).
     #[allow(deprecated)]
     fn execute_insert(
         &self,
@@ -353,20 +409,32 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
-        let (id, vector, payload) = Self::resolve_insert_fields(stmt, params)?;
-        let point_id =
-            id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
-        let point = Self::build_insert_point(&collection, point_id, vector, payload)?;
+        let mut points = Vec::with_capacity(stmt.rows.len());
+        for row in &stmt.rows {
+            let (id, vector, payload) = Self::resolve_insert_row(&stmt.columns, row, params)?;
+            let point_id =
+                id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
+            points.push(Self::build_insert_point(
+                &collection,
+                point_id,
+                vector,
+                payload,
+            )?);
+        }
 
-        let result = SearchResult::new(point.clone(), 0.0);
-        collection.upsert(vec![point])?;
-        Ok(vec![result])
+        let results: Vec<SearchResult> = points
+            .iter()
+            .map(|p| SearchResult::new(p.clone(), 0.0))
+            .collect();
+        collection.upsert(points)?;
+        Ok(results)
     }
 
-    /// Resolves column values from an INSERT statement into id, vector, and payload fields.
+    /// Resolves column values from a single row into id, vector, and payload fields.
     #[allow(clippy::type_complexity)] // Reason: one-off tuple return for internal helper.
-    fn resolve_insert_fields(
-        stmt: &crate::velesql::InsertStatement,
+    fn resolve_insert_row(
+        columns: &[String],
+        row: &[crate::velesql::Value],
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(
         Option<u64>,
@@ -377,7 +445,7 @@ impl Database {
         let mut payload = serde_json::Map::new();
         let mut vector: Option<Vec<f32>> = None;
 
-        for (column, value_expr) in stmt.columns.iter().zip(&stmt.values) {
+        for (column, value_expr) in columns.iter().zip(row) {
             let resolved = Self::resolve_dml_value(value_expr, params)?;
             if column == "id" {
                 id = Some(Self::json_to_u64_id(&resolved)?);

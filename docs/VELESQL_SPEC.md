@@ -1,59 +1,120 @@
 # VelesQL Language Specification
 
-> SQL-like query language for vector search in VelesDB.
+> SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.2.0 | **Last Updated**: 2026-03-29
+**Version**: 3.6.0 | **Last Updated**: 2026-03-30
+
+---
 
 ## Overview
 
-VelesQL is a SQL-inspired query language designed specifically for vector similarity search. It combines familiar SQL syntax with vector-specific operations like `NEAR` for semantic search.
+VelesQL is a SQL-inspired query language designed for hybrid search workloads.
+It combines familiar SQL syntax with vector-specific operations (`NEAR`,
+`SPARSE_NEAR`, `NEAR_FUSED`), graph pattern matching (`MATCH`), full-text search
+(`MATCH` BM25), and collection management (`CREATE`, `DROP`).
+
+All keywords are **case-insensitive**: `SELECT`, `select`, and `Select` are
+equivalent. Identifiers (collection names, column names) are case-sensitive.
 
 ### Feature Support Status
 
 | Feature | Status | Version |
 |---------|--------|---------|
-| SELECT, FROM, WHERE | ✅ Stable | 1.0 |
-| NEAR vector search | ✅ Stable | 1.0 |
-| similarity() function | ✅ Stable | 1.3 |
-| LIMIT, OFFSET | ✅ Stable | 1.0 |
-| WITH clause | ✅ Stable | 1.0 |
-| ORDER BY | ✅ Stable | 2.0 |
-| GROUP BY, HAVING | ✅ Stable | 2.0 |
-| JOIN (INNER ... ON) | ✅ Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL) | ⚠️ Parsed + explicit runtime error | 2.0 |
-| JOIN USING | ⚠️ Experimental (single-column runtime support) | 2.0 |
-| Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
-| USING FUSION | ✅ Stable | 2.0 |
-| NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
-| MATCH graph traversal | ✅ Stable | 2.1 |
-| SPARSE_NEAR sparse vector search | ✅ Stable | 2.2 |
-| NEAR_FUSED multi-vector fusion | ✅ Stable | 2.2 |
-| FUSE BY fusion clause | 🔜 Planned | - |
-| TRAIN QUANTIZER command | ✅ Stable | 2.2 |
-| ORDER BY arithmetic scoring | ✅ Stable | 3.0 |
-| LET score bindings | ✅ Stable | 3.2 |
-| Agent Memory VelesQL queries | ✅ Stable | 3.2 |
-| Table aliases | 🔜 Planned | - |
+| SELECT, FROM, WHERE | Stable | 1.0 |
+| NEAR vector search | Stable | 1.0 |
+| similarity() function | Stable | 1.3 |
+| LIMIT, OFFSET | Stable | 1.0 |
+| WITH clause | Stable | 1.0 |
+| ORDER BY | Stable | 2.0 |
+| GROUP BY, HAVING | Stable | 2.0 |
+| JOIN (INNER ... ON) | Stable | 2.0 |
+| JOIN (LEFT, RIGHT, FULL) | Parsed, explicit runtime error | 2.0 |
+| JOIN USING | Experimental (single-column) | 2.0 |
+| Set Operations (UNION, INTERSECT, EXCEPT) | Stable | 2.0 |
+| USING FUSION | Stable | 2.0 |
+| NOW() / INTERVAL temporal | Stable | 2.1 |
+| MATCH graph traversal | Stable | 2.1 |
+| SPARSE_NEAR sparse vector search | Stable | 2.2 |
+| NEAR_FUSED multi-vector fusion | Stable | 2.2 |
+| TRAIN QUANTIZER command | Stable | 2.2 |
+| ORDER BY arithmetic scoring | Stable | 3.0 |
+| LET score bindings | Stable | 3.2 |
+| Agent Memory VelesQL queries | Stable | 3.2 |
+| INSERT INTO statement | Stable | 3.2 |
+| UPDATE statement | Stable | 3.2 |
+| CREATE COLLECTION | Stable | 3.3 |
+| DROP COLLECTION | Stable | 3.3 |
+| INSERT EDGE graph mutation | Stable | 3.3 |
+| DELETE FROM statement | Stable | 3.3 |
+| DELETE EDGE graph mutation | Stable | 3.3 |
+| DISTINCT modifier | Stable | 3.3 |
+| ILIKE case-insensitive pattern | Stable | 3.3 |
+| FROM / JOIN aliases | Stable (INNER JOIN) | 2.0 |
+| Scalar subqueries | Stable | 3.2 |
+| SQL comments (`--`) | Stable | 1.0 |
+| Identifier quoting (backtick, double-quote) | Stable | 1.3 |
+| SHOW COLLECTIONS | Stable | 3.4 |
+| DESCRIBE COLLECTION | Stable | 3.4 |
+| EXPLAIN query plan | Stable | 3.4 |
+| CREATE INDEX / DROP INDEX | Stable | 3.5 |
+| ANALYZE | Stable | 3.5 |
+| TRUNCATE | Stable | 3.5 |
+| ALTER COLLECTION | Stable | 3.5 |
+| Multi-row INSERT | Stable | 3.5 |
+| UPSERT INTO statement | Stable | 3.5 |
+| WITH (quality='...') alias | Stable | 3.5 |
+| SELECT EDGES graph query | Stable | 3.5 |
+| INSERT NODE graph mutation | Stable | 3.5 |
+| FLUSH / FLUSH FULL | Stable | 3.6 |
+| FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes
 
 - `/query` supports top-level `MATCH`, but request body must include `collection`.
 - `/collections/{name}/match` is the collection-scoped graph endpoint.
 - Canonical payload contract: `docs/reference/VELESQL_CONTRACT.md`.
-- Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_CASES.md`.
+- Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`.
 - Recommended developer syntax for mixed filters:
   `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
 
-## Basic Syntax
+---
+
+## Comments
+
+VelesQL supports single-line comments with `--`. Everything after `--` to the end
+of the line is ignored by the parser.
 
 ```sql
-SELECT <columns>
-FROM <collection>
+-- This is a comment
+SELECT * FROM docs LIMIT 10  -- inline comment after a statement
+```
+
+Block comments (`/* ... */`) are **not** supported.
+
+---
+
+## SELECT Statement
+
+The SELECT statement is the primary way to query data from collections.
+
+### Full Syntax
+
+```sql
+[LET <name> = <expr> ...]
+SELECT [DISTINCT] <columns>
+FROM <collection> [AS <alias>]
+[JOIN <collection2> [AS <alias>] ON <condition> | USING (<column>)]
 [WHERE <conditions>]
+[GROUP BY <columns>]
+[HAVING <aggregate_condition>]
+[ORDER BY <expressions>]
 [LIMIT <n>]
 [OFFSET <n>]
 [WITH (<options>)]
+[USING FUSION (<strategy>)]
 ```
+
+---
 
 ## SELECT Clause
 
@@ -72,33 +133,186 @@ SELECT id, payload.title, payload.category FROM documents
 
 ### Nested Payload Fields
 
-Access nested JSON fields using dot notation:
+Access nested JSON fields using dot notation at any depth:
 
 ```sql
 SELECT payload.metadata.author FROM articles
+SELECT payload.stats.views, payload.stats.likes FROM posts
 ```
+
+### Column Aliases
+
+Rename output columns with `AS`:
+
+```sql
+SELECT id, payload.title AS title FROM docs
+SELECT id AS doc_id, category AS cat FROM products
+```
+
+### DISTINCT Modifier
+
+Eliminate duplicate rows from the result set. DISTINCT applies to ALL selected
+columns -- two rows are considered duplicates only when every selected column
+has the same value.
+
+```sql
+-- Unique categories
+SELECT DISTINCT category FROM products
+
+-- Unique authors from nested payload
+SELECT DISTINCT payload.author FROM docs
+
+-- DISTINCT with WHERE filter
+SELECT DISTINCT category FROM products WHERE price > 50
+
+-- DISTINCT on multiple columns (unique combinations)
+SELECT DISTINCT category, status FROM products
+```
+
+When combined with vector search, DISTINCT deduplicates based on payload values
+after the search results are returned:
+
+```sql
+SELECT DISTINCT payload.source FROM docs WHERE vector NEAR $v LIMIT 20
+```
+
+### Qualified Wildcard
+
+Select all columns from a specific alias in a JOIN:
+
+```sql
+SELECT ctx.* FROM docs AS ctx WHERE vector NEAR $v LIMIT 10
+```
+
+### Aggregate Functions in SELECT
+
+```sql
+SELECT COUNT(*) FROM docs
+SELECT category, COUNT(*), AVG(price), MAX(rating) FROM products GROUP BY category
+SELECT SUM(quantity) AS total FROM orders
+```
+
+| Function | Description | Argument |
+|----------|-------------|----------|
+| `COUNT(*)` | Count all rows | Wildcard |
+| `COUNT(col)` | Count non-null values in column | Column name |
+| `SUM(col)` | Sum of numeric values | Column name |
+| `AVG(col)` | Average of numeric values | Column name |
+| `MIN(col)` | Minimum value | Column name |
+| `MAX(col)` | Maximum value | Column name |
+
+### Similarity Score in SELECT
+
+Use the zero-argument `similarity()` to project the pre-computed search score:
+
+```sql
+SELECT similarity() FROM docs WHERE vector NEAR $v LIMIT 10
+SELECT similarity() AS score FROM docs WHERE vector NEAR $v LIMIT 10
+SELECT id, payload.title, similarity() AS relevance
+FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5
+```
+
+---
 
 ## FROM Clause
 
-Specify the collection name:
+Specify the source collection. An optional alias enables shorter column references
+and is required for self-joins.
 
 ```sql
+-- Simple
 SELECT * FROM my_collection
+
+-- With alias
+SELECT * FROM documents AS d
+
+-- Alias used in column references
+SELECT d.title, d.category FROM documents AS d WHERE d.price > 50
 ```
+
+---
+
+## JOIN Clause (v2.0+)
+
+Combine data from multiple collections.
+
+### Syntax
+
+```sql
+SELECT <columns>
+FROM <table1> [AS <alias1>]
+[INNER | LEFT | RIGHT | FULL] JOIN <table2> [AS <alias2>]
+  ON <alias1>.<col> = <alias2>.<col>
+```
+
+### Join Types
+
+| Type | Keyword | Description | Runtime |
+|------|---------|-------------|---------|
+| Inner | `JOIN` or `INNER JOIN` | Only matching rows from both sides | Fully executed |
+| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left + matching right | Parsed, runtime error |
+| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right + matching left | Parsed, runtime error |
+| Full | `FULL JOIN` or `FULL OUTER JOIN` | All from both tables | Parsed, runtime error |
+
+### ON Condition
+
+Specify the join equality condition:
+
+```sql
+SELECT o.id, c.name
+FROM orders AS o
+JOIN customers AS c ON o.customer_id = c.id
+```
+
+### USING Clause
+
+Shorthand when both tables share the same column name:
+
+```sql
+SELECT o.id, c.name
+FROM orders AS o
+JOIN customers AS c USING (customer_id)
+```
+
+> **Limitation**: USING currently supports a single column only.
+
+### Self-Join
+
+Join a collection with itself using aliases:
+
+```sql
+SELECT e.name AS employee, m.name AS manager
+FROM employees AS e
+JOIN employees AS m ON e.manager_id = m.id
+```
+
+### Multiple Joins
+
+Chain multiple JOINs in a single query:
+
+```sql
+SELECT e.name, m.name AS manager, d.name AS director
+FROM employees AS e
+JOIN employees AS m ON e.manager_id = m.id
+JOIN employees AS d ON m.manager_id = d.id
+```
+
+### JOIN with Vector Search
+
+```sql
+SELECT p.title, c.name AS category_name
+FROM products AS p
+JOIN categories AS c ON p.category_id = c.id
+WHERE similarity(p.embedding, $query) > 0.7
+LIMIT 20
+```
+
+---
 
 ## WHERE Clause
 
-### Vector Similarity Search
-
-Use `NEAR` for approximate nearest neighbor search:
-
-```sql
--- With parameter placeholder
-SELECT * FROM docs WHERE vector NEAR $v
-
--- With literal vector
-SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3, 0.4]
-```
+The WHERE clause filters rows using conditions. Multiple conditions are combined
+with `AND`, `OR`, and `NOT`.
 
 ### Comparison Operators
 
@@ -111,124 +325,19 @@ SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3, 0.4]
 | `<` | Less than | `count < 50` |
 | `<=` | Less or equal | `rating <= 5` |
 
-### String Matching
-
 ```sql
--- LIKE with wildcards
-SELECT * FROM docs WHERE title LIKE '%database%'
-SELECT * FROM docs WHERE name LIKE 'vec%'
-
--- MATCH for full-text search (BM25)
-SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
+SELECT * FROM products WHERE price > 100 AND category = 'electronics'
+SELECT * FROM users WHERE age >= 18 AND age <= 65
+SELECT * FROM docs WHERE status <> 'deleted'
 ```
 
-#### MATCH Semantics
+### Logical Operators (AND, OR, NOT)
 
-The `MATCH` operator performs BM25 full-text search against the collection's text index. Its behavior depends on whether it appears alone or combined with `NEAR`:
-
-**MATCH alone** -- returns BM25 text search results ranked by text relevance:
-
-```sql
--- BM25 full-text search: returns documents matching the query, ranked by BM25 score
-SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
-```
-
-**MATCH + NEAR (hybrid search)** -- triggers Reciprocal Rank Fusion (RRF) between vector similarity and BM25 text relevance. In this mode, `MATCH` acts as a **score boost, not a strict filter**. Results that do not contain the keyword may still appear with lower fused scores:
-
-```sql
--- Hybrid search: vector similarity fused with BM25 text relevance via RRF
--- Results may include documents that do NOT contain 'database' (with lower scores)
-SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'database' LIMIT 10
-```
-
-> **Known Limitations (v1.9.0)**:
-> - **No strict text filter**: There is currently no operator that strictly filters results to only those containing the keyword. `MATCH` in hybrid mode boosts but does not filter. A dedicated text filter operator is planned (see issue #446).
-> - **Column parameter ignored**: The syntax `column MATCH 'query'` parses the column name (e.g., `content`) but the execution engine ignores it -- all indexed text fields are searched via the collection's BM25 index regardless of the column specified.
-
-### NULL Checks
-
-```sql
-SELECT * FROM docs WHERE category IS NULL
-SELECT * FROM docs WHERE category IS NOT NULL
-```
-
-### IN Operator
-
-```sql
-SELECT * FROM docs WHERE category IN ('tech', 'science', 'ai')
-SELECT * FROM docs WHERE id IN (1, 2, 3, 4, 5)
-```
-
-### BETWEEN Operator
-
-```sql
-SELECT * FROM docs WHERE price BETWEEN 10 AND 100
-SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31'
-```
-
-### Temporal Functions (v2.1+)
-
-VelesQL supports temporal expressions for date/time filtering using `NOW()` and `INTERVAL`.
-
-#### NOW() Function
-
-Returns the current Unix timestamp (seconds since epoch):
-
-```sql
--- Events after now
-SELECT * FROM events WHERE timestamp > NOW()
-
--- Recently created items
-SELECT * FROM items WHERE created_at > NOW()
-```
-
-#### INTERVAL Expression
-
-Defines a time duration:
-
-```sql
-INTERVAL '<magnitude> <unit>'
-```
-
-**Supported Units:**
-
-| Unit | Aliases | Seconds |
-|------|---------|---------|
-| seconds | s, sec, second | 1 |
-| minutes | m, min, minute | 60 |
-| hours | h, hour | 3,600 |
-| days | d, day | 86,400 |
-| weeks | w, week | 604,800 |
-| months | month | ~2,592,000 |
-
-#### Temporal Arithmetic
-
-Combine `NOW()` with `INTERVAL` for relative time queries:
-
-```sql
--- Last 7 days
-SELECT * FROM logs WHERE created_at > NOW() - INTERVAL '7 days'
-
--- Last hour
-SELECT * FROM events WHERE timestamp > NOW() - INTERVAL '1 hour'
-
--- Next week (future events)
-SELECT * FROM tasks WHERE due_date < NOW() + INTERVAL '7 days'
-
--- Shorthand units
-SELECT * FROM metrics WHERE ts > NOW() - INTERVAL '30 min'
-```
-
-#### Common Patterns
-
-| Use Case | Query |
-|----------|-------|
-| Last 24 hours | `WHERE ts > NOW() - INTERVAL '24 hours'` |
-| This week | `WHERE ts > NOW() - INTERVAL '7 days'` |
-| Last month | `WHERE ts > NOW() - INTERVAL '1 month'` |
-| Recent activity | `WHERE last_seen > NOW() - INTERVAL '5 minutes'` |
-
-### Logical Operators
+| Priority | Operator | Description |
+|----------|----------|-------------|
+| 1 (highest) | `NOT` | Negation |
+| 2 | `AND` | Conjunction |
+| 3 (lowest) | `OR` | Disjunction |
 
 ```sql
 -- AND
@@ -237,83 +346,215 @@ SELECT * FROM docs WHERE category = 'tech' AND price > 50
 -- OR
 SELECT * FROM docs WHERE category = 'tech' OR category = 'science'
 
--- Combined
+-- Parentheses to override precedence
 SELECT * FROM docs WHERE (category = 'tech' OR category = 'ai') AND price > 100
 ```
 
-### Vector Search with Filters
+#### NOT Expression
 
-Combine vector search with metadata filters:
+The `NOT` operator negates any condition, including comparisons, `IN`, `BETWEEN`,
+and parenthesized groups.
 
 ```sql
-SELECT * FROM docs 
-WHERE vector NEAR $v AND category = 'tech' AND price > 50
+-- Negate a comparison
+SELECT * FROM docs WHERE NOT (price > 100)
+
+-- Negate an IN list
+SELECT * FROM docs WHERE NOT (category IN ('draft', 'archived'))
+
+-- Negate a compound condition
+SELECT * FROM docs WHERE NOT (status = 'deleted' AND archived = true)
+
+-- NOT with vector search filter
+SELECT * FROM docs
+WHERE vector NEAR $v AND NOT (category = 'spam')
 LIMIT 10
 ```
 
-### Sparse Vector Search (v2.2+)
+### IN / NOT IN
 
-Use `SPARSE_NEAR` for sparse vector similarity search (SPLADE, BM42, or custom sparse embeddings):
+Test membership in a list of values:
+
+```sql
+-- String values
+SELECT * FROM docs WHERE category IN ('tech', 'science', 'ai')
+
+-- Integer values
+SELECT * FROM docs WHERE id IN (1, 2, 3, 4, 5)
+
+-- NOT IN
+SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted')
+SELECT * FROM docs WHERE id NOT IN (1, 2, 3)
+```
+
+### BETWEEN
+
+Test if a value falls within a range (inclusive):
+
+```sql
+SELECT * FROM docs WHERE price BETWEEN 10 AND 100
+SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31'
+SELECT * FROM products WHERE rating BETWEEN 3.5 AND 5.0
+```
+
+### LIKE (Pattern Matching)
+
+Case-sensitive pattern matching with wildcards:
+
+| Wildcard | Meaning |
+|----------|---------|
+| `%` | Any sequence of characters (including empty) |
+| `_` | Exactly one character |
+
+```sql
+-- Suffix match
+SELECT * FROM docs WHERE title LIKE '%database%'
+
+-- Prefix match
+SELECT * FROM docs WHERE name LIKE 'vec%'
+
+-- Single character wildcard
+SELECT * FROM docs WHERE code LIKE 'v_les'
+
+-- Combined with other filters
+SELECT * FROM docs WHERE name LIKE 'John%' AND active = true
+```
+
+### ILIKE (Case-Insensitive Pattern Matching)
+
+`ILIKE` works identically to `LIKE` but performs case-insensitive matching.
+The same `%` and `_` wildcards apply.
+
+```sql
+-- Matches 'Database', 'DATABASE', 'database', etc.
+SELECT * FROM docs WHERE title ILIKE '%database%'
+
+-- Case-insensitive prefix match
+SELECT * FROM docs WHERE name ILIKE 'vec%'
+
+-- Single-character wildcard (case-insensitive)
+SELECT * FROM docs WHERE code ILIKE 'v_les'
+
+-- Combined with other filters
+SELECT * FROM docs
+WHERE category ILIKE '%science%' AND price > 50
+LIMIT 20
+```
+
+| Operator | Case-Sensitive | Example Match for `'hello'` |
+|----------|---------------|------------------------------|
+| `LIKE` | Yes | `LIKE 'hello'` matches `hello` only |
+| `ILIKE` | No | `ILIKE 'hello'` matches `Hello`, `HELLO`, `hello` |
+
+Unicode behavior: case folding follows Rust's default Unicode lowercase rules.
+Characters without a defined case mapping (e.g., CJK ideographs) are compared as-is.
+
+### IS NULL / IS NOT NULL
+
+Test for null values:
+
+```sql
+SELECT * FROM docs WHERE category IS NULL
+SELECT * FROM docs WHERE category IS NOT NULL
+SELECT * FROM users WHERE email IS NOT NULL AND verified = true
+```
+
+### Full-Text Search (MATCH)
+
+The `MATCH` operator performs BM25 full-text search against the collection's
+text index.
+
+**MATCH alone** -- returns BM25 text search results ranked by text relevance:
+
+```sql
+SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
+```
+
+**MATCH + NEAR (hybrid search)** -- triggers Reciprocal Rank Fusion (RRF)
+between vector similarity and BM25 text relevance. In this mode, `MATCH` acts
+as a **score boost, not a strict filter**. Results that do not contain the
+keyword may still appear with lower fused scores:
+
+```sql
+-- Hybrid: vector similarity fused with BM25 text relevance via RRF
+SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'database' LIMIT 10
+```
+
+**Multi-condition hybrid search**:
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $v AND title MATCH 'vector database' AND category = 'tech'
+LIMIT 10
+```
+
+> **Known Limitations (v1.9.0)**:
+> - **No strict text filter**: `MATCH` in hybrid mode boosts but does not filter.
+>   A dedicated text filter operator is planned (see issue #446).
+> - **Column parameter ignored**: The column name (e.g., `content`) is parsed but
+>   the execution engine searches all indexed text fields regardless.
+
+### Vector Search (NEAR)
+
+Use `NEAR` for approximate nearest neighbor search on dense vectors:
 
 ```sql
 -- With parameter placeholder
-SELECT * FROM docs WHERE vector SPARSE_NEAR $sv
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 
--- With literal sparse vector (indices and values)
-SELECT * FROM docs WHERE vector SPARSE_NEAR $sparse_query LIMIT 10
+-- With literal vector
+SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3, 0.4] LIMIT 5
+
+-- With metadata filter
+SELECT * FROM docs
+WHERE vector NEAR $v AND category = 'tech' AND price > 50
+LIMIT 10
+
+-- With similarity score projection and ordering
+SELECT id, title, similarity() AS score
+FROM docs WHERE vector NEAR $query
+ORDER BY similarity() DESC
+LIMIT 5
+
+-- With search quality tuning
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (mode = 'accurate', ef_search = 256)
 ```
 
-#### SparseVectorExpr
+### Sparse Vector Search (SPARSE_NEAR, v2.2+)
 
-The `SPARSE_NEAR` clause accepts a `SparseVectorExpr` with two variants:
-
-| Variant | Syntax | Description |
-|---------|--------|-------------|
-| **Parameter** | `$name` | Resolved at runtime from query params |
-| **Literal** | `$sparse_query` | Sparse vector passed as parameter |
-
-Sparse vectors are scored using inner product. The scoring algorithm uses MaxScore DAAT (Document-At-A-Time) for efficient top-K retrieval with early termination.
-
-#### Hybrid Search: NEAR + SPARSE_NEAR
-
-Combine dense and sparse search in a single query using `USING FUSION`:
+Use `SPARSE_NEAR` for sparse vector similarity search (SPLADE, BM42, or custom
+sparse embeddings).
 
 ```sql
+-- With parameter placeholder
+SELECT * FROM docs WHERE vector SPARSE_NEAR $sv LIMIT 10
+
+-- With inline sparse vector literal (dimension_index: weight)
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR {0: 0.9, 14: 0.7, 256: 0.5, 1024: 0.3}
+LIMIT 10
+
+-- With named sparse index
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sparse USING 'bm42_index'
+LIMIT 10
+
+-- Combined dense + sparse (hybrid)
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 ```
 
-> **Note:** The `FUSE BY` syntax is planned but not yet implemented in the grammar. Use `USING FUSION(...)` for hybrid search. See the [FUSE BY clause (planned)](#fuse-by-clause-v22-planned-syntax) section below for the planned syntax.
+Sparse vectors use `{index: weight}` format where `index` is a non-negative
+integer (dimension) and `weight` is a float value. Scoring uses inner product
+with MaxScore DAAT for efficient top-K retrieval.
 
-### Multi-Vector Fusion with NEAR_FUSED (v2.2+)
+### Multi-Vector Fusion (NEAR_FUSED, v2.2+)
 
-`NEAR_FUSED` combines multiple embedding vectors into a single similarity search using a fusion strategy. This is useful for multi-modal search (text + image embeddings) or ensemble approaches.
-
-#### Syntax
-
-```sql
-SELECT * FROM docs
-WHERE vector NEAR_FUSED [$text_embedding, $image_embedding]
-USING FUSION 'rrf' (k=60)
-LIMIT 10
-```
-
-#### Vector Array
-
-The `NEAR_FUSED` clause accepts a vector array `[v1, v2, ...]` where each element is either a parameter (`$name`) or a vector literal (`[0.1, 0.2, ...]`).
-
-#### Fusion Strategies
-
-| Strategy | Description |
-|----------|-------------|
-| `'rrf'` | Reciprocal Rank Fusion (default). Parameter: `k` (default 60). |
-| `'weighted'` | Weighted average of scores. Parameters: per-vector weights. |
-| `'maximum'` | Takes the maximum score across vectors. |
-| `'rsf'` | Relative Score Fusion. |
-
-#### Examples
+`NEAR_FUSED` combines multiple embedding vectors into a single similarity search
+using a fusion strategy. Useful for multi-modal search (text + image embeddings)
+or ensemble approaches.
 
 ```sql
 -- Two-vector fusion with RRF
@@ -334,17 +575,26 @@ WHERE vector NEAR_FUSED [$v1, $v2]
 LIMIT 5
 ```
 
+The vector array `[$v1, $v2, ...]` accepts parameters (`$name`) or vector
+literals (`[0.1, 0.2, ...]`).
+
+| Strategy | Best For | Parameters |
+|----------|----------|------------|
+| `rrf` | General-purpose ensemble (default) | `k` (default: 60) |
+| `rsf` | Normalized score blending | `dense_weight`, `sparse_weight` |
+| `weighted` | Explicit priority tuning | `weight_1`, `weight_2`, ... |
+| `maximum` | Conservative high-precision | (none) |
+
 ### Similarity Function (v1.3+)
 
-The `similarity()` function enables **threshold-based vector filtering** - filter results by similarity score rather than just finding nearest neighbors.
+The `similarity()` function enables threshold-based vector filtering -- filter
+results by similarity score rather than just finding nearest neighbors.
 
 #### Syntax
 
 ```sql
 similarity(field, vector_expr) <operator> threshold
 ```
-
-#### Parameters
 
 | Parameter | Description |
 |-----------|-------------|
@@ -366,23 +616,12 @@ SELECT * FROM docs WHERE similarity(embedding, $v) >= 0.9 LIMIT 10
 SELECT * FROM docs WHERE similarity(vector, $ref) < 0.95
 
 -- Combined with metadata filters
-SELECT * FROM docs 
-WHERE similarity(vector, $q) > 0.7 
-  AND category = 'technology'
-  AND published = true
+SELECT * FROM docs
+WHERE similarity(vector, $q) > 0.7 AND category = 'technology'
 LIMIT 20
 ```
 
-#### Use Cases
-
-| Use Case | Query Pattern |
-|----------|---------------|
-| **Semantic Search** | `similarity(v, $q) > 0.75` |
-| **Deduplication** | `similarity(v, $ref) < 0.9` |
-| **Quality Filter** | `similarity(v, $ideal) >= 0.85` |
-| **RAG Retrieval** | `similarity(embedding, $query) > 0.7 AND source = 'docs'` |
-
-#### Difference: NEAR vs similarity()
+#### NEAR vs similarity()
 
 | Feature | `NEAR` | `similarity()` |
 |---------|--------|----------------|
@@ -399,11 +638,186 @@ SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 SELECT * FROM docs WHERE similarity(vector, $v) > 0.8
 ```
 
+### Temporal Functions (v2.1+)
+
+VelesQL supports temporal expressions for date/time filtering using `NOW()`
+and `INTERVAL`.
+
+#### NOW() Function
+
+Returns the current Unix timestamp (seconds since epoch):
+
+```sql
+SELECT * FROM events WHERE timestamp > NOW()
+SELECT * FROM items WHERE created_at > NOW()
+```
+
+#### INTERVAL Expression
+
+Defines a time duration with the syntax `INTERVAL '<magnitude> <unit>'`:
+
+| Unit | Aliases | Seconds |
+|------|---------|---------|
+| seconds | s, sec, second | 1 |
+| minutes | m, min, minute | 60 |
+| hours | h, hour | 3,600 |
+| days | d, day | 86,400 |
+| weeks | w, week | 604,800 |
+| months | month | ~2,592,000 (30 days) |
+
+#### Temporal Arithmetic
+
+Combine `NOW()` with `INTERVAL` using `+` or `-`:
+
+```sql
+-- Last 7 days
+SELECT * FROM logs WHERE created_at > NOW() - INTERVAL '7 days'
+
+-- Last hour
+SELECT * FROM events WHERE timestamp > NOW() - INTERVAL '1 hour'
+
+-- Next week (future events)
+SELECT * FROM tasks WHERE due_date < NOW() + INTERVAL '7 days'
+
+-- Shorthand units
+SELECT * FROM metrics WHERE ts > NOW() - INTERVAL '30 min'
+
+-- Filter items older than 30 days
+SELECT * FROM logs WHERE created_at < NOW() - INTERVAL '30 days'
+```
+
+#### Common Temporal Patterns
+
+| Use Case | Query |
+|----------|-------|
+| Last 24 hours | `WHERE ts > NOW() - INTERVAL '24 hours'` |
+| This week | `WHERE ts > NOW() - INTERVAL '7 days'` |
+| Last month | `WHERE ts > NOW() - INTERVAL '1 month'` |
+| Recent activity | `WHERE last_seen > NOW() - INTERVAL '5 minutes'` |
+
+> **Note:** `NOW()` returns a Unix timestamp in seconds (timezone-agnostic).
+> Month intervals are approximated as 2,592,000 seconds (30 days).
+
+### Scalar Subqueries (v3.2+)
+
+Use a scalar subquery in WHERE to compare against a computed value from another
+(or the same) collection. The subquery must return exactly one row and one column.
+
+```sql
+-- Filter where amount exceeds the average
+SELECT * FROM orders
+WHERE amount > (SELECT AVG(amount) FROM orders)
+
+-- Compare against a value from another collection
+SELECT * FROM products
+WHERE price < (SELECT MAX(budget) FROM departments WHERE name = 'engineering')
+LIMIT 20
+```
+
+A subquery is enclosed in parentheses and contains a full SELECT statement
+(with optional WHERE, GROUP BY, HAVING, LIMIT).
+
+### Graph Match Predicate in WHERE
+
+Embed a graph pattern inside a WHERE clause using the `MATCH` keyword:
+
+```sql
+SELECT * FROM docs
+WHERE category = 'tech' AND MATCH (d:Doc)-[:REL]->(x)
+LIMIT 10
+```
+
+This filters rows that participate in the specified graph pattern, combined with
+any other scalar conditions.
+
+### Vector Search with Filters
+
+Combine vector search with any number of metadata filters:
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $v
+  AND category = 'tech'
+  AND price > 50
+  AND status IS NOT NULL
+  AND tags IN ('ai', 'ml')
+LIMIT 10
+```
+
+---
+
+## GROUP BY Clause (v2.0+)
+
+Group results by one or more columns and apply aggregate functions.
+
+```sql
+-- Count by category
+SELECT category, COUNT(*) FROM products GROUP BY category
+
+-- Multiple aggregates
+SELECT category, COUNT(*), AVG(price), MAX(rating)
+FROM products
+GROUP BY category
+
+-- Nested payload fields
+SELECT payload.author, payload.metadata.language, COUNT(*)
+FROM articles
+GROUP BY payload.author, payload.metadata.language
+
+-- With vector similarity threshold
+SELECT category, COUNT(*)
+FROM documents
+WHERE similarity(embedding, $query) > 0.6
+GROUP BY category
+ORDER BY COUNT(*) DESC
+LIMIT 10
+```
+
+---
+
+## HAVING Clause (v2.0+)
+
+Filter groups after aggregation. HAVING conditions compare aggregate functions
+against values using `AND`/`OR`.
+
+```sql
+-- Single condition
+SELECT category, COUNT(*) FROM docs
+GROUP BY category
+HAVING COUNT(*) > 10
+
+-- Multiple conditions
+SELECT category, COUNT(*) FROM items
+GROUP BY category
+HAVING COUNT(*) > 10 AND AVG(price) < 100
+
+-- OR logic
+SELECT region, SUM(amount) FROM sales
+GROUP BY region
+HAVING SUM(amount) > 1000 OR COUNT(*) > 50
+
+-- Full pipeline: GROUP BY + HAVING + ORDER BY
+SELECT category, COUNT(*) AS total, AVG(price) AS avg_price
+FROM products
+GROUP BY category
+HAVING COUNT(*) > 5
+ORDER BY AVG(price) DESC
+```
+
+---
+
 ## ORDER BY Clause (v2.0+)
 
-Sort results by one or more columns or expressions.
+Sort results by one or more expressions, each with an optional direction.
 
-### Basic Syntax
+### Direction
+
+| Keyword | Description |
+|---------|-------------|
+| `ASC` | Ascending (default) |
+| `DESC` | Descending |
+
+### Basic Sorting
 
 ```sql
 SELECT * FROM docs ORDER BY created_at DESC
@@ -412,25 +826,39 @@ SELECT * FROM docs ORDER BY category ASC, price DESC
 
 ### Order by Similarity
 
-Sort by vector similarity score:
-
 ```sql
--- Order by similarity (highest first)
-SELECT * FROM docs 
+-- Highest similarity first
+SELECT * FROM docs
+WHERE vector NEAR $v
+ORDER BY similarity() DESC
+LIMIT 10
+
+-- Two-argument similarity
+SELECT * FROM docs
 WHERE similarity(embedding, $query) > 0.5
 ORDER BY similarity(embedding, $query) DESC
 LIMIT 10
 
 -- Multi-column with similarity
-SELECT * FROM docs 
+SELECT * FROM docs
 WHERE vector NEAR $v
-ORDER BY similarity(vector, $v) DESC, created_at DESC
+ORDER BY similarity() DESC, created_at DESC
 LIMIT 20
 ```
 
-### Arithmetic Scoring (v3.2+)
+### Order by Aggregate
 
-Combine multiple score components with arithmetic expressions:
+```sql
+SELECT category, COUNT(*) AS cnt
+FROM products
+GROUP BY category
+ORDER BY COUNT(*) DESC
+LIMIT 10
+```
+
+### Arithmetic Scoring (v3.0+)
+
+Combine multiple score components with arithmetic expressions in ORDER BY:
 
 ```sql
 -- Weighted hybrid scoring: 70% vector + 30% text relevance
@@ -438,139 +866,245 @@ SELECT * FROM docs
 WHERE vector NEAR $v AND content MATCH 'machine learning'
 ORDER BY 0.7 * vector_score + 0.3 * bm25_score DESC
 LIMIT 10
+
+-- Average of two scores
+SELECT * FROM docs
+WHERE vector NEAR $v
+ORDER BY (vector_score + graph_score) / 2 DESC
+LIMIT 10
+
+-- Boost similarity
+SELECT * FROM docs
+WHERE vector NEAR $v
+ORDER BY similarity() * 2 + 1 ASC
+LIMIT 10
+
+-- Hybrid: vector + BM25 + graph
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'AI'
+ORDER BY 0.5 * similarity() + 0.5 * bm25_score DESC
+LIMIT 10
 ```
 
-#### Available Score Variables
+Arithmetic expressions support `+`, `-`, `*`, `/`, parentheses, numeric
+literals, score variables, and `similarity()`.
 
-| Variable | Source | Description |
-|----------|--------|-------------|
-| `vector_score` | HNSW search | Vector similarity score from the nearest-neighbor index |
-| `bm25_score` | BM25 text search | Text relevance score from the inverted index |
-| `graph_score` | Graph traversal | Graph distance/relevance score from MATCH patterns |
-| `sparse_score` | Sparse vector search | Sparse vector inner-product score |
-| `fused_score` | Fusion pipeline | Combined score after RRF/weighted fusion (same as `similarity()`) |
-| `similarity()` | Pre-computed | Primary search score (zero-arg form uses pre-computed value) |
+#### Score Variables
 
-Component scores are populated independently by each search path. In hybrid queries
-(NEAR + MATCH text), `vector_score` and `bm25_score` have different values reflecting
-each component's individual contribution before fusion.
+| Variable | Source | When Populated |
+|----------|--------|----------------|
+| `vector_score` | HNSW dense search | `NEAR` clause present |
+| `bm25_score` | BM25 full-text search | `MATCH` text clause present |
+| `sparse_score` | Sparse vector search | `SPARSE_NEAR` clause present |
+| `graph_score` | Graph traversal | `MATCH` graph pattern present |
+| `fused_score` | After fusion pipeline | `USING FUSION` applied |
+| `similarity()` | Primary search score | Any search clause |
 
-For non-hybrid queries, only the relevant component is populated (e.g., pure NEAR
-populates `vector_score` only). Unset components fall back to the primary fused score.
+Component scores are populated independently by each search path. In hybrid
+queries (NEAR + MATCH text), `vector_score` and `bm25_score` have different
+values reflecting each component's individual contribution before fusion.
 
-### Direction
+| Query Type | `vector_score` | `bm25_score` | `sparse_score` | `graph_score` |
+|------------|----------------|--------------|-----------------|---------------|
+| NEAR only | Populated | 0 | 0 | 0 |
+| MATCH text only | 0 | Populated | 0 | 0 |
+| NEAR + MATCH | Populated | Populated | 0 | 0 |
+| SPARSE_NEAR | 0 | 0 | Populated | 0 |
+| MATCH (graph) | 0 | 0 | 0 | Populated |
 
-| Direction | Description |
-|-----------|-------------|
-| `ASC` | Ascending (default) |
-| `DESC` | Descending |
+When a score variable is not populated, it defaults to 0.
+`similarity()` always returns the primary search score regardless of type.
+`fused_score` is populated after `USING FUSION` is applied.
 
-## GROUP BY and HAVING (v2.0+)
+---
 
-Aggregate results by groups.
-
-### Basic Syntax
+## LIMIT and OFFSET
 
 ```sql
-SELECT category, COUNT(*) FROM docs GROUP BY category
-SELECT category, AVG(price) FROM products GROUP BY category HAVING COUNT(*) > 5
+-- Limit results
+SELECT * FROM docs LIMIT 10
+
+-- Pagination: skip first 20, return next 10
+SELECT * FROM docs LIMIT 10 OFFSET 20
 ```
 
-### Aggregate Functions
+Always specify `LIMIT` for vector search queries to bound the result set.
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `COUNT(*)` | Count rows | `COUNT(*)` |
-| `COUNT(field)` | Count non-null values | `COUNT(price)` |
-| `SUM(field)` | Sum of values | `SUM(quantity)` |
-| `AVG(field)` | Average value | `AVG(rating)` |
-| `MIN(field)` | Minimum value | `MIN(price)` |
-| `MAX(field)` | Maximum value | `MAX(score)` |
+---
 
-### Examples
+## LET Clause (Score Bindings, v3.2+)
 
-```sql
--- Count by category
-SELECT category, COUNT(*) FROM products GROUP BY category
-
--- Average with filter
-SELECT category, AVG(price) 
-FROM products 
-WHERE similarity(embedding, $query) > 0.6
-GROUP BY category
-ORDER BY AVG(price) DESC
-
--- HAVING clause
-SELECT category, COUNT(*) 
-FROM docs 
-GROUP BY category 
-HAVING COUNT(*) > 10
-ORDER BY COUNT(*) DESC
-
--- Multiple aggregates
-SELECT category, COUNT(*), AVG(price), MAX(rating)
-FROM products
-GROUP BY category
-HAVING AVG(price) > 50
-```
-
-## JOIN Clause (v2.0+)
-
-Combine data from multiple collections.
+Define named score bindings evaluated once and reusable in SELECT and ORDER BY.
+LET clauses appear **before** the SELECT statement.
 
 ### Syntax
 
 ```sql
-SELECT * FROM table1
-[INNER|LEFT|RIGHT|FULL] JOIN table2 ON condition
+LET <name> = <arithmetic_expression>
 ```
 
-### Join Types
+### Rules
 
-| Type | Description |
-|------|-------------|
-| `JOIN` / `INNER JOIN` | Only matching rows |
-| `LEFT JOIN` | All from left + matching right |
-| `RIGHT JOIN` | All from right + matching left |
-| `FULL JOIN` | All from both tables |
+- LET clauses appear **before** the SELECT statement.
+- Each binding has a name and an arithmetic expression.
+- Bindings can reference earlier bindings (forward references are invalid).
+- Available in ORDER BY and SELECT projection.
+- **NOT** available in WHERE (WHERE runs before scores exist).
+- LET names take **highest priority** in variable resolution (overrides component scores).
+- Case-insensitive keyword (`LET`, `let`, `Let` all work).
+
+### Expression Support
+
+LET expressions support the same arithmetic as ORDER BY:
+
+```sql
+LET boost = 1.5
+LET weighted = 0.7 * vector_score + 0.3 * bm25_score
+LET final_score = weighted * boost
+LET sim = similarity()
+```
+
+Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`,
+`fused_score`, `similarity()`, numeric literals, and earlier LET bindings.
 
 ### Examples
 
 ```sql
--- Inner join
-SELECT orders.id, customers.name
-FROM orders
-JOIN customers ON orders.customer_id = customers.id
+-- RAG scoring: blend vector similarity with text relevance
+LET relevance = 0.7 * vector_score + 0.3 * bm25_score
+SELECT *, relevance AS score
+FROM documents
+WHERE vector NEAR $query AND content MATCH 'machine learning'
+ORDER BY relevance DESC
+LIMIT 10
 
--- Left join with filter
-SELECT p.title, c.name AS category_name
-FROM products p
-LEFT JOIN categories c ON p.category_id = c.id
-WHERE similarity(p.embedding, $query) > 0.7
+-- Chained bindings: later bindings can reference earlier ones
+LET base = 0.6 * vector_score + 0.4 * bm25_score
+LET boosted = base * 1.5
+SELECT * FROM docs
+WHERE vector NEAR $query AND content MATCH 'AI'
+ORDER BY boosted DESC
+LIMIT 5
+
+-- LET with MATCH graph query
+LET x = similarity()
+MATCH (a)-[r]->(b)
+RETURN a
+LIMIT 5
+```
+
+---
+
+## WITH Clause (Search Options)
+
+Control search behavior with per-query configuration overrides.
+
+```sql
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
+```
+
+### Available Options
+
+| Option | Type | Values | Description |
+|--------|------|--------|-------------|
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset (maps to ef_search: 64/128/512/4096/auto) |
+| `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence. |
+| `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`) |
+| `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |
+| `rerank` | boolean | `true`/`false` | Two-stage SIMD reranking (retrieves 4x candidates, re-ranks with exact distance) |
+| `quantization` | string | `f32`, `int8`, `dual`, `auto` | Quantization mode for search |
+| `oversampling` | float | >= 1.0 | Oversampling ratio for dual-precision mode |
+
+### Examples
+
+```sql
+-- Fast search for autocomplete
+SELECT * FROM suggestions WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast')
+
+-- High accuracy for production
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'accurate')
+
+-- Custom ef_search
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (ef_search = 512)
+
+-- Combined options
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (mode = 'balanced', ef_search = 256, rerank = true)
+
+-- Dual quantization with oversampling
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (quantization = 'dual', oversampling = 2)
+
+-- quality alias for mode (v3.5+)
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (quality = 'accurate')
+```
+
+---
+
+## USING FUSION -- Hybrid Search (v2.0+)
+
+Combine multiple search strategies with result fusion.
+
+### Syntax
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'query'
+USING FUSION(strategy = 'rrf', k = 60)
+```
+
+### Fusion Strategies
+
+| Strategy | Description | Parameters | Use Case |
+|----------|-------------|------------|----------|
+| `rrf` | Reciprocal Rank Fusion | `k` (default: 60) | Balanced ranking (default) |
+| `weighted` | Weighted combination | `weights = [w1, w2]` | Custom importance |
+| `maximum` | Take highest score | (none) | Best match wins |
+| `rsf` | Reciprocal Score Fusion | `dense_weight`, `sparse_weight` | Dense + sparse blending |
+
+### Examples
+
+```sql
+-- Default RRF fusion
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'neural networks'
+USING FUSION(strategy = 'rrf', k = 60)
+LIMIT 10
+
+-- Weighted fusion (70% vector, 30% text)
+SELECT * FROM docs
+WHERE vector NEAR $semantic AND content MATCH $keywords
+USING FUSION(strategy = 'weighted', weights = [0.7, 0.3])
 LIMIT 20
 
--- Using clause (alternative to ON)
-SELECT * FROM orders JOIN customers USING (customer_id)
+-- Dense + sparse hybrid with RSF
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
+LIMIT 10
 
--- Multiple joins
-SELECT o.id, c.name, p.title
-FROM orders o
-JOIN customers c ON o.customer_id = c.id
-JOIN products p ON o.product_id = p.id
+-- Maximum score fusion
+SELECT * FROM docs
+WHERE similarity(embedding, $q1) > 0.5
+USING FUSION(strategy = 'maximum')
+LIMIT 10
 ```
+
+### FUSE BY (Planned Syntax)
+
+> **PLANNED**: `FUSE BY` is not yet implemented in the grammar.
+> Use `USING FUSION(...)` instead for all hybrid search queries.
+
+---
 
 ## Set Operations (v2.0+)
 
-Combine results from multiple queries. N-ary chaining is supported:
-
-```sql
-SELECT * FROM a UNION SELECT * FROM b INTERSECT SELECT * FROM c
-```
+Combine results from multiple SELECT queries. N-ary chaining is supported.
 
 > **Precedence note:** VelesQL evaluates set operators strictly **left-to-right**,
-> unlike standard SQL where `INTERSECT` binds tighter than `UNION`. The query
-> above is evaluated as `(A UNION B) INTERSECT C`. Use parenthesized subqueries
-> if different evaluation order is needed (when subquery execution is supported).
+> unlike standard SQL where `INTERSECT` binds tighter than `UNION`. Use
+> parenthesized subqueries if different evaluation order is needed.
 
 ### UNION
 
@@ -594,17 +1128,17 @@ SELECT * FROM table2 WHERE similarity(v, $q) > 0.8
 
 ### INTERSECT
 
-Only rows in both queries:
+Only rows present in both queries:
 
 ```sql
-SELECT id FROM liked_items WHERE user_id = 1
+SELECT item_id FROM user_likes WHERE user_id = 1
 INTERSECT
-SELECT id FROM liked_items WHERE user_id = 2
+SELECT item_id FROM user_likes WHERE user_id = 2
 ```
 
 ### EXCEPT
 
-Rows in first query but not second:
+Rows in first query but not in second:
 
 ```sql
 SELECT id FROM all_items
@@ -612,564 +1146,27 @@ EXCEPT
 SELECT id FROM purchased_items
 ```
 
-## USING FUSION - Hybrid Search (v2.0+)
-
-Combine multiple search strategies with result fusion.
-
-### Syntax
+### Three-Way Set Operations
 
 ```sql
-SELECT * FROM docs
-WHERE vector NEAR $v AND text MATCH 'query'
-USING FUSION(strategy, k, weights)
+-- Evaluated left-to-right: (A UNION B) UNION C
+SELECT id FROM recent_docs WHERE created_at > 1000
+UNION
+SELECT id FROM popular_docs WHERE views > 100
+UNION
+SELECT id FROM featured_docs WHERE featured = TRUE
+
+-- Mixed operators: (A UNION B) INTERSECT C
+SELECT * FROM a UNION SELECT * FROM b INTERSECT SELECT * FROM c
 ```
 
-### Fusion Strategies
+---
 
-| Strategy | Description | Use Case |
-|----------|-------------|----------|
-| `rrf` | Reciprocal Rank Fusion | Balanced ranking (default) |
-| `weighted` | Weighted combination | Custom importance |
-| `maximum` | Take highest score | Best match wins |
-
-### Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `strategy` | string | `rrf` | Fusion algorithm |
-| `k` | integer | 60 | RRF constant |
-| `weights` | array | `[0.5, 0.5]` | Strategy weights |
-
-### Examples
-
-```sql
--- Default RRF fusion
-SELECT * FROM docs
-WHERE vector NEAR $v
-USING FUSION(rrf)
-LIMIT 10
-
--- Weighted fusion (70% vector, 30% text)
-SELECT * FROM docs
-WHERE vector NEAR $semantic AND content MATCH $keywords
-USING FUSION(weighted, weights = [0.7, 0.3])
-LIMIT 20
-
--- Maximum score fusion
-SELECT * FROM docs
-WHERE similarity(embedding, $q1) > 0.5
-USING FUSION(maximum)
-LIMIT 10
-```
-
-## FUSE BY Clause (v2.2) -- PLANNED SYNTAX
-
-> **PLANNED SYNTAX**: `FUSE BY` is not yet implemented in the grammar. Use `USING FUSION(...)` instead for all hybrid search queries. The `FUSE BY` syntax is documented here as a planned alternative that may be added in a future release.
-
-The planned `FUSE BY` clause is designed to provide explicit control over how dense and sparse search results are combined in hybrid queries.
-
-**Current working syntax** (use this):
-```sql
-SELECT * FROM docs
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
-```
-
-### Planned Syntax
-
-```sql
--- PLANNED SYNTAX: not yet implemented in grammar. Use USING FUSION(...) instead.
-SELECT * FROM <collection>
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY <strategy>   -- PLANNED: not yet in grammar
-LIMIT <n>
-```
-
-### Fusion Strategies
-
-#### RRF (Reciprocal Rank Fusion)
-
-Combines results by rank position. Each result's fused score is the sum of `1 / (k + rank)` across both branches.
-
-```sql
--- PLANNED SYNTAX: not yet implemented. Use USING FUSION(strategy = 'rrf', k = 60) instead.
-FUSE BY RRF(k=60)   -- PLANNED: not yet in grammar
-
--- Current working equivalent:
-USING FUSION(strategy = 'rrf', k = 60)
-```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `k` | integer | 60 | Ranking constant. Lower k gives more weight to top ranks |
-
-#### RSF (Reciprocal Score Fusion)
-
-Combines results by normalized score with explicit weights. Scores are min-max normalized per branch, then combined as weighted sum.
-
-```sql
--- PLANNED SYNTAX: not yet implemented. Use USING FUSION(strategy = 'rsf', ...) instead.
-FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)   -- PLANNED: not yet in grammar
-
--- Current working equivalent:
-USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
-```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `dense_weight` | float | 0.5 | Weight for dense search scores |
-| `sparse_weight` | float | 0.5 | Weight for sparse search scores |
-
-**Constraint:** `dense_weight + sparse_weight` must equal 1.0.
-
-### Examples
-
-```sql
--- Balanced hybrid search (equal weight)
--- PLANNED: FUSE BY RRF(k=60)
--- Current working syntax:
-SELECT * FROM articles
-WHERE vector NEAR $query_embedding AND vector SPARSE_NEAR $bm25_query
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 20
-
--- Keyword-heavy hybrid (30% semantic, 70% keyword)
--- PLANNED: FUSE BY RSF(dense_weight=0.3, sparse_weight=0.7)
--- Current working syntax:
-SELECT * FROM docs
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy = 'rsf', dense_weight = 0.3, sparse_weight = 0.7)
-LIMIT 10
-
--- Hybrid with metadata filter
--- PLANNED: FUSE BY RRF(k=60)
--- Current working syntax:
-SELECT * FROM products
-WHERE vector NEAR $v AND vector SPARSE_NEAR $sv
-  AND category = 'electronics'
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
-```
-
-## LIMIT and OFFSET
-
-```sql
--- Limit results
-SELECT * FROM docs LIMIT 10
-
--- Pagination
-SELECT * FROM docs LIMIT 10 OFFSET 20
-```
-
-## LET Clause (Score Bindings, v3.2+)
-
-Define named score bindings evaluated once and reusable in SELECT and ORDER BY:
-
-```sql
-LET vec_score = similarity(embedding, $q)
-LET hybrid = 0.7 * vec_score + 0.3 * bm25_score
-SELECT *, hybrid FROM docs
-WHERE vector NEAR $q AND content MATCH 'machine learning'
-ORDER BY hybrid DESC
-LIMIT 10
-```
-
-### Rules
-
-- LET clauses appear **before** the SELECT statement
-- Each binding has a name and an arithmetic expression
-- Bindings can reference earlier bindings (forward references are invalid)
-- Available in ORDER BY (SELECT projection support planned for v1.11)
-- NOT available in WHERE (WHERE runs before scores exist)
-- LET names take **highest priority** in variable resolution (overrides component scores)
-- Case-insensitive keyword (`LET`, `let`, `Let` all work)
-
-### Expression Support
-
-LET expressions support the same arithmetic as ORDER BY:
-
-```sql
-LET boost = 1.5
-LET weighted = 0.7 * vector_score + 0.3 * bm25_score
-LET final_score = weighted * boost
-LET sim = similarity()
-```
-
-Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`,
-`fused_score`, `similarity()`, numeric literals, and earlier LET bindings.
-
-## WITH Clause (Search Options)
-
-Control search behavior with the `WITH` clause:
-
-```sql
-SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
-WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
-```
-
-### Available Options
-
-| Option | Type | Values | Description |
-|--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset — maps to ef_search values (64/128/512/4096/auto). Applied to all search paths including NEAR+filter and NEAR+MATCH. |
-| `ef_search` | integer | 16-4096 | HNSW ef_search parameter (overrides mode). Applied to all vector search paths. |
-| `timeout_ms` | integer | >=100 | Per-query timeout in milliseconds. Overrides collection-level timeout for this query only. |
-| `rerank` | boolean | `true`/`false` | Force two-stage SIMD reranking on (`true`) or off (`false`). When `true`, retrieves 4x candidates then re-ranks with exact distance. |
-
-### Examples
-
-```sql
--- Fast search for autocomplete
-SELECT * FROM suggestions WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast')
-
--- High accuracy for production
-SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'accurate')
-
--- Custom ef_search
-SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (ef_search = 512)
-
--- Combined options
-SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 
-WITH (mode = 'balanced', ef_search = 256, rerank = true)
-```
-
-## Value Types
-
-### Strings
-
-```sql
-'hello world'
-"double quotes also work"
-```
-
-#### String Escaping
-
-To include a single quote inside a string, **double it** (`''`):
-
-```sql
--- Correct: Use '' to escape single quotes
-SELECT * FROM docs WHERE name = 'O''Brien'      -- Matches "O'Brien"
-SELECT * FROM docs WHERE text = 'It''s working' -- Matches "It's working"
-
--- Empty string
-SELECT * FROM docs WHERE name = ''
-```
-
-⚠️ **Backslash escaping is NOT supported**:
-
-```sql
--- ❌ WRONG: This will cause a parse error
-SELECT * FROM docs WHERE name = 'O\'Brien'
-
--- ✅ CORRECT: Use double single-quote
-SELECT * FROM docs WHERE name = 'O''Brien'
-```
-
-Unicode characters are fully supported:
-
-```sql
-SELECT * FROM docs WHERE title = '日本語テキスト'
-SELECT * FROM docs WHERE emoji = '🚀 Launch'
-```
-
-### Numbers
-
-```sql
-42          -- integer
-3.14        -- float
--100        -- negative
-```
-
-### Booleans
-
-```sql
-true
-false
-```
-
-### Vectors
-
-```sql
-[0.1, 0.2, 0.3, 0.4]           -- literal vector
-$query_vector                   -- parameter reference
-```
-
-### NULL
-
-```sql
-NULL
-```
-
-## Parameters
-
-Use `$name` syntax for parameterized queries:
-
-```sql
-SELECT * FROM docs WHERE vector NEAR $query_vector AND category = $cat
-```
-
-Parameters are resolved at runtime from the query context.
-
-## Reserved Keywords
-
-The following keywords are reserved and cannot be used as identifiers without escaping:
-
-```
-SELECT, FROM, WHERE, AND, OR, NOT, IN, BETWEEN, LIKE, MATCH,
-IS, NULL, TRUE, FALSE, LIMIT, OFFSET, WITH, NEAR, ASC, DESC,
-ORDER, BY, AS, SIMILARITY
-```
-
-### Identifier Quoting (v1.3+)
-
-To use reserved keywords as column or table names, quote them with **backticks** or **double quotes**:
-
-```sql
--- Backtick escaping (MySQL-style)
-SELECT `select`, `from`, `order` FROM docs
-
--- Double-quote escaping (SQL standard)
-SELECT "select", "from", "order" FROM docs
-
--- Mixed styles in same query
-SELECT `select`, "order" FROM my_table WHERE `limit` > 10
-```
-
-#### Escaping Quotes Inside Identifiers
-
-To include a double-quote inside a double-quoted identifier, **double it**:
-
-```sql
--- Column named: col"name
-SELECT "col""name" FROM docs
-```
-
-#### Examples with All Clauses
-
-```sql
--- Reserved keyword as table name
-SELECT * FROM `order`
-
--- Reserved keywords in WHERE
-SELECT * FROM docs WHERE `select` = 'value' AND `from` LIKE '%pattern%'
-
--- Reserved keywords in ORDER BY
-SELECT * FROM docs ORDER BY `order` ASC
-
--- Reserved keywords in GROUP BY
-SELECT `group`, COUNT(*) FROM docs GROUP BY `group`
-
--- Reserved keyword as alias
-SELECT id AS `select` FROM docs
-```
-
-#### Complete List of Reserved Keywords
-
-| Keyword | Category |
-|---------|----------|
-| `SELECT`, `FROM`, `WHERE` | Query structure |
-| `AND`, `OR`, `NOT` | Logical operators |
-| `IN`, `BETWEEN`, `LIKE`, `MATCH` | Comparison operators |
-| `IS`, `NULL` | NULL handling |
-| `TRUE`, `FALSE` | Boolean literals |
-| `LIMIT`, `OFFSET` | Pagination |
-| `ORDER`, `BY`, `ASC`, `DESC` | Sorting |
-| `GROUP`, `HAVING` | Aggregation |
-| `WITH`, `AS` | Options and aliases |
-| `NEAR`, `NEAR_FUSED`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
-| `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions (`FUSE` reserved for planned syntax) |
-
-## Grammar (EBNF) - v2.2
-
-```ebnf
-(* Top-level query with optional set operations *)
-query           = select_stmt { set_operator select_stmt } ;
-set_operator    = "UNION" ["ALL"] | "INTERSECT" | "EXCEPT" ;
-
-(* SELECT statement with all clauses *)
-select_stmt     = "SELECT" select_list 
-                  "FROM" table_ref
-                  { join_clause }
-                  [where_clause] 
-                  [group_by_clause]
-                  [having_clause]
-                  [order_by_clause]
-                  [limit_clause] 
-                  [offset_clause] 
-                  [with_clause]
-                  [using_fusion_clause] ;
-
-(* SELECT list *)
-select_list     = "*" | select_item { "," select_item } ;
-select_item     = (column | aggregate_func) ["AS" identifier] ;
-column          = identifier { "." identifier } ;
-
-(* Aggregate functions *)
-aggregate_func  = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX") 
-                  "(" ("*" | column) ")" ;
-
-(* Table reference *)
-table_ref       = identifier [alias] ;
-alias           = ["AS"] identifier ;
-
-(* JOIN clause *)
-join_clause     = [join_type] "JOIN" table_ref ("ON" condition | "USING" "(" identifier ")") ;
-join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTER"] ;
-
-(* WHERE clause *)
-where_clause    = "WHERE" or_expr ;
-or_expr         = and_expr { "OR" and_expr } ;
-and_expr        = condition { "AND" condition } ;
-condition       = comparison | vector_search | fused_search | sparse_search
-                | similarity_cond | in_cond | between_cond | like_cond
-                | match_cond | is_null_cond | "(" or_expr ")" ;
-
-(* Vector operations *)
-vector_search   = identifier "NEAR" vector_expr ;
-fused_search    = identifier "NEAR_FUSED" vector_array [ fusion_clause ] ;
-sparse_search   = identifier "SPARSE_NEAR" sparse_vector_expr ;
-similarity_cond = "similarity" "(" identifier "," vector_expr ")" compare_op number ;
-vector_expr     = "$" identifier | "[" number { "," number } "]" ;
-vector_array    = "[" vector_expr { "," vector_expr } "]" ;
-fusion_clause   = "USING" "FUSION" string [ "(" fusion_params ")" ] ;
-fusion_params   = identifier "=" value { "," identifier "=" value } ;
-sparse_vector_expr = "$" identifier ;
-
-(* Comparisons *)
-comparison      = column compare_op value ;
-compare_op      = "=" | "!=" | "<>" | ">" | ">=" | "<" | "<=" ;
-
-(* Special conditions *)
-in_cond         = column [ "NOT" ] "IN" "(" value { "," value } ")" ;
-between_cond    = column "BETWEEN" value "AND" value ;
-like_cond       = column ("LIKE" | "ILIKE") string ;
-match_cond      = column "MATCH" string ;
-is_null_cond    = column "IS" ["NOT"] "NULL" ;
-
-(* GROUP BY and HAVING *)
-group_by_clause = "GROUP" "BY" column { "," column } ;
-having_clause   = "HAVING" having_expr ;
-having_expr     = having_cond { ("AND" | "OR") having_cond } ;
-having_cond     = aggregate_func compare_op value ;
-
-(* ORDER BY *)
-order_by_clause = "ORDER" "BY" order_item { "," order_item } ;
-order_item      = (column | similarity_expr) ["ASC" | "DESC"] ;
-similarity_expr = "similarity" "(" identifier "," vector_expr ")" ;
-
-(* Pagination *)
-limit_clause    = "LIMIT" integer ;
-offset_clause   = "OFFSET" integer ;
-
-(* WITH options *)
-with_clause     = "WITH" "(" with_option { "," with_option } ")" ;
-with_option     = identifier "=" value ;
-
-(* USING FUSION for hybrid search *)
-using_fusion_clause = "USING" "FUSION" "(" fusion_strategy ["," fusion_params] ")" ;
-fusion_strategy = "rrf" | "weighted" | "maximum" ;
-fusion_params   = fusion_param { "," fusion_param } ;
-fusion_param    = identifier "=" value ;
-
-(* FUSE BY for dense+sparse hybrid search -- PLANNED SYNTAX, not yet in grammar *)
-(* Use USING FUSION(...) instead. The rules below are reserved for future implementation. *)
-(* fuse_by_clause  = "FUSE" "BY" fuse_strategy ; *)
-(* fuse_strategy   = "RRF" "(" fuse_params ")" | "RSF" "(" fuse_params ")" ; *)
-
-(* TRAIN QUANTIZER command *)
-train_quantizer = "TRAIN" "QUANTIZER" "ON" identifier "WITH" "(" train_params ")" ;
-train_params    = train_param { "," train_param } ;
-train_param     = identifier "=" integer ;
-
-(* Values *)
-value           = string | number | boolean | "NULL" | vector_literal ;
-vector_literal  = "[" number { "," number } "]" ;
-string          = "'" { char | "''" } "'" ;   (* '' escapes a single quote *)
-number          = ["-"] digit { digit } ["." digit { digit }] ;
-boolean         = "true" | "false" ;
-integer         = digit { digit } ;
-identifier      = (letter | "_") { letter | digit | "_" } 
-                | "`" { char } "`" 
-                | '"' { char } '"' ;
-```
-
-## Examples
-
-### Basic Queries
-
-```sql
--- Get all documents
-SELECT * FROM documents
-
--- Get specific fields with limit
-SELECT id, payload.title FROM articles LIMIT 100
-
--- Pagination
-SELECT * FROM products LIMIT 20 OFFSET 40
-```
-
-### Vector Search
-
-```sql
--- Simple vector search
-SELECT * FROM embeddings WHERE vector NEAR $query LIMIT 10
-
--- Vector search with metadata filter
-SELECT id, score, payload.title FROM docs 
-WHERE vector NEAR $v AND category = 'technology' 
-LIMIT 5
-
--- High-accuracy search
-SELECT * FROM legal_docs WHERE vector NEAR $q LIMIT 10 
-WITH (mode = 'accurate')
-```
-
-### Hybrid Search (Dense + Sparse)
-
-```sql
--- Hybrid search with RRF fusion
-SELECT * FROM docs
-WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
-USING FUSION(strategy = 'rrf', k = 60)
-LIMIT 10
-
--- Hybrid search with weighted score fusion
-SELECT * FROM articles
-WHERE vector NEAR $embedding AND vector SPARSE_NEAR $bm25
-USING FUSION(strategy = 'rsf', dense_weight = 0.6, sparse_weight = 0.4)
-LIMIT 20
-
--- Sparse-only search
-SELECT * FROM docs WHERE vector SPARSE_NEAR $keywords LIMIT 10
-
--- Train a quantizer then search with PQ compression
-TRAIN QUANTIZER ON embeddings WITH (m=8, k=256)
-```
-
-### Complex Filters
-
-```sql
--- Multiple conditions
-SELECT * FROM products 
-WHERE category IN ('electronics', 'computers') 
-  AND price BETWEEN 100 AND 1000
-  AND rating >= 4.0
-LIMIT 50
-
--- Text matching with vector search
-SELECT * FROM articles 
-WHERE vector NEAR $v 
-  AND title LIKE '%AI%'
-  AND published IS NOT NULL
-LIMIT 10
-```
-
-## MATCH Clause (v2.1+)
+## MATCH Statement (Graph Queries, v2.1+)
 
 Execute graph pattern matching queries with optional vector similarity filtering.
 
-### Basic Syntax
+### Syntax
 
 ```sql
 MATCH <pattern>
@@ -1181,20 +1178,57 @@ RETURN <projection>
 
 ### Pattern Syntax
 
+#### Node Patterns
+
+A node is enclosed in parentheses with optional alias, labels, and properties:
+
 ```sql
--- Node pattern
-(alias:Label {property: value})
-
--- Relationship pattern
--[alias:TYPE]->    -- outgoing
-<-[alias:TYPE]-    -- incoming
--[alias:TYPE]-     -- undirected
-
--- Variable length paths
--[*1..3]->         -- 1 to 3 hops
+(alias)                          -- Any node
+(alias:Label)                    -- Node with label
+(alias:Label1:Label2)            -- Node with multiple labels
+(alias:Label {prop: value})      -- Node with property filter
+(:Label)                         -- Anonymous node with label
+()                               -- Anonymous node (any)
 ```
 
-### Examples
+#### Relationship Patterns
+
+Relationships connect nodes with direction and optional type/range:
+
+```sql
+-[r:TYPE]->                      -- Outgoing, named
+<-[r:TYPE]-                      -- Incoming, named
+-[r:TYPE]-                       -- Undirected, named
+-[:TYPE]->                       -- Outgoing, anonymous
+-[r:TYPE1|TYPE2]->               -- Multiple relationship types
+-[*1..3]->                       -- Variable-length (1 to 3 hops)
+-[r:TYPE *2..5]->                -- Named with type and range
+-[*]->                           -- Any length
+```
+
+#### Range Specification
+
+| Syntax | Meaning |
+|--------|---------|
+| `*1..3` | Between 1 and 3 hops |
+| `*..5` | Up to 5 hops |
+| `*2..` | At least 2 hops |
+| `*3` | Exactly 3 hops |
+| `*` | Any number of hops |
+
+### RETURN Clause
+
+Project fields from matched nodes and relationships:
+
+```sql
+RETURN a.name, b.title             -- Property access
+RETURN a.name AS author            -- With alias
+RETURN *                           -- All bound variables
+RETURN similarity()                -- Pre-computed similarity score
+RETURN a.name, similarity() AS score
+```
+
+### Full Examples
 
 ```sql
 -- Simple graph traversal
@@ -1208,6 +1242,26 @@ RETURN doc.title, doc.content
 ORDER BY similarity() DESC
 LIMIT 5
 
+-- Multi-hop traversal
+MATCH (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
+WHERE a.department = 'engineering'
+RETURN a.name, b.name, c.name
+LIMIT 20
+
+-- Variable-length paths
+MATCH (start:Document)-[*1..3]->(end:Document)
+WHERE start.topic = 'AI'
+RETURN start.title, end.title
+
+-- Bidirectional relationship
+MATCH (a:Person)-[:COLLABORATES]-(b:Person)
+RETURN a.name, b.name
+
+-- Multiple relationship types
+MATCH (p:Person)-[r:KNOWS|WORKS_WITH]->(q:Person)
+RETURN p.name, q.name
+LIMIT 10
+
 -- Combined graph + vector + column (AIOps)
 MATCH (incident:Ticket)-[:IMPACTS]->(service:Microservice)
 WHERE similarity(incident.log_embedding, $error_vec) > 0.85
@@ -1220,27 +1274,21 @@ LIMIT 3
 
 ### Scope and Requirements
 
-**Collection Scope**: MATCH graph patterns operate exclusively within the current collection's internal graph store (`edge_store`). They iterate over the collection's own points and edges. They do NOT traverse edges across different collections. To query a separate `GraphCollection`, use the graph API directly (`get_outgoing()`, `traverse_bfs()`).
+**Collection Scope**: MATCH patterns operate within the current collection's
+internal graph store. They do NOT traverse across different collections.
 
-**Label Requirement**: For label-based patterns like `(p:Product)`, each point's payload MUST contain a `_labels` array listing the node's labels:
+**Label Requirement**: Points must have a `_labels` array in their payload:
 
 ```json
-{
-  "_labels": ["Product"],
-  "name": "Wireless Headphones",
-  "price": 99.99
-}
+{ "_labels": ["Product"], "name": "Headphones", "price": 99.99 }
 ```
 
-Points without a `_labels` key in their payload will NOT match any labeled pattern. This means that a query like `MATCH (p:Product)` silently skips all points that lack `"_labels": ["Product"]` in their payload.
-
-**Edge Requirement**: Relationship patterns like `-[:BOUGHT_WITH]->` require edges to exist in the collection's own edge store. Use `collection.add_edge(from_id, to_id, "BOUGHT_WITH", properties)` (Rust/Python) or `POST /collections/{name}/graph/edges` (REST) to create them before running MATCH queries.
-
-> **See also**: [Graph Patterns Guide](guides/GRAPH_PATTERNS.md) for practical setup examples and common pitfalls.
+**Edge Requirement**: Edges must exist in the collection's edge store. Create
+them via `collection.add_edge()` (Rust/Python) or the REST API.
 
 ### Execution Strategies
 
-The query planner automatically chooses the optimal execution strategy:
+The query planner automatically chooses the optimal strategy:
 
 | Strategy | When Used | Description |
 |----------|-----------|-------------|
@@ -1260,17 +1308,516 @@ Content-Type: application/json
 }
 ```
 
+---
+
+## Introspection Statements (v3.4+)
+
+### SHOW COLLECTIONS
+
+Lists all collections in the database with their names and types.
+
+```sql
+-- List all collections
+SHOW COLLECTIONS
+
+-- With trailing semicolon
+SHOW COLLECTIONS;
+```
+
+Returns one row per collection, each containing:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Collection name |
+| `type` | string | Collection type: `vector`, `graph`, or `metadata` |
+
+### DESCRIBE COLLECTION
+
+Returns metadata about a specific collection. The `COLLECTION` keyword is optional.
+
+```sql
+-- With COLLECTION keyword
+DESCRIBE COLLECTION docs
+
+-- Without COLLECTION keyword (equivalent)
+DESCRIBE docs
+```
+
+Returns a single row with:
+
+| Field | Type | Present When |
+|-------|------|-------------|
+| `name` | string | Always |
+| `type` | string | Always (`vector`, `graph`, or `metadata`) |
+| `dimension` | integer | Vector collections |
+| `metric` | string | Vector collections |
+| `point_count` | integer | All types |
+
+Returns an error if the collection does not exist.
+
+### EXPLAIN
+
+Returns the query execution plan for a SELECT query without executing it.
+
+```sql
+-- Explain a simple query
+EXPLAIN SELECT * FROM docs LIMIT 10
+
+-- Explain a complex query
+EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+```
+
+Returns a single row with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plan` | object | Structured query plan (JSON) |
+| `tree` | string | Human-readable plan tree |
+
+---
+
+## DDL Statements (v3.3+) and Admin Statements (v3.5+)
+
+### CREATE COLLECTION
+
+Create vector, graph, or metadata-only collections.
+
+#### Vector Collection
+
+```sql
+-- Minimal: dimension only (metric defaults to cosine)
+CREATE COLLECTION docs (dimension = 768)
+
+-- Explicit metric
+CREATE COLLECTION docs (dimension = 768, metric = 'euclidean')
+
+-- With storage quantization and HNSW parameters
+CREATE COLLECTION docs (dimension = 768, metric = 'cosine')
+  WITH (storage = 'sq8', m = 16, ef_construction = 200)
+
+-- Dot product metric
+CREATE COLLECTION embeddings (dimension = 384, metric = 'dotproduct')
+```
+
+#### Graph Collection
+
+```sql
+-- Schemaless graph with embeddings
+CREATE GRAPH COLLECTION knowledge (dimension = 768, metric = 'cosine') SCHEMALESS
+
+-- Schemaless pure graph (no embeddings)
+CREATE GRAPH COLLECTION pure_graph
+
+-- Typed graph with schema definition
+CREATE GRAPH COLLECTION ontology (dimension = 768, metric = 'cosine') WITH SCHEMA (
+  NODE Person (name: STRING, age: INTEGER),
+  NODE Document (title: STRING, year: INTEGER),
+  EDGE AUTHORED_BY FROM Person TO Document,
+  EDGE CITED_BY FROM Document TO Document
+)
+```
+
+#### Metadata Collection
+
+```sql
+-- No vectors, metadata-only storage
+CREATE METADATA COLLECTION tags
+```
+
+#### CREATE Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `dimension` | integer | Yes (vector/graph) | -- | Embedding dimension |
+| `metric` | string | No | `cosine` | Distance metric: `cosine`, `euclidean`, `dotproduct` |
+
+#### WITH Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `storage` | string | `full` | Storage mode: `full`, `sq8`, `binary` |
+| `m` | integer | 16 | HNSW M parameter (max links per node) |
+| `ef_construction` | integer | 200 | HNSW build-time expansion factor |
+
+#### Schema Type Names
+
+| Type | Description |
+|------|-------------|
+| `STRING` | Text value |
+| `INTEGER` | Integer value |
+| `FLOAT` | Floating-point value |
+| `BOOLEAN` | True/false value |
+| `VECTOR` | Vector field (special) |
+
+### DROP COLLECTION
+
+```sql
+-- Error if collection not found
+DROP COLLECTION documents
+
+-- No error if absent
+DROP COLLECTION IF EXISTS documents
+```
+
+### Index Management (v3.5+)
+
+Create or drop secondary metadata indexes on collection payload fields.
+Secondary indexes use a BTree structure for O(log n) equality lookups on
+metadata fields, accelerating WHERE-clause filters.
+
+#### CREATE INDEX
+
+```sql
+-- Create a secondary index on a metadata field
+CREATE INDEX ON docs (category)
+
+-- Case-insensitive keywords
+create index on docs (status)
+```
+
+Index creation is **idempotent** -- creating an index that already exists is a
+no-op.
+
+#### DROP INDEX
+
+```sql
+-- Remove a secondary metadata index
+DROP INDEX ON docs (category)
+```
+
+Dropping a non-existent index succeeds silently (no error).
+
+#### Notes
+
+- Secondary indexes only apply to **metadata payload fields** (not vector data).
+- Indexes accelerate equality filters in WHERE clauses (e.g., `WHERE category = 'tech'`).
+- The indexed field must already contain data for the index to be populated on
+  subsequent upserts. Existing data is not retroactively indexed.
+- Indexes are in-memory only; they are not persisted to disk in the current
+  implementation.
+
+### ANALYZE (v3.5+)
+
+Computes cost-based optimizer (CBO) statistics for a collection. The statistics
+are cached in memory and persisted to disk (`collection.stats.json`).
+
+```sql
+-- Compute statistics for query optimizer
+ANALYZE docs
+ANALYZE COLLECTION docs   -- optional COLLECTION keyword
+```
+
+Returns a JSON payload with collection statistics including `total_points`,
+`row_count`, `deleted_count`, `avg_row_size_bytes`, `payload_size_bytes`,
+and per-field cardinality information.
+
+### TRUNCATE (v3.5+)
+
+Deletes all rows from a collection without dropping the collection itself.
+Unlike `DELETE FROM` which requires a `WHERE` clause, `TRUNCATE` removes
+all data unconditionally.
+
+```sql
+-- Delete all rows
+TRUNCATE docs
+TRUNCATE COLLECTION docs   -- optional COLLECTION keyword
+```
+
+Returns a payload with `{"deleted_count": N}`. Truncating an empty collection
+succeeds with `deleted_count: 0`. The collection structure (config, indexes)
+is preserved after truncation.
+
+### ALTER COLLECTION (v3.5+)
+
+Modifies collection settings at runtime. Uses the same key-value option
+syntax as `CREATE COLLECTION`.
+
+```sql
+-- Enable auto-reindex
+ALTER COLLECTION docs SET (auto_reindex = true)
+
+-- Disable auto-reindex
+ALTER COLLECTION docs SET (auto_reindex = false)
+```
+
+**Supported options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `auto_reindex` | boolean | Enable/disable automatic HNSW parameter tuning |
+
+Unknown options are rejected with an error message listing supported options.
+
+### FLUSH (v3.6+)
+
+Persists collection data to disk. Supports fast flush (WAL only) and full flush
+(includes index serialization). Can target all collections or a specific one.
+
+```sql
+-- Fast flush all collections (WAL only)
+FLUSH
+
+-- Full flush all collections (includes index serialization)
+FLUSH FULL
+
+-- Fast flush a specific collection
+FLUSH docs
+
+-- Full flush a specific collection
+FLUSH FULL docs
+```
+
+Returns a payload with `{"status": "flushed", "full": true/false}`.
+
+- **Fast flush** (`FLUSH`): Writes WAL data to disk. Fast but requires WAL replay
+  on next startup if the process crashes before a full flush.
+- **Full flush** (`FLUSH FULL`): Writes WAL data and serializes vector indexes.
+  Slower but ensures fast startup without WAL replay. Recommended before
+  graceful shutdown.
+
+Flushing a nonexistent collection returns a `CollectionNotFound` error.
+Flushing an empty database (no collections) succeeds with no error.
+
+> **Note:** `full` (case-insensitive) is a reserved modifier for FLUSH. To flush a
+> collection named `full`, use `FLUSH FULL full` or quote the identifier:
+> `` FLUSH `full` ``.
+
+---
+
+## DML Statements (INSERT, UPDATE, DELETE)
+
+### INSERT INTO (v3.2+, multi-row v3.5+)
+
+Insert one or more rows into a collection. Column names are listed in parentheses,
+followed by corresponding values. Multiple rows are separated by commas (v3.5+).
+
+```sql
+-- Insert a single row
+INSERT INTO docs (id, title, category) VALUES (1, 'Getting Started', 'tutorial')
+
+-- Insert with numeric values
+INSERT INTO products (id, price, stock) VALUES (42, 29.99, 100)
+
+-- Insert with boolean values
+INSERT INTO flags (id, active, verified) VALUES (1, TRUE, FALSE)
+
+-- Insert with NULL
+INSERT INTO events (id, description, metadata) VALUES (10, 'system boot', NULL)
+
+-- Insert with parameter-bound vector
+INSERT INTO docs (id, vector, category) VALUES (1, $vector, 'test')
+
+-- Multi-row insert (v3.5+)
+INSERT INTO docs (id, vector, title) VALUES (1, $v1, 'Hello'), (2, $v2, 'World'), (3, $v3, 'Foo')
+```
+
+Column count must match value count **in every row**. Types are inferred from
+literal values. Multi-row INSERT executes as a single batch `upsert()` call.
+
+### UPSERT INTO (v3.5+)
+
+Insert or update rows. Identical syntax to INSERT; semantically equivalent since
+VelesDB's INSERT is always idempotent (existing IDs are overwritten). UPSERT
+makes this intent explicit at the SQL level.
+
+```sql
+-- Single-row upsert
+UPSERT INTO docs (id, vector, title) VALUES (1, $v, 'Updated')
+
+-- Multi-row upsert
+UPSERT INTO docs (id, vector, title) VALUES (1, $v1, 'A'), (2, $v2, 'B')
+```
+
+### UPDATE (v3.2+)
+
+Update one or more fields in existing rows.
+
+```sql
+-- Update a single field
+UPDATE docs SET status = 'archived' WHERE id = 42
+
+-- Update multiple fields
+UPDATE products SET price = 19.99, stock = 50 WHERE category = 'sale'
+
+-- Update with boolean
+UPDATE products SET featured = TRUE WHERE id = 1
+
+-- Update without WHERE (updates all rows -- use with caution)
+UPDATE products SET featured = FALSE
+```
+
+The WHERE clause is optional but strongly recommended.
+
+### DELETE FROM (v3.3+)
+
+Delete rows from a collection. The WHERE clause is **mandatory** to prevent
+accidental full-collection deletion.
+
+```sql
+-- Delete by single ID
+DELETE FROM docs WHERE id = 42
+
+-- Delete by multiple IDs
+DELETE FROM docs WHERE id IN (1, 2, 3)
+
+-- Delete with string comparison
+DELETE FROM logs WHERE level = 'debug'
+
+-- Delete with compound condition
+DELETE FROM events WHERE status = 'expired' AND created_at < 1000
+```
+
+> VelesQL rejects `DELETE FROM <collection>` without a WHERE predicate as a safety
+> measure.
+
+### INSERT EDGE (v3.3+)
+
+Insert a labeled edge between two nodes in a graph collection.
+
+```sql
+-- Basic edge insertion
+INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY')
+
+-- With explicit edge ID
+INSERT EDGE INTO knowledge (id = 10, source = 1, target = 2, label = 'KNOWS')
+
+-- With edge properties
+INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY')
+  WITH PROPERTIES (year = 2026, confidence = 0.95)
+
+-- With ID and properties
+INSERT EDGE INTO kg (id = 20, source = 2, target = 3, label = 'KNOWS')
+  WITH PROPERTIES (weight = 0.9)
+```
+
+#### Edge Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source` | integer | Yes | Source node ID |
+| `target` | integer | Yes | Target node ID |
+| `label` | string | Yes | Edge relationship type |
+| `id` | integer | No | Explicit edge ID (auto-generated if omitted) |
+
+WITH PROPERTIES accepts key-value pairs (strings, integers, or floats).
+
+### DELETE EDGE (v3.3+)
+
+Remove an edge by its ID from a graph collection.
+
+```sql
+DELETE EDGE 123 FROM knowledge
+DELETE EDGE 10 FROM kg
+```
+
+### SELECT EDGES (v3.5+)
+
+Query edges from a graph collection with optional filtering by source node,
+target node, or edge label.
+
+```sql
+-- All edges
+SELECT EDGES FROM kg LIMIT 100
+
+-- Outgoing edges from a node
+SELECT EDGES FROM kg WHERE source = 1
+
+-- Incoming edges to a node
+SELECT EDGES FROM kg WHERE target = 2
+
+-- Edges by label
+SELECT EDGES FROM kg WHERE label = 'KNOWS'
+
+-- Combined: outgoing with label
+SELECT EDGES FROM kg WHERE source = 1 AND label = 'KNOWS'
+```
+
+Each result contains a JSON payload with `edge_id`, `source`, `target`, `label`,
+and `properties` fields.
+
+> **Limitation:** WHERE supports at most two conditions combined with AND. Three-condition
+> queries like `WHERE source = 1 AND label = 'X' AND target = 2` are not supported.
+> Use two-condition AND and filter results client-side if needed.
+
+### INSERT NODE (v3.5+)
+
+Insert or update a node's payload in a graph collection.
+
+```sql
+-- With JSON payload
+INSERT NODE INTO kg (id = 42, payload = '{"name": "Alice", "_labels": ["Person"]}')
+
+-- With inline fields (collected into a JSON object)
+INSERT NODE INTO kg (id = 10, name = 'Bob', age = 30)
+```
+
+If a node with the given `id` already exists, the payload is replaced (upsert
+semantics).
+
+---
+
+## TRAIN QUANTIZER Command (v2.2+)
+
+Explicitly train a Product Quantizer on a collection's vector data.
+
+### Syntax
+
+```sql
+TRAIN QUANTIZER ON <collection> WITH (<parameters>)
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `m` | integer | 8 | Number of subspaces |
+| `k` | integer | 256 | Codebook size per subspace |
+| `type` | string | -- | Quantizer type: `pq`, `opq`, `rabitq` |
+| `oversampling` | integer | -- | Training oversampling ratio |
+| `sample` | integer | -- | Number of vectors to sample |
+| `force` | boolean | false | Force retrain if exists |
+
+### Examples
+
+```sql
+-- Train with standard parameters
+TRAIN QUANTIZER ON my_embeddings WITH (m = 8, k = 256)
+
+-- Higher compression (more subspaces)
+TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
+
+-- Finer codebooks
+TRAIN QUANTIZER ON precision_collection WITH (m = 8, k = 512)
+
+-- With quantizer type
+TRAIN QUANTIZER ON vectors WITH (m = 16, k = 256, type = opq)
+
+-- Force retrain with oversampling
+TRAIN QUANTIZER ON my_coll WITH (m = 8, k = 256, oversampling = 4, force = true)
+
+-- Semicolons optional
+TRAIN QUANTIZER ON my_collection WITH (m = 8, k = 256);
+```
+
+### Notes
+
+- Training is explicit -- it does not happen automatically.
+- The collection must contain enough vectors (recommended: at least `k`).
+- Re-training overwrites the existing quantizer.
+- OPQ can be enabled via the `type` parameter.
+
+---
+
 ## Agent Memory VelesQL Queries (v3.2+)
 
-The Agent Memory SDK creates three internal collections that are fully queryable via VelesQL:
+The Agent Memory SDK creates three internal collections queryable via VelesQL:
 
 ### Semantic Memory (`_semantic_memory`)
 
 ```sql
--- Similarity search on stored knowledge
 SELECT * FROM _semantic_memory
 WHERE vector NEAR $query_embedding
-LIMIT 10 WITH (mode='accurate')
+LIMIT 10 WITH (mode = 'accurate')
 ```
 
 Payload fields: `content` (string).
@@ -1284,7 +1831,7 @@ WHERE timestamp > 1711234567
 ORDER BY timestamp DESC
 LIMIT 20
 
--- Similarity search on events with embeddings
+-- Similarity search on events
 SELECT * FROM _episodic_memory
 WHERE vector NEAR $query_embedding
 LIMIT 5
@@ -1295,7 +1842,6 @@ Payload fields: `description` (string), `timestamp` (integer, Unix epoch).
 ### Procedural Memory (`_procedural_memory`)
 
 ```sql
--- High-confidence procedures
 SELECT * FROM _procedural_memory
 WHERE confidence > 0.7
 ORDER BY confidence DESC
@@ -1314,51 +1860,200 @@ let results = agent_memory.query_semantic(
 )?;
 ```
 
-All three subsystems support: vector NEAR, payload filters, ORDER BY, LIMIT/OFFSET,
-WITH options, LET bindings, and USING FUSION.
+All three subsystems support: vector NEAR, payload filters, ORDER BY,
+LIMIT/OFFSET, WITH options, LET bindings, and USING FUSION.
 
-## TRAIN QUANTIZER Command (v2.2+)
+VelesQL queryability of agent memory collections is verified by BDD integration
+tests (`tests/bdd/agent_memory.rs`) that exercise the full
+`Database::execute_query` pipeline, and by unit tests in
+`src/agent/velesql_bridge_tests.rs` that test the `Collection::execute_query_str`
+path.
 
-Explicitly train a Product Quantizer on a collection's vector data.
+---
 
-### Syntax
+## Value Types
+
+### Strings
+
+Single-quoted. To include a single quote, double it (`''`):
 
 ```sql
-TRAIN QUANTIZER ON <collection> WITH (m=<subspaces>, k=<codebook_size>)
+'hello world'
+'O''Brien'                -- produces: O'Brien
+'It''s a ''test'''        -- produces: It's a 'test'
+''                        -- empty string
 ```
 
-### Parameters
+Unicode characters are fully supported:
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `m` | integer | 8 | Number of subspaces (vector is split into m sub-vectors) |
-| `k` | integer | 256 | Codebook size per subspace (number of centroids) |
+```sql
+'日本語テキスト'
+'🚀 Launch'
+```
 
-### Semantics
+> **Warning**: Backslash escaping (`\'`) is **not** supported. Always use `''`.
 
-- Training is **explicit** -- it does not happen automatically on collection creation or data insertion.
-- The collection must contain enough vectors for meaningful training (recommended: at least `k` vectors).
-- After training, subsequent searches on the collection can use PQ-compressed distance computation (ADC).
-- Training uses k-means++ initialization for codebook construction.
+### Numbers
+
+```sql
+42            -- integer
+3.14          -- float
+-100          -- negative integer
+-0.5          -- negative float
+```
+
+### Booleans
+
+```sql
+TRUE
+FALSE
+```
+
+Case-insensitive: `true`, `True`, `TRUE` are all equivalent.
+
+### Vectors
+
+```sql
+[0.1, 0.2, 0.3, 0.4]           -- literal vector (dense)
+$query_vector                    -- parameter reference
+```
+
+### Sparse Vectors
+
+```sql
+{0: 0.9, 14: 0.7, 256: 0.5}   -- literal sparse vector
+$sparse_query                    -- parameter reference
+```
+
+### NULL
+
+```sql
+NULL
+```
+
+### Temporal Values
+
+```sql
+NOW()                            -- current Unix timestamp
+INTERVAL '7 days'               -- time duration
+NOW() - INTERVAL '24 hours'     -- temporal arithmetic
+```
+
+---
+
+## Parameters
+
+Use `$name` syntax for parameterized queries. Parameters are resolved at runtime
+from the query context.
+
+```sql
+SELECT * FROM docs WHERE vector NEAR $query_vector AND category = $cat LIMIT 10
+```
+
+Parameters can be used for:
+- Vectors: `$v`, `$query_embedding`
+- Sparse vectors: `$sparse`, `$sv`
+- Scalar values: `$category`, `$min_price`
+
+---
+
+## Identifier Quoting
+
+### Reserved Keywords
+
+The following keywords cannot be used as identifiers without quoting:
+
+| Category | Keywords |
+|----------|----------|
+| Query structure | `SELECT`, `FROM`, `WHERE`, `AS` |
+| Logical operators | `AND`, `OR`, `NOT` |
+| Comparison operators | `IN`, `BETWEEN`, `LIKE`, `ILIKE`, `MATCH` |
+| NULL handling | `IS`, `NULL` |
+| Boolean literals | `TRUE`, `FALSE` |
+| Pagination | `LIMIT`, `OFFSET` |
+| Sorting | `ORDER`, `BY`, `ASC`, `DESC` |
+| Aggregation | `GROUP`, `HAVING` |
+| Vector operations | `NEAR`, `NEAR_FUSED`, `SPARSE_NEAR`, `SIMILARITY` |
+| Extensions | `FUSE`, `TRAIN`, `QUANTIZER`, `WITH` |
+| DDL | `CREATE`, `DROP`, `COLLECTION`, `GRAPH`, `METADATA` |
+| Graph/DML | `EDGE`, `SCHEMALESS`, `SCHEMA`, `NODE`, `PROPERTIES` |
+| Conditional | `IF`, `EXISTS` |
+| DML | `INSERT`, `INTO`, `UPDATE`, `SET`, `DELETE`, `VALUES` |
+| Set operations | `UNION`, `ALL`, `INTERSECT`, `EXCEPT` |
+| JOINs | `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `ON`, `USING` |
+| Bindings | `LET`, `RETURN`, `MATCH` |
+| Temporal | `NOW`, `INTERVAL` |
+| Misc | `DISTINCT`, `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
+
+### Quoting Styles
+
+To use reserved keywords or special characters as identifiers, quote them:
+
+**Backtick quoting** (MySQL-style):
+
+```sql
+SELECT `select`, `from`, `order` FROM docs
+```
+
+**Double-quote quoting** (SQL standard):
+
+```sql
+SELECT "select", "from", "order" FROM docs
+```
+
+**Mixed styles** in the same query:
+
+```sql
+SELECT `select`, "order" FROM my_table WHERE `limit` > 10
+```
+
+### Escaping Quotes Inside Identifiers
+
+Double the quote character to include it:
+
+```sql
+-- Column named: col"name
+SELECT "col""name" FROM docs
+```
 
 ### Examples
 
 ```sql
--- Train with default-like parameters
-TRAIN QUANTIZER ON my_embeddings WITH (m=8, k=256)
+-- Reserved keyword as collection name
+SELECT * FROM `order`
 
--- Higher compression (more subspaces)
-TRAIN QUANTIZER ON large_collection WITH (m=16, k=256)
+-- Reserved keywords in WHERE
+SELECT * FROM docs WHERE `select` = 'value' AND `from` LIKE '%pattern%'
 
--- Finer codebooks
-TRAIN QUANTIZER ON precision_collection WITH (m=8, k=512)
+-- Reserved keywords in ORDER BY
+SELECT * FROM docs ORDER BY `order` ASC
+
+-- Reserved keywords in GROUP BY
+SELECT `group`, COUNT(*) FROM docs GROUP BY `group`
+
+-- Reserved keyword as alias
+SELECT id AS `select` FROM docs
 ```
 
-### Notes
+---
 
-- Training may take several seconds for large collections (100K+ vectors).
-- OPQ (Optimized Product Quantization) can be enabled via the Rust API or REST API but is not exposed in VelesQL syntax.
-- Re-training overwrites the existing quantizer. Export the previous quantizer if rollback is needed.
+## Default Values Reference
+
+| Feature | Default | Notes |
+|---------|---------|-------|
+| LIMIT | No limit (all results) | Always specify LIMIT for vector search |
+| OFFSET | 0 | |
+| ORDER BY direction | ASC | Explicit DESC recommended for similarity |
+| metric (CREATE) | cosine | |
+| storage (CREATE) | full | full = no quantization |
+| m (HNSW) | 16 | |
+| ef_construction | 200 | |
+| WITH mode | balanced | |
+| USING FUSION strategy | rrf | |
+| USING FUSION k | 60 | |
+| ef_search | Depends on mode | fast=32, balanced=64, accurate=256, perfect=512 |
+
+---
 
 ## Error Handling
 
@@ -1372,6 +2067,794 @@ VelesQL returns structured errors:
 | `ColumnNotFound` | Referenced column doesn't exist |
 | `TypeMismatch` | Incompatible types in comparison |
 | `Timeout` | Query exceeded timeout_ms |
+
+---
+
+## Quick Reference
+
+### Statement Types
+
+| Statement | Purpose | Example |
+|-----------|---------|---------|
+| `SELECT` | Query data | `SELECT * FROM docs WHERE vector NEAR $v LIMIT 10` |
+| `MATCH` | Graph traversal | `MATCH (a)-[:KNOWS]->(b) RETURN a.name` |
+| `INSERT INTO` | Add rows (multi-row) | `INSERT INTO docs (id, title) VALUES (1, 'A'), (2, 'B')` |
+| `UPSERT INTO` | Insert or update rows | `UPSERT INTO docs (id, title) VALUES (1, 'Updated')` |
+| `UPDATE` | Modify rows | `UPDATE docs SET status = 'done' WHERE id = 1` |
+| `DELETE FROM` | Remove rows | `DELETE FROM docs WHERE id = 42` |
+| `INSERT EDGE` | Add graph edge | `INSERT EDGE INTO kg (source=1, target=2, label='REL')` |
+| `DELETE EDGE` | Remove graph edge | `DELETE EDGE 123 FROM kg` |
+| `SELECT EDGES` | Query graph edges | `SELECT EDGES FROM kg WHERE source = 1 LIMIT 10` |
+| `INSERT NODE` | Add/update node payload | `INSERT NODE INTO kg (id = 42, payload = '{"name": "Alice"}')` |
+| `CREATE COLLECTION` | Create collection | `CREATE COLLECTION docs (dimension=768)` |
+| `DROP COLLECTION` | Delete collection | `DROP COLLECTION IF EXISTS docs` |
+| `CREATE INDEX` | Add metadata index | `CREATE INDEX ON docs (category)` |
+| `DROP INDEX` | Remove metadata index | `DROP INDEX ON docs (category)` |
+| `TRAIN QUANTIZER` | Train compression | `TRAIN QUANTIZER ON docs WITH (m=8, k=256)` |
+| `SHOW COLLECTIONS` | List collections | `SHOW COLLECTIONS` |
+| `DESCRIBE` | Collection metadata | `DESCRIBE COLLECTION docs` |
+| `EXPLAIN` | Query plan | `EXPLAIN SELECT * FROM docs LIMIT 10` |
+
+### WHERE Operators
+
+| Operator | Syntax | Example |
+|----------|--------|---------|
+| NEAR | `vector NEAR $v` | `WHERE vector NEAR $query` |
+| SPARSE_NEAR | `vector SPARSE_NEAR $v` | `WHERE vector SPARSE_NEAR $sparse` |
+| NEAR_FUSED | `vector NEAR_FUSED [$v1,$v2]` | `WHERE vector NEAR_FUSED [$a, $b]` |
+| similarity() | `similarity(field, $v) op N` | `WHERE similarity(emb, $v) > 0.8` |
+| MATCH (text) | `column MATCH 'text'` | `WHERE content MATCH 'database'` |
+| `=` `!=` `>` `>=` `<` `<=` | `column op value` | `WHERE price > 100` |
+| IN | `column IN (values)` | `WHERE id IN (1, 2, 3)` |
+| NOT IN | `column NOT IN (values)` | `WHERE status NOT IN ('deleted')` |
+| BETWEEN | `column BETWEEN a AND b` | `WHERE price BETWEEN 10 AND 100` |
+| LIKE | `column LIKE 'pattern'` | `WHERE name LIKE 'John%'` |
+| ILIKE | `column ILIKE 'pattern'` | `WHERE name ILIKE '%john%'` |
+| IS NULL | `column IS NULL` | `WHERE deleted_at IS NULL` |
+| IS NOT NULL | `column IS NOT NULL` | `WHERE email IS NOT NULL` |
+| AND / OR / NOT | logical combinators | `WHERE a > 1 AND (b = 2 OR c = 3)` |
+
+### Clauses
+
+| Clause | Purpose | Example |
+|--------|---------|---------|
+| `FROM ... AS` | Source with alias | `FROM docs AS d` |
+| `WHERE` | Filter conditions | `WHERE status = 'active'` |
+| `ORDER BY ... ASC/DESC` | Sort results | `ORDER BY similarity() DESC` |
+| `LIMIT N` | Cap result count | `LIMIT 10` |
+| `OFFSET N` | Skip first N results | `OFFSET 20` |
+| `GROUP BY` | Aggregate grouping | `GROUP BY category` |
+| `HAVING` | Filter groups | `HAVING COUNT(*) > 5` |
+| `JOIN ... ON` | Combine collections | `JOIN users ON docs.author_id = users.id` |
+| `WITH (...)` | Search options | `WITH (mode = 'accurate')` |
+| `USING FUSION(...)` | Hybrid strategy | `USING FUSION(strategy = 'rrf')` |
+| `LET x = expr` | Score binding | `LET score = 0.7 * vector_score` |
+| `DISTINCT` | Deduplicate | `SELECT DISTINCT category FROM docs` |
+
+### Aggregate Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `COUNT(*)` | Count rows | `SELECT COUNT(*) FROM docs` |
+| `COUNT(col)` | Count non-null | `SELECT COUNT(email) FROM users` |
+| `SUM(col)` | Sum values | `SELECT SUM(price) FROM orders` |
+| `AVG(col)` | Average value | `SELECT AVG(rating) FROM reviews` |
+| `MIN(col)` | Minimum value | `SELECT MIN(created_at) FROM logs` |
+| `MAX(col)` | Maximum value | `SELECT MAX(score) FROM results` |
+
+### Value Types
+
+| Type | Syntax | Example |
+|------|--------|---------|
+| String | `'single quotes'` | `'hello world'` |
+| Integer | digits | `42`, `-7` |
+| Float | digits.digits | `3.14`, `-0.5` |
+| Boolean | `TRUE` / `FALSE` | `TRUE` |
+| NULL | `NULL` | `NULL` |
+| Vector | `[floats]` | `[0.1, 0.2, 0.3]` |
+| Sparse Vector | `{idx: val}` | `{12: 0.8, 45: 0.3}` |
+| Parameter | `$name` | `$query_vector` |
+| Temporal | `NOW()`, `INTERVAL` | `NOW() - INTERVAL '7 days'` |
+
+### Score Variables (for ORDER BY and LET)
+
+| Variable | Source | When Populated |
+|----------|--------|----------------|
+| `vector_score` | HNSW dense search | NEAR clause present |
+| `bm25_score` | Full-text BM25 | MATCH text clause present |
+| `sparse_score` | Sparse vector search | SPARSE_NEAR clause present |
+| `graph_score` | Graph traversal | MATCH graph pattern present |
+| `fused_score` | After fusion | USING FUSION applied |
+| `similarity()` | Primary search score | Any search clause |
+
+---
+
+## Complete Examples
+
+### Vector Similarity Search
+
+```sql
+-- Basic: find 10 nearest documents
+SELECT * FROM documents WHERE vector NEAR $query LIMIT 10
+
+-- With similarity score in results
+SELECT id, title, similarity() AS score
+FROM documents WHERE vector NEAR $query
+ORDER BY similarity() DESC LIMIT 5
+
+-- With metadata filter
+SELECT * FROM articles
+WHERE vector NEAR $query AND category = 'science' AND year >= 2024
+LIMIT 10
+
+-- With search quality tuning
+SELECT * FROM embeddings WHERE vector NEAR $query
+ORDER BY similarity() DESC LIMIT 20
+WITH (mode = 'accurate', ef_search = 256)
+```
+
+### Full-Text Search
+
+```sql
+-- Keyword search with BM25 scoring
+SELECT * FROM articles WHERE content MATCH 'machine learning' LIMIT 10
+
+-- Case-insensitive pattern matching
+SELECT * FROM users WHERE name ILIKE '%john%'
+
+-- Pattern with wildcards
+SELECT * FROM products WHERE sku LIKE 'SKU-2024-%'
+```
+
+### Hybrid Search (Vector + Text)
+
+```sql
+-- Dense vector + BM25 text with RRF fusion
+SELECT * FROM docs
+WHERE vector NEAR $query AND content MATCH 'neural networks'
+USING FUSION(strategy = 'rrf', k = 60)
+LIMIT 10
+
+-- With custom scoring weights
+LET score = 0.7 * vector_score + 0.3 * bm25_score
+SELECT *, score AS relevance
+FROM documents
+WHERE vector NEAR $query AND content MATCH 'transformer'
+ORDER BY score DESC
+LIMIT 10
+
+-- Dense + sparse vector fusion
+SELECT * FROM docs
+WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
+USING FUSION(strategy = 'rrf', k = 60)
+LIMIT 10
+
+-- Multi-vector fusion (text + image embeddings)
+SELECT * FROM products
+WHERE vector NEAR_FUSED [$text_emb, $image_emb]
+USING FUSION(strategy = 'weighted')
+LIMIT 20
+```
+
+### Filtering and Aggregation
+
+```sql
+-- Complex WHERE conditions
+SELECT * FROM products
+WHERE category IN ('electronics', 'computers')
+  AND price BETWEEN 100 AND 500
+  AND brand IS NOT NULL
+  AND name NOT IN ('discontinued')
+LIMIT 50
+
+-- Aggregation with grouping
+SELECT category, COUNT(*) AS total, AVG(price) AS avg_price
+FROM products
+GROUP BY category
+HAVING COUNT(*) > 5
+ORDER BY avg_price DESC
+
+-- Nested payload field access
+SELECT payload.author, payload.metadata.language, COUNT(*)
+FROM articles
+GROUP BY payload.author, payload.metadata.language
+
+-- Temporal filtering
+SELECT * FROM events
+WHERE timestamp > NOW() - INTERVAL '7 days'
+ORDER BY timestamp DESC
+LIMIT 100
+
+-- Deduplicated results
+SELECT DISTINCT category FROM products WHERE stock > 0
+```
+
+### Graph Queries
+
+```sql
+-- Basic traversal
+MATCH (person:Person)-[:AUTHORED]->(doc:Document)
+WHERE similarity(doc.embedding, $query) > 0.7
+RETURN person.name, doc.title, similarity() AS score
+ORDER BY similarity() DESC
+LIMIT 10
+
+-- Multi-hop traversal
+MATCH (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
+WHERE a.department = 'engineering'
+RETURN a.name, b.name, c.name
+LIMIT 20
+
+-- Variable-length paths (1 to 3 hops)
+MATCH (start:Document)-[*1..3]->(end:Document)
+WHERE start.topic = 'AI'
+RETURN start.title, end.title
+
+-- Graph mutations
+INSERT NODE INTO knowledge (id = 1, payload = '{"name": "Alice", "_labels": ["Author"]}');
+INSERT EDGE INTO knowledge (source = 1, target = 2, label = 'AUTHORED_BY')
+  WITH PROPERTIES (confidence = 0.95, year = 2026);
+
+-- Query edges
+SELECT EDGES FROM knowledge WHERE source = 1;
+SELECT EDGES FROM knowledge WHERE label = 'AUTHORED_BY' LIMIT 10;
+
+DELETE EDGE 42 FROM knowledge;
+```
+
+### Collection Management (DDL)
+
+```sql
+-- Create vector collection
+CREATE COLLECTION documents (dimension = 768)
+
+-- Create with explicit parameters
+CREATE COLLECTION embeddings (dimension = 384, metric = 'euclidean')
+  WITH (storage = 'sq8', m = 16, ef_construction = 200)
+
+-- Create graph collection
+CREATE GRAPH COLLECTION knowledge (dimension = 768, metric = 'cosine') SCHEMALESS
+
+-- Create graph with typed schema
+CREATE GRAPH COLLECTION ontology (dimension = 768) WITH SCHEMA (
+  NODE Person (name: STRING, age: INTEGER),
+  NODE Organization (name: STRING),
+  EDGE WORKS_AT FROM Person TO Organization
+)
+
+-- Create metadata-only collection
+CREATE METADATA COLLECTION tags
+
+-- Drop collection safely
+DROP COLLECTION IF EXISTS old_data
+
+-- Create a secondary index on a metadata field
+CREATE INDEX ON documents (category)
+
+-- Drop a secondary index
+DROP INDEX ON documents (category)
+```
+
+### Data Manipulation (DML)
+
+```sql
+-- Insert a row
+INSERT INTO documents (id, title, category) VALUES (1, 'Getting Started', 'tutorial')
+
+-- Update fields
+UPDATE documents SET status = 'published', updated = TRUE WHERE id = 1
+
+-- Delete with mandatory WHERE
+DELETE FROM documents WHERE id IN (10, 11, 12)
+DELETE FROM logs WHERE level = 'debug' AND timestamp < 1000
+```
+
+### Join Queries
+
+```sql
+-- Inner join
+SELECT o.id, c.name, o.total
+FROM orders AS o
+JOIN customers AS c ON o.customer_id = c.id
+WHERE o.total > 100
+
+-- Self-join
+SELECT a.title AS original, b.title AS related
+FROM articles AS a
+JOIN articles AS b ON a.parent_id = b.id
+WHERE a.category = 'tech'
+
+-- Join with USING shorthand
+SELECT * FROM orders AS o
+JOIN products AS p USING (product_id)
+```
+
+### Set Operations
+
+```sql
+-- Combine results from two queries
+SELECT id FROM recommended_docs WHERE user_id = 1
+UNION
+SELECT id FROM trending_docs WHERE score > 0.8
+
+-- Find common items
+SELECT item_id FROM user_1_likes
+INTERSECT
+SELECT item_id FROM user_2_likes
+
+-- Exclude items
+SELECT id FROM all_docs
+EXCEPT
+SELECT id FROM archived_docs
+```
+
+### Advanced Scoring with LET
+
+```sql
+-- Weighted hybrid scoring
+LET relevance = 0.6 * vector_score + 0.4 * bm25_score
+SELECT id, title, relevance AS score
+FROM articles
+WHERE vector NEAR $query AND content MATCH 'deep learning'
+ORDER BY relevance DESC
+LIMIT 10
+
+-- Chained bindings
+LET base = 0.7 * vector_score + 0.3 * bm25_score
+LET boosted = base * 1.5
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'AI'
+ORDER BY boosted DESC
+LIMIT 5
+```
+
+### Training
+
+```sql
+-- Train product quantizer
+TRAIN QUANTIZER ON embeddings WITH (m = 8, k = 256)
+
+-- Train with higher compression
+TRAIN QUANTIZER ON large_collection WITH (m = 16, k = 256)
+```
+
+### Multi-Row INSERT and UPSERT
+
+```sql
+-- Multi-row insert (batch)
+INSERT INTO products (id, title, price) VALUES
+  (1, 'Laptop', 999.99),
+  (2, 'Mouse', 29.99),
+  (3, 'Keyboard', 79.99)
+
+-- Upsert: insert or update if exists
+UPSERT INTO products (id, title, price) VALUES (1, 'Laptop Pro', 1299.99)
+
+-- Multi-row upsert
+UPSERT INTO products (id, title, price) VALUES
+  (1, 'Laptop Pro', 1299.99),
+  (4, 'Monitor', 499.99)
+```
+
+### Graph Edge and Node Operations
+
+```sql
+-- Query all edges in a graph collection
+SELECT EDGES FROM knowledge LIMIT 100
+
+-- Query outgoing edges from a specific node
+SELECT EDGES FROM knowledge WHERE source = 1
+
+-- Query edges by relationship type
+SELECT EDGES FROM knowledge WHERE label = 'AUTHORED_BY'
+
+-- Insert a node with payload into a graph collection
+INSERT NODE INTO knowledge (id = 42, payload = '{"name": "Alice", "_labels": ["Person"]}')
+```
+
+### Introspection
+
+```sql
+-- List all collections with their types
+SHOW COLLECTIONS
+
+-- Get collection metadata (dimension, metric, point count, type)
+DESCRIBE COLLECTION documents
+DESCRIBE documents
+
+-- View query execution plan without running
+EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+```
+
+### Administration
+
+```sql
+-- Create a secondary index for fast metadata lookups
+CREATE INDEX ON documents (category)
+
+-- Drop an index
+DROP INDEX ON documents (category)
+
+-- Compute CBO statistics for query optimizer
+ANALYZE documents
+
+-- Delete all data from a collection (preserves the collection)
+TRUNCATE documents
+
+-- Modify collection settings
+ALTER COLLECTION documents SET (auto_reindex = true)
+
+-- Flush data to disk (WAL only)
+FLUSH
+
+-- Full flush (includes index serialization)
+FLUSH FULL
+
+-- Flush a specific collection
+FLUSH documents
+```
+
+---
+
+## EBNF Grammar (v3.6)
+
+```ebnf
+(* ═══════════════════════════════════════════════════════ *)
+(* Entry point                                            *)
+(* ═══════════════════════════════════════════════════════ *)
+
+query             = let_clause* (show_collections_stmt | describe_stmt
+                    | explain_stmt | flush_stmt
+                    | analyze_stmt | truncate_stmt | alter_collection_stmt
+                    | select_edges_stmt
+                    | match_query | compound_query | train_stmt
+                    | create_index_stmt | create_collection_stmt
+                    | drop_index_stmt | drop_collection_stmt
+                    | insert_node_stmt | insert_edge_stmt
+                    | delete_edge_stmt | delete_stmt
+                    | upsert_stmt | insert_stmt | update_stmt) [";"] ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Introspection statements (v3.4)                        *)
+(* ═══════════════════════════════════════════════════════ *)
+
+show_collections_stmt = "SHOW" "COLLECTIONS" ;
+describe_stmt         = "DESCRIBE" ["COLLECTION"] identifier ;
+explain_stmt          = "EXPLAIN" compound_query ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* LET bindings (v3.2)                                    *)
+(* ═══════════════════════════════════════════════════════ *)
+
+let_clause        = "LET" identifier "=" order_by_arithmetic ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* MATCH graph queries (v2.1)                             *)
+(* ═══════════════════════════════════════════════════════ *)
+
+match_query       = "MATCH" graph_pattern
+                    [where_clause] return_clause
+                    [order_by_clause] [limit_clause] ;
+
+graph_pattern     = node_pattern (relationship_pattern node_pattern)* ;
+node_pattern      = "(" [node_spec] ")" ;
+node_spec         = [node_alias] [node_labels] [node_properties] ;
+node_alias        = identifier ;
+node_labels       = ":" label_name (":" label_name)* ;
+node_properties   = "{" property ("," property)* "}" ;
+property          = identifier ":" property_value ;
+property_value    = string | float | integer | boolean | null | parameter ;
+
+relationship_pattern = rel_incoming | rel_outgoing | rel_undirected ;
+rel_incoming      = "<-" [rel_spec] "-" ;
+rel_outgoing      = "-" [rel_spec] "->" ;
+rel_undirected    = "-" [rel_spec] "-" ;
+rel_spec          = "[" [rel_details] "]" ;
+rel_details       = [rel_alias] [rel_types] [rel_range] [node_properties] ;
+rel_alias         = identifier ;
+rel_types         = ":" rel_type_name ("|" rel_type_name)* ;
+rel_range         = "*" [range_spec] ;
+range_spec        = range_bound ".." [range_bound]
+                  | ".." range_bound
+                  | integer ;
+
+return_clause     = "RETURN" return_item ("," return_item)* ;
+return_item       = return_expr ["AS" identifier] ;
+return_expr       = "similarity" "(" ")" | property_access | identifier | "*" ;
+property_access   = identifier "." identifier ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* SELECT + compound queries                              *)
+(* ═══════════════════════════════════════════════════════ *)
+
+compound_query    = select_stmt (set_operator select_stmt)* ;
+set_operator      = "UNION" "ALL" | "UNION" | "INTERSECT" | "EXCEPT" ;
+
+select_stmt       = "SELECT" [distinct_modifier] select_list
+                    "FROM" from_clause join_clause*
+                    [where_clause]
+                    [group_by_clause] [having_clause]
+                    [order_by_clause]
+                    [limit_clause] [offset_clause]
+                    [with_clause]
+                    [using_fusion_clause] ;
+
+distinct_modifier = "DISTINCT" ;
+
+(* SELECT list *)
+select_list       = "*" | select_item ("," select_item)* ;
+select_item       = "similarity" "(" ")" ["AS" identifier]
+                  | aggregate_function ["AS" identifier]
+                  | qualified_wildcard
+                  | column ["AS" identifier] ;
+qualified_wildcard = identifier "." "*" ;
+column            = identifier ("." identifier)* ;
+
+(* FROM clause *)
+from_clause       = identifier ["AS" identifier] ;
+
+(* JOIN clause (v2.0) *)
+join_clause       = [join_type] "JOIN" identifier ["AS" identifier]
+                    (on_clause | using_clause) ;
+join_type         = "LEFT" ["OUTER"]
+                  | "RIGHT" ["OUTER"]
+                  | "FULL" ["OUTER"]
+                  | "INNER" ;
+on_clause         = "ON" column_ref "=" column_ref ;
+using_clause      = "USING" "(" identifier ("," identifier)* ")" ;
+column_ref        = identifier "." identifier ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* WHERE clause                                           *)
+(* ═══════════════════════════════════════════════════════ *)
+
+where_clause      = "WHERE" or_expr ;
+or_expr           = and_expr ("OR" and_expr)* ;
+and_expr          = primary_expr ("AND" primary_expr)* ;
+primary_expr      = "(" or_expr ")"
+                  | not_expr
+                  | graph_match_expr
+                  | similarity_expr
+                  | vector_fused_search
+                  | sparse_vector_search
+                  | vector_search
+                  | match_expr
+                  | in_expr
+                  | between_expr
+                  | like_expr
+                  | is_null_expr
+                  | compare_expr ;
+
+not_expr          = "NOT" primary_expr ;
+graph_match_expr  = "MATCH" graph_pattern ;
+
+(* Vector operations *)
+vector_search     = "vector" "NEAR" vector_expr ;
+vector_fused_search = "vector" "NEAR_FUSED" vector_array [fusion_clause_inline] ;
+sparse_vector_search = "vector" "SPARSE_NEAR" sparse_vector_expr ["USING" string] ;
+similarity_expr   = "similarity" "(" similarity_field "," vector_expr ")"
+                    compare_op numeric_threshold ;
+
+vector_expr       = vector_literal | parameter ;
+vector_literal    = "[" (float | integer) ("," (float | integer))* "]" ;
+vector_array      = "[" vector_expr ("," vector_expr)* "]" ;
+sparse_vector_expr = sparse_literal | parameter ;
+sparse_literal    = "{" sparse_entry ("," sparse_entry)* "}" ;
+sparse_entry      = integer ":" float ;
+
+fusion_clause_inline = "USING" "FUSION" string ["(" fusion_param_list ")"] ;
+fusion_param_list = fusion_param ("," fusion_param)* ;
+fusion_param      = identifier "=" (float | integer) ;
+
+(* Comparisons *)
+compare_expr      = where_column compare_op value ;
+compare_op        = ">=" | "<=" | "<>" | "!=" | "=" | ">" | "<" ;
+where_column      = identifier ("." identifier)* ;
+
+(* Special conditions *)
+in_expr           = where_column ["NOT"] "IN" "(" value ("," value)* ")" ;
+between_expr      = where_column "BETWEEN" value "AND" value ;
+like_expr         = where_column ("ILIKE" | "LIKE") string ;
+is_null_expr      = where_column "IS" ["NOT"] "NULL" ;
+match_expr        = where_column "MATCH" string ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* GROUP BY, HAVING (v2.0)                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+group_by_clause   = "GROUP" "BY" column ("," column)* ;
+
+having_clause     = "HAVING" having_condition (("AND" | "OR") having_condition)* ;
+having_condition  = aggregate_function compare_op value ;
+
+aggregate_function = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                     "(" ("*" | column) ")" ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* ORDER BY (v2.0 + arithmetic v3.0)                      *)
+(* ═══════════════════════════════════════════════════════ *)
+
+order_by_clause   = "ORDER" "BY" order_by_item ("," order_by_item)* ;
+order_by_item     = order_by_expr ["ASC" | "DESC"] ;
+order_by_expr     = aggregate_function
+                  | property_access
+                  | order_by_arithmetic ;
+
+order_by_arithmetic = oa_additive ;
+oa_additive       = oa_multiplicative (("+" | "-") oa_multiplicative)* ;
+oa_multiplicative = oa_atom (("*" | "/") oa_atom)* ;
+oa_atom           = float | integer
+                  | order_by_similarity
+                  | order_by_similarity_bare
+                  | "(" oa_additive ")"
+                  | identifier ;
+
+order_by_similarity      = "similarity" "(" similarity_field "," vector_expr ")" ;
+order_by_similarity_bare = "similarity" "(" ")" ;
+
+similarity_field  = (letter | "_") (letter | digit | "_" | ".")* ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* LIMIT, OFFSET, WITH, USING FUSION                      *)
+(* ═══════════════════════════════════════════════════════ *)
+
+limit_clause      = "LIMIT" integer ;
+offset_clause     = "OFFSET" integer ;
+
+with_clause       = "WITH" "(" with_option ("," with_option)* ")" ;
+with_option       = identifier "=" with_value ;
+with_value        = string | float | integer | boolean | identifier ;
+
+using_fusion_clause = "USING" "FUSION" ["(" fusion_option_list ")"] ;
+fusion_option_list = fusion_option ("," fusion_option)* ;
+fusion_option     = identifier "=" (string | float | integer) ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* INSERT statement (v3.2)                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+insert_stmt       = "INSERT" "INTO" identifier
+                    "(" identifier ("," identifier)* ")"
+                    "VALUES" values_row ("," values_row)* ;
+values_row        = "(" value ("," value)* ")" ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* UPDATE statement (v3.2)                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+update_stmt       = "UPDATE" identifier "SET"
+                    assignment ("," assignment)*
+                    [where_clause] ;
+assignment        = identifier "=" value ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* DELETE statement (v3.3)                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+delete_stmt       = "DELETE" "FROM" identifier where_clause ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Graph mutation statements (v3.3)                       *)
+(* ═══════════════════════════════════════════════════════ *)
+
+insert_edge_stmt  = "INSERT" "EDGE" "INTO" identifier
+                    "(" edge_field ("," edge_field)* ")"
+                    ["WITH" "PROPERTIES" "(" create_option_list ")"] ;
+edge_field        = identifier "=" value ;
+
+delete_edge_stmt  = "DELETE" "EDGE" value "FROM" identifier ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* DDL: CREATE / DROP COLLECTION, INDEX (v3.3 / v3.5)     *)
+(* ═══════════════════════════════════════════════════════ *)
+
+create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
+drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
+
+create_collection_stmt = "CREATE" ["GRAPH" | "METADATA"] "COLLECTION" identifier
+                         [create_body] ;
+create_body       = "(" create_option_list ")" [create_suffix] ;
+create_option_list = create_option ("," create_option)* ;
+create_option     = identifier "=" create_option_value ;
+create_option_value = string | float | integer | boolean | identifier ;
+
+create_suffix     = "SCHEMALESS"
+                  | "WITH" "SCHEMA" "(" schema_def_list ")"
+                  | with_clause ;
+schema_def_list   = schema_def ("," schema_def)* ;
+schema_def        = node_type_def | edge_type_def ;
+node_type_def     = "NODE" identifier "(" property_def_list ")" ;
+edge_type_def     = "EDGE" identifier "FROM" identifier "TO" identifier ;
+property_def_list = property_def ("," property_def)* ;
+property_def      = identifier ":" type_name ;
+type_name         = "STRING" | "INTEGER" | "FLOAT" | "BOOLEAN" | "VECTOR" ;
+
+drop_collection_stmt = "DROP" "COLLECTION" ["IF" "EXISTS"] identifier ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* TRAIN QUANTIZER (v2.2)                                 *)
+(* ═══════════════════════════════════════════════════════ *)
+
+train_stmt        = "TRAIN" "QUANTIZER" "ON" identifier with_clause ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Admin statements (v3.5-3.6)                            *)
+(* ═══════════════════════════════════════════════════════ *)
+
+analyze_stmt      = "ANALYZE" ["COLLECTION"] identifier ;
+truncate_stmt     = "TRUNCATE" ["COLLECTION"] identifier ;
+alter_collection_stmt = "ALTER" "COLLECTION" identifier "SET"
+                        "(" create_option_list ")" ;
+flush_stmt        = "FLUSH" ["FULL"] [identifier] ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Index management (v3.5)                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
+drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* UPSERT (v3.5)                                          *)
+(* ═══════════════════════════════════════════════════════ *)
+
+upsert_stmt       = "UPSERT" "INTO" identifier
+                    "(" identifier ("," identifier)* ")"
+                    "VALUES" values_row ("," values_row)* ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Graph edge/node queries (v3.5)                         *)
+(* ═══════════════════════════════════════════════════════ *)
+
+select_edges_stmt = "SELECT" "EDGES" "FROM" identifier
+                    [where_clause] [limit_clause] ;
+insert_node_stmt  = "INSERT" "NODE" "INTO" identifier
+                    "(" edge_field ("," edge_field)* ")" ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Subqueries (v3.2)                                      *)
+(* ═══════════════════════════════════════════════════════ *)
+
+subquery_expr     = "(" "SELECT" select_list "FROM" identifier
+                    [where_clause] [group_by_clause] [having_clause]
+                    [limit_clause] ")" ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Values and literals                                    *)
+(* ═══════════════════════════════════════════════════════ *)
+
+value             = subquery_expr | temporal_expr | float | integer
+                  | string | boolean | null | parameter ;
+
+temporal_expr     = temporal_arithmetic | now_function | interval_expr ;
+temporal_arithmetic = (now_function | interval_expr) ("+" | "-")
+                      (now_function | interval_expr) ;
+now_function      = "NOW" "(" ")" ;
+interval_expr     = "INTERVAL" string ;
+
+string            = "'" (char | "''")* "'" ;
+integer           = ["-"] digit+ ;
+float             = ["-"] digit+ "." digit+ ;
+boolean           = "TRUE" | "FALSE" ;
+null              = "NULL" ;
+parameter         = "$" identifier ;
+
+identifier        = quoted_identifier | regular_identifier ;
+regular_identifier = (letter | "_") (letter | digit | "_")* ;
+quoted_identifier = "`" backtick_inner "`" | '"' doublequote_inner '"' ;
+backtick_inner    = (!"`" ANY)+ ;
+doublequote_inner = (doublequote_escape | !('"') ANY)* ;
+doublequote_escape = '""' ;
+
+(* ═══════════════════════════════════════════════════════ *)
+(* Whitespace and comments                                *)
+(* ═══════════════════════════════════════════════════════ *)
+
+WHITESPACE        = " " | "\t" | "\r" | "\n" ;
+COMMENT           = "--" (!"\n" ANY)* ;
+```
+
+---
 
 ## License
 

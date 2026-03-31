@@ -2,10 +2,13 @@
 //!
 //! This module defines the data structures representing parsed VelesQL queries.
 
+mod admin;
 mod aggregation;
 pub(crate) mod condition;
+mod ddl;
 mod dml;
 mod fusion;
+mod introspection;
 mod join;
 mod select;
 mod train;
@@ -15,6 +18,7 @@ mod with_clause;
 use serde::{Deserialize, Serialize};
 
 // Re-export all types for backward compatibility
+pub use admin::{AdminStatement, FlushStatement};
 pub use aggregation::{
     AggregateArg, AggregateFunction, AggregateType, GroupByClause, HavingClause, HavingCondition,
     LogicalOp,
@@ -24,8 +28,18 @@ pub use condition::{
     IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, SparseVectorExpr,
     SparseVectorSearch, VectorFusedSearch, VectorSearch,
 };
-pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
+pub use ddl::{
+    AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateCollectionStatement,
+    CreateIndexStatement, DdlStatement, DropCollectionStatement, DropIndexStatement,
+    GraphCollectionParams, GraphSchemaMode, SchemaDefinition, TruncateStatement,
+    VectorCollectionParams,
+};
+pub use dml::{
+    DeleteEdgeStatement, DeleteStatement, DmlStatement, InsertEdgeStatement, InsertNodeStatement,
+    InsertStatement, SelectEdgesStatement, UpdateAssignment, UpdateStatement,
+};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
+pub use introspection::{DescribeCollectionStatement, IntrospectionStatement};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
     ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
@@ -54,12 +68,21 @@ pub struct Query {
     /// MATCH clause for graph pattern matching (EPIC-045 US-001).
     #[serde(default)]
     pub match_clause: Option<crate::velesql::MatchClause>,
-    /// Optional DML statement (INSERT/UPDATE).
+    /// Optional DML statement (INSERT/UPDATE/DELETE).
     #[serde(default)]
     pub dml: Option<DmlStatement>,
     /// Optional TRAIN statement (TRAIN QUANTIZER).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub train: Option<TrainStatement>,
+    /// Optional DDL statement (CREATE/DROP COLLECTION) -- VelesQL v3.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ddl: Option<DdlStatement>,
+    /// Optional introspection statement (SHOW/DESCRIBE/EXPLAIN) -- VelesQL v3.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub introspection: Option<IntrospectionStatement>,
+    /// Optional admin statement (FLUSH) -- VelesQL v3.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin: Option<AdminStatement>,
 }
 
 impl Query {
@@ -72,7 +95,12 @@ impl Query {
     /// Returns true if this is a SELECT query.
     #[must_use]
     pub fn is_select_query(&self) -> bool {
-        self.match_clause.is_none() && self.dml.is_none() && self.train.is_none()
+        self.match_clause.is_none()
+            && self.dml.is_none()
+            && self.train.is_none()
+            && self.ddl.is_none()
+            && self.introspection.is_none()
+            && self.admin.is_none()
     }
 
     /// Returns true if this is a DML query.
@@ -87,6 +115,36 @@ impl Query {
         self.train.is_some()
     }
 
+    /// Returns true if this is a DDL statement (CREATE/DROP COLLECTION).
+    #[must_use]
+    pub fn is_ddl_query(&self) -> bool {
+        self.ddl.is_some()
+    }
+
+    /// Returns true if this is an introspection statement (SHOW/DESCRIBE/EXPLAIN).
+    #[must_use]
+    pub fn is_introspection_query(&self) -> bool {
+        self.introspection.is_some()
+    }
+
+    /// Returns true if this is an admin statement (FLUSH).
+    #[must_use]
+    pub fn is_admin_query(&self) -> bool {
+        self.admin.is_some()
+    }
+
+    /// Returns true if this is a SELECT EDGES query.
+    #[must_use]
+    pub fn is_select_edges_query(&self) -> bool {
+        matches!(self.dml, Some(DmlStatement::SelectEdges(_)))
+    }
+
+    /// Returns true if this is an INSERT NODE query.
+    #[must_use]
+    pub fn is_insert_node_query(&self) -> bool {
+        matches!(self.dml, Some(DmlStatement::InsertNode(_)))
+    }
+
     /// Creates a new SELECT query.
     #[must_use]
     pub fn new_select(select: SelectStatement) -> Self {
@@ -97,6 +155,9 @@ impl Query {
             match_clause: None,
             dml: None,
             train: None,
+            ddl: None,
+            introspection: None,
+            admin: None,
         }
     }
 
@@ -113,6 +174,9 @@ impl Query {
             match_clause: Some(match_clause),
             dml: None,
             train: None,
+            ddl: None,
+            introspection: None,
+            admin: None,
         }
     }
 
@@ -126,6 +190,9 @@ impl Query {
             match_clause: None,
             dml: Some(dml),
             train: None,
+            ddl: None,
+            introspection: None,
+            admin: None,
         }
     }
 
@@ -139,6 +206,57 @@ impl Query {
             match_clause: None,
             dml: None,
             train: Some(train),
+            ddl: None,
+            introspection: None,
+            admin: None,
+        }
+    }
+
+    /// Creates a new DDL query (CREATE/DROP COLLECTION).
+    #[must_use]
+    pub fn new_ddl(ddl: DdlStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select: SelectStatement::empty(),
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: Some(ddl),
+            introspection: None,
+            admin: None,
+        }
+    }
+
+    /// Creates a new introspection query (SHOW/DESCRIBE/EXPLAIN).
+    #[must_use]
+    pub fn new_introspection(stmt: IntrospectionStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select: SelectStatement::empty(),
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: None,
+            introspection: Some(stmt),
+            admin: None,
+        }
+    }
+
+    /// Creates a new admin query (FLUSH).
+    #[must_use]
+    pub fn new_admin(stmt: AdminStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select: SelectStatement::empty(),
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: None,
+            introspection: None,
+            admin: Some(stmt),
         }
     }
 }

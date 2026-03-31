@@ -250,6 +250,8 @@ fn round_trip_query_type_enum() {
         (QueryType::Aggregation, "\"aggregation\""),
         (QueryType::Rows, "\"rows\""),
         (QueryType::Graph, "\"graph\""),
+        (QueryType::Ddl, "\"ddl\""),
+        (QueryType::Dml, "\"dml\""),
     ];
     for (variant, expected_json) in &cases {
         let serialized = serde_json::to_string(variant).unwrap();

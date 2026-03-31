@@ -10,11 +10,12 @@ GitHub:  https://github.com/cyberlife-coder/VelesDB
 Docs:    https://velesdb.com/en/
 
 Requirements:
-    pip install velesdb==1.10.0 sentence-transformers
+    pip install velesdb==1.11.0 sentence-transformers
 
 This script contains every code example from the article.
 Run it end-to-end to reproduce all results.
 """
+import atexit
 import velesdb
 import shutil
 import os
@@ -27,16 +28,20 @@ DB_PATH = "./support_data"
 if os.path.exists(DB_PATH):
     shutil.rmtree(DB_PATH)
 
+# Register cleanup so the demo directory is removed even if the script
+# raises an exception partway through.
+atexit.register(shutil.rmtree, DB_PATH, True)
+
 model = SentenceTransformer("all-MiniLM-L6-v2")
 db = velesdb.Database(DB_PATH)
 
 # Create a graph collection: vector + graph + columnar in one object
-graph = db._inner.create_graph_collection(
+graph = db.create_graph_collection(
     "support_kb", dimension=384, metric="cosine"
 )
 
 # Get the collection handle for upsert and VelesQL SELECT queries
-collection = db._inner.get_collection("support_kb")
+collection = db.get_collection("support_kb")
 
 # ============================================================
 # Step 1: Build the knowledge base
@@ -347,7 +352,7 @@ def answer_support_question(question, graph):
     top = results[0]
     print(f"Best match: {top['payload']['title']}")
     print(f"  Score: {top['fused_score']:.3f}")
-    related = graph.traverse_bfs(top["id"], max_depth=2)
+    related = graph.traverse_bfs(top["node_id"], max_depth=2)
     if related:
         print("Related articles:")
         for r in related:
@@ -412,4 +417,4 @@ print(f"\n{'=' * 60}")
 print("Done! All examples executed successfully.")
 print(f"VelesDB version: {velesdb.__version__}")
 print("=" * 60)
-shutil.rmtree(DB_PATH)
+# DB_PATH is cleaned up by the atexit handler registered during setup.

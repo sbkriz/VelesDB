@@ -75,15 +75,41 @@ impl ParsedQuery {
         self.inner.is_match_query()
     }
 
-    /// Get the table name from the FROM clause.
-    #[wasm_bindgen(getter, js_name = tableName)]
-    pub fn table_name(&self) -> Option<String> {
+    /// Get the collection name from the FROM clause, DDL, or DML statement.
+    ///
+    /// For DDL statements, returns the collection name from the DDL AST.
+    /// For DML statements, returns the collection from the DML struct.
+    /// Alias: `tableName` is kept for backward compatibility.
+    #[wasm_bindgen(getter, js_name = collectionName)]
+    pub fn collection_name(&self) -> Option<String> {
+        // DDL: collection name is in the DDL AST, not in SELECT FROM.
+        if let Some(ddl) = &self.inner.ddl {
+            return Some(match ddl {
+                velesdb_core::velesql::DdlStatement::CreateCollection(s) => s.name.clone(),
+                velesdb_core::velesql::DdlStatement::DropCollection(s) => s.name.clone(),
+                velesdb_core::velesql::DdlStatement::CreateIndex(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::DropIndex(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::Analyze(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::Truncate(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::AlterCollection(s) => s.collection.clone(),
+            });
+        }
+        // DML: collection name is in the DML struct, not in SELECT FROM.
+        if let Some(name) = Self::dml_collection_name(&self.inner) {
+            return Some(name);
+        }
         let from = &self.inner.select.from;
         if from.is_empty() {
             None
         } else {
             Some(from.clone())
         }
+    }
+
+    /// Legacy alias for `collectionName`. Prefer `collectionName`.
+    #[wasm_bindgen(getter, js_name = tableName)]
+    pub fn table_name(&self) -> Option<String> {
+        self.collection_name()
     }
 
     /// Get the list of selected columns as JSON array.
@@ -184,6 +210,39 @@ impl ParsedQuery {
         self.inner.select.joins.len()
     }
 
+    // === DDL/DML Introspection (VelesQL v3.3) ===
+
+    /// Check if this is a DDL query (CREATE/DROP COLLECTION).
+    #[wasm_bindgen(getter, js_name = isDdl)]
+    pub fn is_ddl(&self) -> bool {
+        self.inner.is_ddl_query()
+    }
+
+    /// Check if this is a DML mutation (INSERT/UPDATE/DELETE/INSERT EDGE/DELETE EDGE).
+    #[wasm_bindgen(getter, js_name = isDml)]
+    pub fn is_dml(&self) -> bool {
+        self.inner.is_dml_query()
+    }
+
+    /// Check if this is a DELETE statement (DELETE FROM or DELETE EDGE).
+    #[wasm_bindgen(getter, js_name = isDelete)]
+    pub fn is_delete(&self) -> bool {
+        matches!(
+            &self.inner.dml,
+            Some(velesdb_core::velesql::DmlStatement::Delete(_))
+                | Some(velesdb_core::velesql::DmlStatement::DeleteEdge(_))
+        )
+    }
+
+    /// Check if this is an INSERT EDGE statement.
+    #[wasm_bindgen(getter, js_name = isInsertEdge)]
+    pub fn is_insert_edge(&self) -> bool {
+        matches!(
+            &self.inner.dml,
+            Some(velesdb_core::velesql::DmlStatement::InsertEdge(_))
+        )
+    }
+
     // === MATCH Query Introspection (EPIC-053 US-004) ===
 
     /// Get the number of node patterns in the MATCH clause.
@@ -277,6 +336,25 @@ impl ParsedQuery {
 }
 
 impl ParsedQuery {
+    /// Extracts the collection name from a DML statement, if present.
+    fn dml_collection_name(query: &velesdb_core::velesql::Query) -> Option<String> {
+        use velesdb_core::velesql::DmlStatement;
+        let name = match query.dml.as_ref()? {
+            DmlStatement::Insert(s) | DmlStatement::Upsert(s) => &s.table,
+            DmlStatement::Update(s) => &s.table,
+            DmlStatement::Delete(s) => &s.table,
+            DmlStatement::InsertEdge(s) => &s.collection,
+            DmlStatement::DeleteEdge(s) => &s.collection,
+            DmlStatement::SelectEdges(s) => &s.collection,
+            DmlStatement::InsertNode(s) => &s.collection,
+        };
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.clone())
+        }
+    }
+
     /// Recursively check if a condition contains vector search.
     fn condition_has_vector_search(cond: &velesdb_core::velesql::Condition) -> bool {
         use velesdb_core::velesql::Condition;
@@ -382,6 +460,66 @@ mod tests {
             .as_ref()
             .expect("should have match_clause");
         assert_eq!(mc.return_clause.limit, Some(10));
+    }
+
+    // === DDL/DML Introspection Tests (VelesQL v3.3) ===
+
+    #[test]
+    fn test_ddl_create_collection_detected() {
+        let query =
+            Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'cosine');").unwrap();
+        assert!(query.is_ddl_query());
+        assert!(!query.is_dml_query());
+        assert!(!query.is_select_query());
+    }
+
+    #[test]
+    fn test_ddl_drop_collection_detected() {
+        let query = Parser::parse("DROP COLLECTION docs;").unwrap();
+        assert!(query.is_ddl_query());
+        assert!(!query.is_dml_query());
+    }
+
+    #[test]
+    fn test_dml_insert_edge_detected() {
+        let query = Parser::parse("INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS');")
+            .unwrap();
+        assert!(query.is_dml_query());
+        assert!(!query.is_ddl_query());
+        assert!(!query.is_select_query());
+        assert!(matches!(
+            &query.dml,
+            Some(velesdb_core::velesql::DmlStatement::InsertEdge(_))
+        ));
+    }
+
+    #[test]
+    fn test_dml_delete_detected() {
+        let query = Parser::parse("DELETE FROM docs WHERE id = 1;").unwrap();
+        assert!(query.is_dml_query());
+        assert!(!query.is_ddl_query());
+        assert!(matches!(
+            &query.dml,
+            Some(velesdb_core::velesql::DmlStatement::Delete(_))
+        ));
+    }
+
+    #[test]
+    fn test_dml_delete_edge_detected() {
+        let query = Parser::parse("DELETE EDGE 42 FROM kg;").unwrap();
+        assert!(query.is_dml_query());
+        assert!(matches!(
+            &query.dml,
+            Some(velesdb_core::velesql::DmlStatement::DeleteEdge(_))
+        ));
+    }
+
+    #[test]
+    fn test_select_is_not_ddl_or_dml() {
+        let query = Parser::parse("SELECT * FROM docs LIMIT 10").unwrap();
+        assert!(!query.is_ddl_query());
+        assert!(!query.is_dml_query());
+        assert!(query.is_select_query());
     }
 
     // === Original SELECT Tests ===

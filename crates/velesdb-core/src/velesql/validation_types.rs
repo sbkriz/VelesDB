@@ -117,6 +117,8 @@ pub enum ValidationErrorKind {
     UndeclaredAlias,
     /// Parameterized `similarity(field, $vec)` inside arithmetic is not yet supported.
     UnsupportedArithmeticSimilarity,
+    /// LET bindings used with DDL or DML statements (nonsensical).
+    InvalidLetBinding,
 }
 
 impl ValidationErrorKind {
@@ -132,6 +134,7 @@ impl ValidationErrorKind {
             Self::SimilarityWithoutContext => "V006",
             Self::UndeclaredAlias => "V007",
             Self::UnsupportedArithmeticSimilarity => "V008",
+            Self::InvalidLetBinding => "V009",
         }
     }
 
@@ -152,6 +155,7 @@ impl ValidationErrorKind {
                 "Parameterized similarity(field, $vec) inside arithmetic expressions \
                  is not yet supported"
             }
+            Self::InvalidLetBinding => "LET bindings are not supported with DDL or DML statements",
         }
     }
 }

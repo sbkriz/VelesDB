@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "1.10.0"
+    "version": "1.11.0"
   },
   "servers": [
     {
@@ -1833,7 +1833,7 @@
           "query"
         ],
         "summary": "Execute a VelesQL query.",
-        "description": "BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)\nand routes them to execute_aggregate for proper handling.",
+        "description": "BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)\nand routes them to execute_aggregate for proper handling.\n\nDDL statements (CREATE/DROP COLLECTION) are intercepted before collection\nresolution and dispatched directly through `Database::execute_query`.",
         "operationId": "query",
         "requestBody": {
           "content": {
