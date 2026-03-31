@@ -354,7 +354,7 @@ fn apply_alter_option(key: &str, value: &str) -> Result<()> {
                     "auto_reindex must be 'true' or 'false', got '{value}'"
                 ))
             })?;
-            // TODO(US-300): Persist auto_reindex flag once Collection exposes a setter.
+            // Persistence tracked in US-300 — response payload includes a warning.
             Ok(())
         }
         _ => Err(Error::Query(format!(
