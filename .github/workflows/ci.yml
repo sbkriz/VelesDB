@@ -292,6 +292,10 @@ jobs:
         with:
           api-token: ${{ secrets.CODACY_API_TOKEN }}
           coverage-reports: lcov.info
+        env:
+          CODACY_ORGANIZATION_PROVIDER: gh
+          CODACY_USERNAME: cyberlife-coder
+          CODACY_PROJECT_NAME: VelesDB
 
       - name: Upload lcov for SonarCloud
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
