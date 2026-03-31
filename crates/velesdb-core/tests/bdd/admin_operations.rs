@@ -368,3 +368,94 @@ fn test_truncate_graph_collection_removes_nodes_and_edges() {
         .expect("get graph after truncate");
     assert_eq!(gc.edge_count(), 0, "edges should be empty after TRUNCATE");
 }
+
+#[test]
+fn test_truncate_empty_graph_collection() {
+    let (_dir, db) = create_test_db();
+
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION empty_g (dimension = 4, metric = 'cosine') SCHEMALESS",
+    )
+    .expect("create");
+
+    // TRUNCATE on empty graph should succeed with 0 deleted.
+    let results = execute_sql(&db, "TRUNCATE empty_g").expect("TRUNCATE empty graph");
+    assert_eq!(results.len(), 1);
+
+    let count = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("deleted_count"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(999);
+    assert_eq!(count, 0, "empty graph should report 0 deletions");
+}
+
+#[test]
+fn test_truncate_graph_then_reinsert() {
+    let (_dir, db) = create_test_db();
+
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION reuse_g (dimension = 4, metric = 'cosine') SCHEMALESS",
+    )
+    .expect("create");
+
+    let gc = db.get_graph_collection("reuse_g").expect("get");
+    gc.upsert_node_payload(1, &serde_json::json!({"name": "Alice"}))
+        .expect("node");
+    execute_sql(
+        &db,
+        "INSERT EDGE INTO reuse_g (id = 1, source = 1, target = 1, label = 'SELF')",
+    )
+    .expect("edge");
+
+    // TRUNCATE then re-insert.
+    execute_sql(&db, "TRUNCATE reuse_g").expect("truncate");
+
+    let gc = db.get_graph_collection("reuse_g").expect("get after truncate");
+    assert_eq!(gc.edge_count(), 0);
+    assert!(gc.all_node_ids().is_empty());
+
+    // Re-insert should work normally.
+    gc.upsert_node_payload(10, &serde_json::json!({"name": "Bob"}))
+        .expect("re-insert node");
+    execute_sql(
+        &db,
+        "INSERT EDGE INTO reuse_g (id = 20, source = 10, target = 10, label = 'NEW')",
+    )
+    .expect("re-insert edge");
+
+    assert_eq!(gc.edge_count(), 1, "new edge should exist");
+    assert!(!gc.all_node_ids().is_empty(), "new node should exist");
+}
+
+#[test]
+fn test_truncate_graph_edges_only_no_node_payloads() {
+    let (_dir, db) = create_test_db();
+
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION edges_only (dimension = 4, metric = 'cosine') SCHEMALESS",
+    )
+    .expect("create");
+
+    // Insert edges without explicit node payloads (nodes exist as edge endpoints).
+    execute_sql(
+        &db,
+        "INSERT EDGE INTO edges_only (id = 1, source = 100, target = 200, label = 'REF')",
+    )
+    .expect("edge");
+
+    let gc = db.get_graph_collection("edges_only").expect("get");
+    assert_eq!(gc.edge_count(), 1);
+
+    // TRUNCATE should still succeed.
+    let results = execute_sql(&db, "TRUNCATE edges_only").expect("truncate edges-only graph");
+    assert_eq!(results.len(), 1);
+
+    let gc = db.get_graph_collection("edges_only").expect("get after");
+    assert_eq!(gc.edge_count(), 0, "edges should be cleared");
+}
