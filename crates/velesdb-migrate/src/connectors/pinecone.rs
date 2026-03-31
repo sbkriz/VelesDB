@@ -78,14 +78,9 @@ impl PineconeConnector {
     }
 
     /// Fetches full vector data for a batch of IDs from Pinecone.
-    async fn fetch_full_vectors(
-        &self,
-        base: &str,
-        ids: &[String],
-    ) -> Result<Vec<ExtractedPoint>> {
+    async fn fetch_full_vectors(&self, base: &str, ids: &[String]) -> Result<Vec<ExtractedPoint>> {
         let fetch_url = format!("{base}/vectors/fetch");
-        let mut params: Vec<(&str, String)> =
-            ids.iter().map(|id| ("ids", id.clone())).collect();
+        let mut params: Vec<(&str, String)> = ids.iter().map(|id| ("ids", id.clone())).collect();
         if let Some(ref ns) = self.config.namespace {
             params.push(("namespace", ns.clone()));
         }

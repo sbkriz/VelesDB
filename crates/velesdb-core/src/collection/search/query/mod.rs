@@ -304,7 +304,11 @@ impl Collection {
                 "LET bindings are not supported with MATCH queries in this version".to_string(),
             ));
         }
-        Ok(Some(self.dispatch_match_query(match_clause, params, ctx)?))
+        Ok(Some(self.dispatch_match_query(
+            match_clause,
+            params,
+            ctx,
+        )?))
     }
 
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.

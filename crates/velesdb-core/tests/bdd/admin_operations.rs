@@ -415,7 +415,9 @@ fn test_truncate_graph_then_reinsert() {
     // TRUNCATE then re-insert.
     execute_sql(&db, "TRUNCATE reuse_g").expect("truncate");
 
-    let gc = db.get_graph_collection("reuse_g").expect("get after truncate");
+    let gc = db
+        .get_graph_collection("reuse_g")
+        .expect("get after truncate");
     assert_eq!(gc.edge_count(), 0);
     assert!(gc.all_node_ids().is_empty());
 

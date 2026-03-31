@@ -131,7 +131,10 @@ fn test_flush_full_is_reserved_word() {
     let admin = query.admin.expect("test: expected admin statement");
     let AdminStatement::Flush(stmt) = admin;
 
-    assert!(stmt.full, "FLUSH full should set full=true (keyword consumed)");
+    assert!(
+        stmt.full,
+        "FLUSH full should set full=true (keyword consumed)"
+    );
     assert!(
         stmt.collection.is_none(),
         "FLUSH full should not produce a collection name"
