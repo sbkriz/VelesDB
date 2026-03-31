@@ -82,18 +82,6 @@ ORDER BY similarity() DESC LIMIT 5
 
 ---
 
-## Why VelesDB?
-
-| Today (3 systems to maintain) | With VelesDB (1 binary) |
-|-------------------------------|------------------------|
-| pgvector for embeddings | **Vector Engine** — 47us HNSW search (768D) |
-| Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows |
-| Custom glue code + 3 query languages | **VelesQL** — one language for everything |
-| 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
-
----
-
 ## Three Engines, One Query
 
 <table align="center">
