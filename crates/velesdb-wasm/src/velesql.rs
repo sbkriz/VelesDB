@@ -75,9 +75,10 @@ impl ParsedQuery {
         self.inner.is_match_query()
     }
 
-    /// Get the collection name from the FROM clause.
+    /// Get the collection name from the FROM clause, DDL, or DML statement.
     ///
     /// For DDL statements, returns the collection name from the DDL AST.
+    /// For DML statements, returns the collection from the DML struct.
     /// Alias: `tableName` is kept for backward compatibility.
     #[wasm_bindgen(getter, js_name = collectionName)]
     pub fn collection_name(&self) -> Option<String> {
@@ -92,6 +93,10 @@ impl ParsedQuery {
                 velesdb_core::velesql::DdlStatement::Truncate(s) => s.collection.clone(),
                 velesdb_core::velesql::DdlStatement::AlterCollection(s) => s.collection.clone(),
             });
+        }
+        // DML: collection name is in the DML struct, not in SELECT FROM.
+        if let Some(name) = Self::dml_collection_name(&self.inner) {
+            return Some(name);
         }
         let from = &self.inner.select.from;
         if from.is_empty() {
@@ -331,6 +336,21 @@ impl ParsedQuery {
 }
 
 impl ParsedQuery {
+    /// Extracts the collection name from a DML statement, if present.
+    fn dml_collection_name(query: &velesdb_core::velesql::Query) -> Option<String> {
+        use velesdb_core::velesql::DmlStatement;
+        let name = match query.dml.as_ref()? {
+            DmlStatement::Insert(s) | DmlStatement::Upsert(s) => &s.table,
+            DmlStatement::Update(s) => &s.table,
+            DmlStatement::Delete(s) => &s.table,
+            DmlStatement::InsertEdge(s) => &s.collection,
+            DmlStatement::DeleteEdge(s) => &s.collection,
+            DmlStatement::SelectEdges(s) => &s.collection,
+            DmlStatement::InsertNode(s) => &s.collection,
+        };
+        if name.is_empty() { None } else { Some(name.clone()) }
+    }
+
     /// Recursively check if a condition contains vector search.
     fn condition_has_vector_search(cond: &velesdb_core::velesql::Condition) -> bool {
         use velesdb_core::velesql::Condition;

@@ -23,21 +23,24 @@ use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
 /// Returns `true` when the query should bypass collection resolution and go
-/// directly through `Database::execute_query` (DDL, introspection, admin, or
-/// graph/delete DML that doesn't produce result rows).
+/// directly through `Database::execute_query` — DDL, introspection, admin,
+/// TRAIN, or graph/edge/delete DML that resolves its own collection from the AST.
 fn requires_mutation_dispatch(parsed: &Query) -> bool {
     parsed.is_ddl_query()
         || parsed.is_introspection_query()
         || parsed.is_admin_query()
-        || is_graph_or_delete_dml(parsed)
+        || parsed.is_train()
+        || is_ast_routed_dml(parsed)
 }
 
-/// Returns `true` for DML mutations that do not produce meaningful result rows:
+/// Returns `true` for DML statements that resolve their collection name from
+/// the AST rather than from the request body's `FROM` clause:
 /// `INSERT EDGE`, `DELETE`, `DELETE EDGE`, `SELECT EDGES`, `INSERT NODE`.
 ///
 /// `INSERT INTO`, `UPSERT`, and `UPDATE` return result rows and must flow
-/// through the standard query path.
-fn is_graph_or_delete_dml(parsed: &Query) -> bool {
+/// through the standard query path (they use `stmt.table` which maps to
+/// the SELECT `FROM`).
+fn is_ast_routed_dml(parsed: &Query) -> bool {
     matches!(
         parsed.dml,
         Some(
@@ -170,13 +173,17 @@ pub async fn query(
     )
 }
 
-/// Execute a DDL, graph/delete DML, introspection, or admin query via the database.
+/// Execute a DDL, graph/delete DML, introspection, admin, or TRAIN query.
 ///
 /// DDL (CREATE/DROP/ALTER/ANALYZE/TRUNCATE), graph/delete DML mutations
 /// (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES, INSERT NODE),
-/// introspection (SHOW/DESCRIBE/EXPLAIN), and admin (FLUSH) statements
-/// extract collection names from the SQL AST — no FROM clause needed.
-/// Returns a standard `QueryResponse` with zero rows on success.
+/// introspection (SHOW/DESCRIBE/EXPLAIN), admin (FLUSH), and TRAIN
+/// statements extract collection names from the SQL AST — no FROM clause
+/// needed.
+///
+/// Results from `Database::execute_query` are propagated into the response
+/// so that introspection (SHOW, DESCRIBE, EXPLAIN), ANALYZE, and SELECT
+/// EDGES return their data to the caller.
 fn execute_mutation_query(
     state: &Arc<AppState>,
     parsed: &Query,
@@ -184,19 +191,22 @@ fn execute_mutation_query(
     start: std::time::Instant,
 ) -> axum::response::Response {
     match state.db.execute_query(parsed, params) {
-        Ok(_) => {
+        Ok(results) => {
             let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
             #[allow(clippy::cast_possible_truncation)]
             // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
             let took_ms = timing_ms.round() as u64;
+            let projected =
+                projection::project_results(&results, &parsed.select.columns);
+            let rows_returned = projected.len();
             Json(QueryResponse {
-                results: Vec::new(),
+                results: projected,
                 timing_ms,
                 took_ms,
-                rows_returned: 0,
+                rows_returned,
                 meta: QueryResponseMeta {
                     velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
-                    count: 0,
+                    count: rows_returned,
                 },
             })
             .into_response()

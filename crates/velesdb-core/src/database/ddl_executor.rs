@@ -176,11 +176,19 @@ impl Database {
     /// with the count of deleted points. Returns success with
     /// `deleted_count: 0` if the collection is already empty.
     ///
+    /// Checks vector/legacy collections first, then falls back to
+    /// metadata collections (which `resolve_writable_collection` skips).
+    ///
     /// # Errors
     ///
     /// Returns an error if the collection does not exist or deletion fails.
     fn execute_truncate(&self, stmt: &TruncateStatement) -> Result<Vec<SearchResult>> {
-        let collection = self.resolve_writable_collection(&stmt.collection)?;
+        // Try vector/legacy first via resolve_writable_collection.
+        // Fall back to metadata collections, which support TRUNCATE but
+        // are excluded from resolve_writable_collection (they reject INSERT/UPDATE).
+        let collection = self
+            .resolve_writable_collection(&stmt.collection)
+            .or_else(|_| self.resolve_collection(&stmt.collection))?;
         let ids = collection.all_point_ids();
         let count = ids.len();
         if !ids.is_empty() {
