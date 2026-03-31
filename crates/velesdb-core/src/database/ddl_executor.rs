@@ -183,9 +183,11 @@ impl Database {
     ///
     /// Returns an error if the collection does not exist or deletion fails.
     fn execute_truncate(&self, stmt: &TruncateStatement) -> Result<Vec<SearchResult>> {
-        // Try vector/legacy first via resolve_writable_collection.
-        // Fall back to metadata collections, which support TRUNCATE but
-        // are excluded from resolve_writable_collection (they reject INSERT/UPDATE).
+        // Graph collections have both nodes and edges — handle separately.
+        if let Some(gc) = self.get_graph_collection(&stmt.collection) {
+            return Self::truncate_graph(gc);
+        }
+        // Vector/legacy + metadata fallback.
         let collection = self
             .resolve_writable_collection(&stmt.collection)
             .or_else(|_| self.resolve_collection(&stmt.collection))?;
@@ -195,6 +197,29 @@ impl Database {
             collection.delete(&ids)?;
         }
         let payload = serde_json::json!({"deleted_count": count});
+        let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
+        Ok(vec![result])
+    }
+
+    /// Truncates a graph collection: removes all edges then all nodes.
+    fn truncate_graph(gc: crate::collection::GraphCollection) -> Result<Vec<SearchResult>> {
+        // Remove all edges first (edges reference nodes).
+        let edges = gc.get_edges(None);
+        let edge_count = edges.len();
+        for edge in &edges {
+            gc.remove_edge(edge.id());
+        }
+        // Remove all node payloads.
+        let node_ids = gc.all_node_ids();
+        let node_count = node_ids.len();
+        if !node_ids.is_empty() {
+            gc.delete(&node_ids)?;
+        }
+        let payload = serde_json::json!({
+            "deleted_nodes": node_count,
+            "deleted_edges": edge_count,
+            "deleted_count": node_count + edge_count,
+        });
         let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
         Ok(vec![result])
     }

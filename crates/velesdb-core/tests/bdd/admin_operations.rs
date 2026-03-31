@@ -319,3 +319,52 @@ fn test_alter_nonexistent_fails() {
         "error should mention missing collection, got: {msg}"
     );
 }
+
+// ============================================================================
+// TRUNCATE on graph collections
+// ============================================================================
+
+#[test]
+fn test_truncate_graph_collection_removes_nodes_and_edges() {
+    let (_dir, db) = create_test_db();
+
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION kg (dimension = 4, metric = 'cosine') SCHEMALESS",
+    )
+    .expect("create graph");
+
+    // Insert nodes.
+    let gc = db.get_graph_collection("kg").expect("get graph");
+    gc.upsert_node_payload(1, &serde_json::json!({"name": "Alice"}))
+        .expect("node 1");
+    gc.upsert_node_payload(2, &serde_json::json!({"name": "Bob"}))
+        .expect("node 2");
+
+    // Insert edges.
+    execute_sql(
+        &db,
+        "INSERT EDGE INTO kg (id = 10, source = 1, target = 2, label = 'KNOWS')",
+    )
+    .expect("edge");
+
+    assert!(!gc.all_node_ids().is_empty(), "graph should have nodes");
+    assert!(gc.edge_count() > 0, "graph should have edges");
+
+    // TRUNCATE graph collection.
+    let results = execute_sql(&db, "TRUNCATE kg").expect("TRUNCATE graph should succeed");
+    assert_eq!(results.len(), 1);
+
+    let payload = results[0].point.payload.as_ref().expect("payload");
+    let deleted_count = payload
+        .get("deleted_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    assert!(deleted_count > 0, "should have deleted nodes + edges");
+
+    // Verify empty.
+    let gc = db
+        .get_graph_collection("kg")
+        .expect("get graph after truncate");
+    assert_eq!(gc.edge_count(), 0, "edges should be empty after TRUNCATE");
+}
