@@ -327,8 +327,8 @@ impl Collection {
         }
 
         let mut final_result = match_result;
-        final_result.projected = self
-            .project_properties(&final_result.bindings, &ctx.match_clause.return_clause);
+        final_result.projected =
+            self.project_properties(&final_result.bindings, &ctx.match_clause.return_clause);
 
         ctx.all_results.push(final_result);
         Ok(())

@@ -65,8 +65,8 @@ fn test_dml_collection_name_insert() {
 /// DELETE FROM must set the `table` field to the collection name.
 #[test]
 fn test_dml_collection_name_delete() {
-    let query = Parser::parse("DELETE FROM products WHERE id = 1")
-        .expect("test: DELETE FROM should parse");
+    let query =
+        Parser::parse("DELETE FROM products WHERE id = 1").expect("test: DELETE FROM should parse");
 
     let dml = query.dml.expect("test: expected DML statement");
     let DmlStatement::Delete(delete) = dml else {
@@ -79,10 +79,8 @@ fn test_dml_collection_name_delete() {
 /// INSERT EDGE INTO must set the `collection` field to the graph collection name.
 #[test]
 fn test_dml_collection_name_insert_edge() {
-    let query = Parser::parse(
-        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS')",
-    )
-    .expect("test: INSERT EDGE INTO should parse");
+    let query = Parser::parse("INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS')")
+        .expect("test: INSERT EDGE INTO should parse");
 
     let dml = query.dml.expect("test: expected DML statement");
     let DmlStatement::InsertEdge(edge) = dml else {
@@ -109,10 +107,8 @@ fn test_dml_collection_name_select_edges() {
 /// INSERT NODE INTO must set the `collection` field to the graph collection name.
 #[test]
 fn test_dml_collection_name_insert_node() {
-    let query = Parser::parse(
-        "INSERT NODE INTO kg (id = 1, payload = '{\"name\": \"A\"}')",
-    )
-    .expect("test: INSERT NODE INTO should parse");
+    let query = Parser::parse("INSERT NODE INTO kg (id = 1, payload = '{\"name\": \"A\"}')")
+        .expect("test: INSERT NODE INTO should parse");
 
     let dml = query.dml.expect("test: expected DML statement");
     let DmlStatement::InsertNode(node) = dml else {
