@@ -76,11 +76,16 @@ export function isLikelyAggregationQuery(queryString: string): boolean {
   );
 }
 
-/** Detect DDL or mutation statements that must always route to `/query`. */
+/** Detect DDL, mutation, introspection, or admin statements that must always route to `/query`. */
 export function isLikelyDdlOrMutationQuery(queryString: string): boolean {
-  return /^\s*(CREATE|DROP)\s+(COLLECTION|GRAPH|METADATA)\b/i.test(queryString)
+  return /^\s*(CREATE|DROP)\s+(COLLECTION|GRAPH|METADATA|INDEX)\b/i.test(queryString)
     || /^\s*DELETE\s+(FROM|EDGE)\b/i.test(queryString)
-    || /^\s*INSERT\s+EDGE\b/i.test(queryString);
+    || /^\s*INSERT\s+(EDGE|NODE)\b/i.test(queryString)
+    || /^\s*UPSERT\s+INTO\b/i.test(queryString)
+    || /^\s*(SHOW|DESCRIBE|EXPLAIN)\b/i.test(queryString)
+    || /^\s*(FLUSH|ANALYZE|TRUNCATE)\b/i.test(queryString)
+    || /^\s*ALTER\s+COLLECTION\b/i.test(queryString)
+    || /^\s*SELECT\s+EDGES\b/i.test(queryString);
 }
 
 export async function query(

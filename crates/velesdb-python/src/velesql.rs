@@ -174,6 +174,11 @@ impl ParsedStatement {
             return Some(match ddl {
                 velesdb_core::velesql::DdlStatement::CreateCollection(s) => s.name.clone(),
                 velesdb_core::velesql::DdlStatement::DropCollection(s) => s.name.clone(),
+                velesdb_core::velesql::DdlStatement::CreateIndex(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::DropIndex(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::Analyze(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::Truncate(s) => s.collection.clone(),
+                velesdb_core::velesql::DdlStatement::AlterCollection(s) => s.collection.clone(),
             });
         }
         let from = &self.inner.select.from;

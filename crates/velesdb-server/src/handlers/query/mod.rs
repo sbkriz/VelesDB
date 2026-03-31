@@ -10,7 +10,7 @@ use std::sync::Arc;
 use velesdb_core::collection::search::query::projection;
 #[cfg(test)]
 use velesdb_core::velesql;
-use velesdb_core::velesql::{Query, SelectColumns};
+use velesdb_core::velesql::{DmlStatement, Query, SelectColumns};
 
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
@@ -21,6 +21,24 @@ use crate::AppState;
 
 use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+
+/// Returns `true` for DML mutations that do not produce meaningful result rows:
+/// `INSERT EDGE`, `DELETE`, `DELETE EDGE`, `SELECT EDGES`, `INSERT NODE`.
+///
+/// `INSERT INTO`, `UPSERT`, and `UPDATE` return result rows and must flow
+/// through the standard query path.
+fn is_graph_or_delete_dml(parsed: &Query) -> bool {
+    matches!(
+        parsed.dml,
+        Some(
+            DmlStatement::InsertEdge(_)
+                | DmlStatement::Delete(_)
+                | DmlStatement::DeleteEdge(_)
+                | DmlStatement::SelectEdges(_)
+                | DmlStatement::InsertNode(_)
+        )
+    )
+}
 
 fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
     let has_aggs = match &select.columns {
@@ -111,9 +129,16 @@ pub async fn query(
         Err(resp) => return resp,
     };
 
-    // DDL/DML mutation bypass: these queries extract collection from the SQL AST,
-    // not from the request body — dispatch directly to avoid empty-name metrics.
-    if parsed.is_ddl_query() || parsed.is_dml_query() {
+    // DDL/Introspection/Admin bypass: these queries extract collection from the
+    // SQL AST, not from the request body — dispatch directly to avoid empty-name metrics.
+    // Graph/delete DML mutations (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES,
+    // INSERT NODE) also bypass; INSERT INTO, UPSERT, and UPDATE flow through the
+    // standard query path because they return meaningful result rows.
+    if parsed.is_ddl_query()
+        || parsed.is_introspection_query()
+        || parsed.is_admin_query()
+        || is_graph_or_delete_dml(&parsed)
+    {
         return execute_mutation_query(&state, &parsed, &req.params, start);
     }
 
@@ -141,9 +166,11 @@ pub async fn query(
     )
 }
 
-/// Execute a DDL or DML mutation query via the database.
+/// Execute a DDL, graph/delete DML, introspection, or admin query via the database.
 ///
-/// DDL (CREATE/DROP) and DML mutations (INSERT EDGE, DELETE, DELETE EDGE)
+/// DDL (CREATE/DROP/ALTER/ANALYZE/TRUNCATE), graph/delete DML mutations
+/// (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES, INSERT NODE),
+/// introspection (SHOW/DESCRIBE/EXPLAIN), and admin (FLUSH) statements
 /// extract collection names from the SQL AST — no FROM clause needed.
 /// Returns a standard `QueryResponse` with zero rows on success.
 fn execute_mutation_query(

@@ -420,9 +420,14 @@ pub async fn query<R: Runtime>(
         )));
     }
 
-    // DDL/DML/TRAIN queries are dispatched through Database::execute_query
-    // which handles them internally (no collection lookup needed).
-    if parsed.is_ddl_query() || parsed.is_dml_query() || parsed.is_train() {
+    // DDL/DML/TRAIN/Introspection/Admin queries are dispatched through
+    // Database::execute_query which handles them internally (no collection lookup needed).
+    if parsed.is_ddl_query()
+        || parsed.is_dml_query()
+        || parsed.is_train()
+        || parsed.is_introspection_query()
+        || parsed.is_admin_query()
+    {
         let results = state
             .with_db(|db| {
                 let search_results = db

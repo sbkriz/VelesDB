@@ -86,8 +86,10 @@ Success response shape:
 
 ### DDL and Mutation Statements via `/query`
 
-DDL statements (`CREATE COLLECTION`, `DROP COLLECTION`) and graph mutation statements
-(`INSERT EDGE`, `DELETE EDGE`) are submitted through the same `POST /query` endpoint.
+DDL statements (`CREATE COLLECTION`, `DROP COLLECTION`, `CREATE INDEX`, `DROP INDEX`,
+`ANALYZE`, `TRUNCATE`, `ALTER COLLECTION`) and graph/delete mutation statements
+(`INSERT EDGE`, `DELETE EDGE`, `DELETE FROM`, `INSERT NODE`, `SELECT EDGES`) are
+submitted through the same `POST /query` endpoint.
 
 Request body (DDL example):
 
@@ -127,10 +129,11 @@ DDL error response shape uses the standard VelesQL error model (see below).
 
 Rules:
 
-- DDL statements always route to `/query`, never to `/aggregate`.
-- `CREATE COLLECTION` does not require a `collection` field in the body (the collection name is in the query).
+- DDL and graph/delete mutation statements always route to `/query`, never to `/aggregate`.
+- DDL statements (`CREATE COLLECTION`, `DROP COLLECTION`, `CREATE INDEX`, `DROP INDEX`, `ANALYZE`, `TRUNCATE`, `ALTER COLLECTION`) do not require a `collection` field in the body (the collection name is embedded in the SQL statement).
 - `DROP COLLECTION IF EXISTS` returns success even if the collection does not exist.
-- Graph mutation statements (`INSERT EDGE`, `DELETE EDGE`) extract the collection name from the SQL query; the `collection` field in the request body is optional.
+- Graph/delete mutation statements (`INSERT EDGE`, `DELETE EDGE`, `DELETE FROM`, `INSERT NODE`, `SELECT EDGES`) extract the collection name from the SQL statement; the `collection` field in the request body is ignored.
+- `INSERT INTO` and `UPDATE` statements flow through the standard query path and return result rows in the `results` array.
 
 ### `POST /collections/{name}/match`
 
@@ -215,8 +218,23 @@ Reference grammar:
 | `UNION/INTERSECT/EXCEPT` | Stable | Stable |
 | `CREATE COLLECTION` | Stable | Stable |
 | `DROP COLLECTION [IF EXISTS]` | Stable | Stable |
+| `CREATE INDEX ON` | Stable | Stable |
+| `DROP INDEX ON` | Stable | Stable |
+| `ANALYZE` | Stable | Stable |
+| `TRUNCATE` | Stable | Stable |
+| `ALTER COLLECTION ... SET` | Stable | Stable |
+| `INSERT INTO` | Stable | Stable |
+| `UPSERT INTO` | Stable | Stable |
+| `UPDATE ... SET` | Stable | Stable |
 | `INSERT EDGE INTO` | Stable | Stable |
+| `DELETE FROM` | Stable | Stable |
 | `DELETE EDGE ... FROM` | Stable | Stable |
+| `SELECT EDGES FROM` | Stable | Stable |
+| `INSERT NODE INTO` | Stable | Stable |
+| `SHOW COLLECTIONS` | Stable | Stable |
+| `DESCRIBE COLLECTION` | Stable | Stable |
+| `EXPLAIN` | Stable | Stable |
+| `FLUSH` | Stable | Stable |
 
 ## Validation Matrix
 
@@ -238,8 +256,23 @@ Each invalid case maps to an expected HTTP status and an expected error shape.
 | `UNION/INTERSECT/EXCEPT` | Supported | Supported |
 | `CREATE COLLECTION` | Supported | Supported |
 | `DROP COLLECTION [IF EXISTS]` | Supported | Supported |
+| `CREATE INDEX ON` | Supported | Supported |
+| `DROP INDEX ON` | Supported | Supported |
+| `ANALYZE` | Supported | Supported |
+| `TRUNCATE` | Supported | Supported |
+| `ALTER COLLECTION ... SET` | Supported | Supported |
+| `INSERT INTO` | Supported | Supported |
+| `UPSERT INTO` | Supported | Supported |
+| `UPDATE ... SET` | Supported | Supported |
 | `INSERT EDGE INTO` | Supported | Supported |
+| `DELETE FROM` | Supported | Supported |
 | `DELETE EDGE ... FROM` | Supported | Supported |
+| `SELECT EDGES FROM` | Supported | Supported |
+| `INSERT NODE INTO` | Supported | Supported |
+| `SHOW COLLECTIONS` | Supported | Supported |
+| `DESCRIBE COLLECTION` | Supported | Supported |
+| `EXPLAIN` | Supported | Supported |
+| `FLUSH` | Supported | Supported |
 
 ## Compatibility Notes
 
