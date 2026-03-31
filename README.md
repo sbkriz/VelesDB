@@ -9,7 +9,7 @@
 </h3>
 <p align="center">
   <strong>One 6 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
-  <em>Vector + Graph + ColumnStore — unified under <a href="docs/reference/velesql.md">VelesQL</a></em>
+  <em>Vector + Graph + ColumnStore — unified under <a href="docs/VELESQL_SPEC.md">VelesQL</a></em>
 </p>
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
