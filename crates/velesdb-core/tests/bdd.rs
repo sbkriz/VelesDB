@@ -27,6 +27,8 @@ mod index_management;
 mod introspection;
 #[path = "bdd/operators.rs"]
 mod operators;
+#[path = "bdd/regression.rs"]
+mod regression;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
 #[path = "bdd/vector_search.rs"]
