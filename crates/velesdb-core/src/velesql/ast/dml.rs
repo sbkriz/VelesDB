@@ -15,12 +15,10 @@ pub struct InsertStatement {
     pub columns: Vec<String>,
     /// Rows of values; each row corresponds to `columns`.
     ///
-    /// **Breaking change from v3.4**: renamed from `values: Vec<Value>` (single
-    /// row) to `rows: Vec<Vec<Value>>` (multi-row). The `values` serde alias
-    /// maps the old field *name* but not the old *type* — data serialized with
-    /// the flat `Vec<Value>` schema will fail to deserialize. The plan cache is
-    /// in-memory (`Instant`-keyed) so this has no runtime impact.
-    #[serde(alias = "values")]
+    /// **Breaking change from v3.4**: type changed from `Vec<Value>` (single
+    /// row) to `Vec<Vec<Value>>` (multi-row). No backward-compatible
+    /// deserialization — the plan cache is in-memory (`Instant`-keyed) so
+    /// no persistent data uses this format.
     pub rows: Vec<Vec<Value>>,
 }
 

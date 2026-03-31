@@ -452,9 +452,7 @@ fn dispatch_tauri_query(
 
     state
         .with_db(|db| {
-            let search_results = db
-                .execute_query(parsed, &request.params)
-                .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
+            let search_results = db.execute_query(parsed, &request.params)?;
             Ok(search_results
                 .into_iter()
                 .map(|r| search_result_to_hybrid(&r))

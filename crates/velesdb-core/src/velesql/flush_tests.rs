@@ -117,3 +117,60 @@ fn test_flush_full_query_type_flags() {
     assert!(!query.is_select_query());
     assert!(!query.is_dml_query());
 }
+
+// ============================================================================
+// Regression — 'full' as reserved word vs collection name (Devin review)
+// ============================================================================
+
+/// `FLUSH full` must parse as a FULL flush of all collections, not as a
+/// fast flush of a collection named "full". The keyword takes precedence.
+#[test]
+fn test_flush_full_is_reserved_word() {
+    let query = Parser::parse("FLUSH full").expect("test: FLUSH full should parse");
+
+    let admin = query.admin.expect("test: expected admin statement");
+    let AdminStatement::Flush(stmt) = admin;
+
+    assert!(stmt.full, "FLUSH full should set full=true (keyword consumed)");
+    assert!(
+        stmt.collection.is_none(),
+        "FLUSH full should not produce a collection name"
+    );
+}
+
+/// `` FLUSH `full` `` uses backtick escaping to treat "full" as a literal
+/// collection name, bypassing the reserved word.
+#[test]
+fn test_flush_backtick_full_is_collection() {
+    let query = Parser::parse("FLUSH `full`").expect("test: FLUSH `full` should parse");
+
+    let admin = query.admin.expect("test: expected admin statement");
+    let AdminStatement::Flush(stmt) = admin;
+
+    assert!(
+        !stmt.full,
+        "backtick-escaped `full` should NOT activate the FULL keyword"
+    );
+    assert_eq!(
+        stmt.collection.as_deref(),
+        Some("full"),
+        "backtick-escaped `full` should be the collection name"
+    );
+}
+
+/// `FLUSH FULL full` uses the FULL keyword followed by a collection literally
+/// named "full". Both the keyword and collection must be recognised.
+#[test]
+fn test_flush_full_full_is_collection() {
+    let query = Parser::parse("FLUSH FULL full").expect("test: FLUSH FULL full should parse");
+
+    let admin = query.admin.expect("test: expected admin statement");
+    let AdminStatement::Flush(stmt) = admin;
+
+    assert!(stmt.full, "FLUSH FULL full should set full=true");
+    assert_eq!(
+        stmt.collection.as_deref(),
+        Some("full"),
+        "the trailing 'full' after the FULL keyword should be the collection name"
+    );
+}

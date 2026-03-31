@@ -228,3 +228,41 @@ fn test_select_edges_with_semicolon() {
     let query = Parser::parse("SELECT EDGES FROM kg;").expect("should parse with semicolon");
     assert!(query.is_select_edges_query());
 }
+
+// ============================================================================
+// F. Regression — INSERT NODE payload validation (Devin review)
+// ============================================================================
+
+/// When `payload` is a JSON string, no other non-`id` fields are allowed.
+/// Extra fields alongside an explicit payload must produce a parse error.
+#[test]
+fn test_insert_node_payload_with_extra_fields_fails() {
+    let result = Parser::parse(
+        "INSERT NODE INTO kg (id = 1, payload = '{\"name\": \"Alice\"}', extra = 'X')",
+    );
+    assert!(
+        result.is_err(),
+        "INSERT NODE with payload + extra fields should fail"
+    );
+    let err_msg = format!("{}", result.expect_err("test: expected parse error"));
+    assert!(
+        err_msg.contains("extra fields") || err_msg.contains("Remove extra fields"),
+        "error should mention extra fields, got: {err_msg}"
+    );
+}
+
+/// When `payload` is not a string literal (e.g. an integer), the parser must
+/// reject it with a clear error about the expected type.
+#[test]
+fn test_insert_node_payload_non_string_fails() {
+    let result = Parser::parse("INSERT NODE INTO kg (id = 1, payload = 42)");
+    assert!(
+        result.is_err(),
+        "INSERT NODE with non-string payload should fail"
+    );
+    let err_msg = format!("{}", result.expect_err("test: expected parse error"));
+    assert!(
+        err_msg.contains("must be a JSON string"),
+        "error should mention 'must be a JSON string', got: {err_msg}"
+    );
+}
