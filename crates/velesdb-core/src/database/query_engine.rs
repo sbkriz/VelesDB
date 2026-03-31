@@ -1,8 +1,43 @@
 //! Query execution: `execute_query`, `explain_query`, plan caching, and DML dispatch.
 
+use crate::velesql::{AdminStatement, DdlStatement, DmlStatement, IntrospectionStatement, Query, TrainStatement};
 use crate::{Error, Result, SearchResult};
 
 use super::Database;
+
+/// Statement type classification for dispatch routing.
+enum StatementType<'a> {
+    Admin(&'a AdminStatement),
+    Introspection(&'a IntrospectionStatement),
+    Ddl(&'a DdlStatement),
+    Train(&'a TrainStatement),
+    Dml(&'a DmlStatement),
+    Match,
+    Select,
+}
+
+/// Classifies a query into its statement type for routing.
+fn classify_statement(query: &Query) -> StatementType<'_> {
+    if let Some(admin) = query.admin.as_ref() {
+        return StatementType::Admin(admin);
+    }
+    if let Some(intro) = query.introspection.as_ref() {
+        return StatementType::Introspection(intro);
+    }
+    if let Some(ddl) = query.ddl.as_ref() {
+        return StatementType::Ddl(ddl);
+    }
+    if let Some(train) = query.train.as_ref() {
+        return StatementType::Train(train);
+    }
+    if let Some(dml) = query.dml.as_ref() {
+        return StatementType::Dml(dml);
+    }
+    if query.is_match_query() {
+        return StatementType::Match;
+    }
+    StatementType::Select
+}
 
 #[allow(deprecated)] // Uses legacy Collection internally for query routing.
 impl Database {
@@ -138,7 +173,6 @@ impl Database {
     /// # Errors
     ///
     /// Returns an error if the base collection or any JOIN collection is missing.
-    #[allow(clippy::too_many_lines)]
     pub fn execute_query(
         &self,
         query: &crate::velesql::Query,
@@ -146,31 +180,8 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
-        if let Some(admin) = query.admin.as_ref() {
-            return self.execute_admin(admin);
-        }
-
-        if let Some(intro) = query.introspection.as_ref() {
-            return self.execute_introspection(intro);
-        }
-
-        if let Some(ddl) = query.ddl.as_ref() {
-            return self.execute_ddl(ddl);
-        }
-
-        if let Some(train) = query.train.as_ref() {
-            return self.execute_train(train);
-        }
-
-        if let Some(dml) = query.dml.as_ref() {
-            return self.execute_dml(dml, params);
-        }
-
-        if query.is_match_query() {
-            return Err(Error::Query(
-                "Database::execute_query does not support top-level MATCH queries. Use Collection::execute_query or pass the collection name."
-                    .to_string(),
-            ));
+        if let Some(results) = self.dispatch_non_select(query, params)? {
+            return Ok(results);
         }
 
         // Build plan key and check cache WITHOUT recording hit/miss metrics (CACHE-02).
@@ -198,6 +209,31 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Classifies and dispatches non-SELECT statement types.
+    ///
+    /// Returns `Ok(Some(results))` if handled, `Ok(None)` for SELECT queries.
+    fn dispatch_non_select(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        // Classify the statement type (at most one is Some).
+        let stmt_type = classify_statement(query);
+        match stmt_type {
+            StatementType::Admin(admin) => Ok(Some(self.execute_admin(admin)?)),
+            StatementType::Introspection(intro) => Ok(Some(self.execute_introspection(intro)?)),
+            StatementType::Ddl(ddl) => Ok(Some(self.execute_ddl(ddl)?)),
+            StatementType::Train(train) => Ok(Some(self.execute_train(train)?)),
+            StatementType::Dml(dml) => Ok(Some(self.execute_dml(dml, params)?)),
+            StatementType::Match => Err(Error::Query(
+                "Database::execute_query does not support top-level MATCH queries. \
+                 Use Collection::execute_query or pass the collection name."
+                    .to_string(),
+            )),
+            StatementType::Select => Ok(None),
+        }
     }
 
     /// Executes the SELECT portion of a query, resolving JOINs if present.

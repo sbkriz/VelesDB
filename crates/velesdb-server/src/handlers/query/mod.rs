@@ -22,6 +22,16 @@ use crate::AppState;
 use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
+/// Returns `true` when the query should bypass collection resolution and go
+/// directly through `Database::execute_query` (DDL, introspection, admin, or
+/// graph/delete DML that doesn't produce result rows).
+fn requires_mutation_dispatch(parsed: &Query) -> bool {
+    parsed.is_ddl_query()
+        || parsed.is_introspection_query()
+        || parsed.is_admin_query()
+        || is_graph_or_delete_dml(parsed)
+}
+
 /// Returns `true` for DML mutations that do not produce meaningful result rows:
 /// `INSERT EDGE`, `DELETE`, `DELETE EDGE`, `SELECT EDGES`, `INSERT NODE`.
 ///
@@ -129,16 +139,10 @@ pub async fn query(
         Err(resp) => return resp,
     };
 
-    // DDL/Introspection/Admin bypass: these queries extract collection from the
-    // SQL AST, not from the request body — dispatch directly to avoid empty-name metrics.
-    // Graph/delete DML mutations (INSERT EDGE, DELETE, DELETE EDGE, SELECT EDGES,
-    // INSERT NODE) also bypass; INSERT INTO, UPSERT, and UPDATE flow through the
-    // standard query path because they return meaningful result rows.
-    if parsed.is_ddl_query()
-        || parsed.is_introspection_query()
-        || parsed.is_admin_query()
-        || is_graph_or_delete_dml(&parsed)
-    {
+    // DDL/Introspection/Admin/graph-mutation bypass: these extract collection from
+    // the SQL AST, not from the request body.  INSERT INTO, UPSERT, and UPDATE flow
+    // through the standard path because they return meaningful result rows.
+    if requires_mutation_dispatch(&parsed) {
         return execute_mutation_query(&state, &parsed, &req.params, start);
     }
 

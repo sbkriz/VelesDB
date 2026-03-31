@@ -8,6 +8,18 @@ use crate::{Error, Result, SearchResult};
 
 use super::Database;
 
+/// Applies a flush function (fast or full) to a collection reference.
+///
+/// This helper avoids repeating `if full { flush_full() } else { flush() }`
+/// across each registry loop.
+fn flush_with<T, F, G>(coll: &T, full: bool, fast: F, full_fn: G) -> Result<()>
+where
+    F: FnOnce(&T) -> Result<()>,
+    G: FnOnce(&T) -> Result<()>,
+{
+    if full { full_fn(coll) } else { fast(coll) }
+}
+
 impl Database {
     /// Dispatches an admin statement to the appropriate executor.
     ///
@@ -77,25 +89,13 @@ impl Database {
     /// Returns the first flush error encountered.
     fn flush_all_collections(&self, full: bool) -> Result<()> {
         for (_, vc) in self.vector_colls.read().iter() {
-            if full {
-                vc.flush_full()?
-            } else {
-                vc.flush()?
-            }
+            flush_with(vc, full, |c| c.flush(), |c| c.flush_full())?;
         }
         for (_, gc) in self.graph_colls.read().iter() {
-            if full {
-                gc.flush_full()?
-            } else {
-                gc.flush()?
-            }
+            flush_with(gc, full, |c| c.flush(), |c| c.flush_full())?;
         }
         for (_, mc) in self.metadata_colls.read().iter() {
-            if full {
-                mc.flush_full()?
-            } else {
-                mc.flush()?
-            }
+            flush_with(mc, full, |c| c.flush(), |c| c.flush_full())?;
         }
         Ok(())
     }
