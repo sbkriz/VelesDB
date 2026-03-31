@@ -420,14 +420,19 @@ pub async fn query<R: Runtime>(
         )));
     }
 
-    // DDL/DML/TRAIN/Introspection/Admin queries are dispatched through
-    // Database::execute_query which handles them internally (no collection lookup needed).
+    // Non-SELECT statements are dispatched through Database::execute_query
+    // which handles them internally (no collection lookup needed).
     //
-    // All DML (including INSERT INTO/UPSERT/UPDATE) is routed through
-    // Database::execute_query which handles dispatch internally.
-    // This differs from the server handler which lets INSERT/UPSERT/UPDATE
-    // flow through the standard query path for collection-scoped projection.
-    // Both approaches are functionally equivalent (verified by BDD regression tests).
+    // This includes ALL DML (INSERT INTO, UPSERT, UPDATE, INSERT EDGE, etc.)
+    // because the Tauri plugin has no standard query path that calls
+    // db.execute_query — it goes through collection-scoped methods instead.
+    // INSERT INTO/UPSERT/UPDATE MUST be included here; without the bypass
+    // they fall to `parsed.select.from` (empty) → require_collection → error.
+    //
+    // The server handler uses a narrower is_ast_routed_dml() because its
+    // standard path also calls db.execute_query, so INSERT/UPSERT/UPDATE
+    // are handled there. The Tauri plugin's standard path calls
+    // collection.execute_query, which does NOT handle DML.
     if parsed.is_ddl_query()
         || parsed.is_dml_query()
         || parsed.is_train()
