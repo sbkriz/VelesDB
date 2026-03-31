@@ -3,10 +3,11 @@
 use super::dml_executor::hash_edge_id;
 use super::*;
 use crate::velesql::{
-    CompareOp, Comparison, Condition, CreateCollectionKind, CreateCollectionStatement,
-    DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement, DropCollectionStatement,
-    GraphCollectionParams, GraphSchemaMode, InCondition, InsertEdgeStatement, Query,
-    SchemaDefinition, Value, VectorCollectionParams,
+    AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
+    CreateCollectionStatement, DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement,
+    DropCollectionStatement, GraphCollectionParams, GraphSchemaMode, InCondition,
+    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, Value,
+    VectorCollectionParams,
 };
 use tempfile::tempdir;
 
@@ -454,17 +455,48 @@ fn test_delete_edge() {
         .expect("add 2");
     assert_eq!(gc.edge_count(), 2);
 
-    // Delete edge 1 via DML.
+    // Delete edge 1 via DML — returns affected-rows feedback.
     let dml = DmlStatement::DeleteEdge(DeleteEdgeStatement {
         collection: "del_edge_g".to_string(),
         edge_id: 1,
     });
-    execute_dml(&db, dml).expect("delete edge");
+    let results = execute_dml(&db, dml).expect("delete edge");
+    assert_eq!(results.len(), 1, "DELETE EDGE should return one result");
+    let payload = results[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["deleted"], true);
+    assert_eq!(payload["edge_id"], 1);
 
     assert_eq!(gc.edge_count(), 1);
     let remaining = gc.get_edges(None);
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id(), 2);
+}
+
+#[test]
+fn test_delete_edge_nonexistent_reports_false() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "del_edge_noop".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    // Delete nonexistent edge — should succeed but report deleted: false.
+    let dml = DmlStatement::DeleteEdge(DeleteEdgeStatement {
+        collection: "del_edge_noop".to_string(),
+        edge_id: 999,
+    });
+    let results = execute_dml(&db, dml).expect("delete edge noop");
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["deleted"], false);
+    assert_eq!(payload["edge_id"], 999);
 }
 
 // =========================================================================
@@ -790,4 +822,99 @@ fn test_hash_edge_id_collision_resistance() {
     // Deterministic: same inputs always give same output.
     let id5 = hash_edge_id(1, 2, "KNOWS");
     assert_eq!(id1, id5);
+}
+
+// =========================================================================
+// ALTER COLLECTION — warning payload (Finding 1: US-300 no-op)
+// =========================================================================
+
+#[test]
+fn test_alter_collection_returns_warning_payload() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    // Create a collection first.
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "alter_test".to_string(),
+        kind: CreateCollectionKind::Vector(VectorCollectionParams {
+            dimension: 32,
+            metric: "cosine".to_string(),
+            storage: None,
+            m: None,
+            ef_construction: None,
+        }),
+    });
+    execute_ddl(&db, create).expect("create");
+
+    let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
+        collection: "alter_test".to_string(),
+        options: vec![("auto_reindex".to_string(), "true".to_string())],
+    });
+    let results = execute_ddl(&db, alter).expect("alter");
+
+    assert_eq!(results.len(), 1, "one result per option");
+    let payload = results[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["status"], "accepted");
+    assert_eq!(payload["option"], "auto_reindex");
+    assert_eq!(payload["value"], "true");
+    assert!(
+        payload["warning"]
+            .as_str()
+            .expect("warning string")
+            .contains("US-300"),
+        "warning must reference the tracking ticket"
+    );
+}
+
+// =========================================================================
+// SELECT EDGES AND — condition ordering optimization (Finding 3)
+// =========================================================================
+
+#[test]
+fn test_select_edges_and_swaps_for_selectivity() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "sel_and_g".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("sel_and_g").expect("get");
+    gc.add_edge(crate::GraphEdge::new(1, 10, 20, "KNOWS").expect("edge"))
+        .expect("add 1");
+    gc.add_edge(crate::GraphEdge::new(2, 10, 30, "LIKES").expect("edge"))
+        .expect("add 2");
+    gc.add_edge(crate::GraphEdge::new(3, 40, 50, "KNOWS").expect("edge"))
+        .expect("add 3");
+
+    // Query: label = 'KNOWS' AND source = 10  (label on left, source on right)
+    // The optimizer should swap so source drives the lookup.
+    let select = DmlStatement::SelectEdges(SelectEdgesStatement {
+        collection: "sel_and_g".to_string(),
+        where_clause: Some(Condition::And(
+            Box::new(Condition::Comparison(Comparison {
+                column: "label".to_string(),
+                operator: CompareOp::Eq,
+                value: Value::String("KNOWS".to_string()),
+            })),
+            Box::new(Condition::Comparison(Comparison {
+                column: "source".to_string(),
+                operator: CompareOp::Eq,
+                value: Value::Integer(10),
+            })),
+        )),
+        limit: None,
+    });
+    let results = execute_dml(&db, select).expect("select edges");
+
+    // Only edge 1 matches (source=10 AND label=KNOWS); edge 2 is LIKES, edge 3 is source=40.
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["edge_id"], 1);
 }

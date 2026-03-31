@@ -945,3 +945,56 @@ fn test_create_graph_typed_schema_multiple_nodes() {
     assert_eq!(from_type, "Person");
     assert_eq!(to_type, "Company");
 }
+
+// ============================================================================
+// Metric validation at parse time (Finding 5)
+// ============================================================================
+
+#[test]
+fn test_invalid_metric_rejected_at_parse_time() {
+    let result =
+        Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'manhattan');");
+    assert!(result.is_err(), "invalid metric should fail at parse time");
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Unknown metric 'manhattan'"),
+        "error should name the invalid metric, got: {msg}"
+    );
+}
+
+#[test]
+fn test_valid_metric_aliases_parse_successfully() {
+    for alias in &[
+        "cosine",
+        "euclidean",
+        "l2",
+        "dot",
+        "dotproduct",
+        "inner",
+        "ip",
+        "hamming",
+        "jaccard",
+    ] {
+        let sql = format!(
+            "CREATE COLLECTION test_m (dimension = 64, metric = '{alias}');"
+        );
+        let result = Parser::parse(&sql);
+        assert!(
+            result.is_ok(),
+            "metric alias '{alias}' should parse, got: {:?}",
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn test_graph_invalid_metric_rejected_at_parse_time() {
+    let result = Parser::parse(
+        "CREATE GRAPH COLLECTION kg (dimension = 128, metric = 'badmetric') SCHEMALESS;",
+    );
+    assert!(
+        result.is_err(),
+        "invalid metric on graph collection should fail at parse time"
+    );
+}

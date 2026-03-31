@@ -204,6 +204,11 @@ impl Database {
     /// Currently supports only the `auto_reindex` option (boolean).
     /// Unknown options are rejected with a descriptive error.
     ///
+    /// Returns a single `SearchResult` per option with `status: "accepted"`
+    /// and a warning explaining that persistence is not yet implemented
+    /// (pending US-300). This gives the caller explicit feedback rather
+    /// than a silent no-op.
+    ///
     /// # Errors
     ///
     /// Returns an error if the collection does not exist, an option is
@@ -215,11 +220,26 @@ impl Database {
         // Validate the collection exists.
         let _collection = self.resolve_writable_collection(&stmt.collection)?;
 
+        let mut results = Vec::with_capacity(stmt.options.len());
         for (key, value) in &stmt.options {
             apply_alter_option(key, value)?;
+            let payload = serde_json::json!({
+                "status": "accepted",
+                "option": key,
+                "value": value,
+                "warning": format!(
+                    "Option '{key}' validated but not yet persisted \
+                     (pending US-300). Value will take effect only for \
+                     the current session."
+                ),
+            });
+            results.push(SearchResult::new(
+                crate::Point::metadata_only(0, payload),
+                0.0,
+            ));
         }
 
-        Ok(Vec::new())
+        Ok(results)
     }
 }
 

@@ -53,6 +53,8 @@ impl Database {
     /// Executes a DELETE EDGE statement.
     ///
     /// Resolves the target graph collection and removes the edge by ID.
+    /// Returns a single `SearchResult` with `deleted: true/false` so the
+    /// caller knows whether the edge actually existed.
     ///
     /// # Errors
     ///
@@ -63,8 +65,13 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("DELETE_EDGE", &stmt.collection)?;
         let graph = self.resolve_graph_collection(&stmt.collection)?;
-        let _ = graph.remove_edge(stmt.edge_id);
-        Ok(Vec::new())
+        let removed = graph.remove_edge(stmt.edge_id);
+        let payload = serde_json::json!({
+            "deleted": removed,
+            "edge_id": stmt.edge_id,
+        });
+        let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
+        Ok(vec![result])
     }
 
     /// Executes a SELECT EDGES statement.
@@ -147,10 +154,20 @@ fn build_graph_edge(
     Ok(edge.with_properties(props))
 }
 
-/// Generates a deterministic edge ID from source, target, and label.
+/// Generates a deterministic edge ID from (source, target, label) using FNV-1a.
 ///
-/// Uses FNV-1a-inspired mixing for collision resistance. The same
-/// (source, target, label) triple always produces the same ID.
+/// # Determinism
+///
+/// The same (source, target, label) triple always produces the same ID.
+/// This means re-inserting the same edge without an explicit `id` is
+/// idempotent (overwrites the existing edge). To create multiple edges
+/// with the same (source, target, label), provide explicit `id` values
+/// in the SQL:
+///
+/// ```sql
+/// INSERT EDGE INTO kg (id = 100, source = 1, target = 2, label = 'KNOWS');
+/// INSERT EDGE INTO kg (id = 101, source = 1, target = 2, label = 'KNOWS');
+/// ```
 pub(super) fn hash_edge_id(source: u64, target: u64, label: &str) -> u64 {
     // FNV-1a offset basis and prime for u64
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -315,17 +332,48 @@ fn dispatch_edge_comparison(
 
 /// Handles AND: (source=N AND label='X') or (target=N AND label='X').
 ///
-/// When combining source/target with label, fetches by source/target
-/// first, then filters by label.
+/// Prefers the most selective condition (source > target > label) as
+/// the fetch path, regardless of left/right ordering in the SQL.
+/// This means `label = 'KNOWS' AND source = 1` is as efficient as
+/// `source = 1 AND label = 'KNOWS'`.
 fn dispatch_edge_and(
     graph: &crate::collection::GraphCollection,
     left: &crate::velesql::Condition,
     right: &crate::velesql::Condition,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
-    let mut edges = dispatch_edge_condition(graph, left)?;
-    let filter = extract_and_filter(right)?;
+    // Prefer fetching by source/target (most selective) as the primary
+    // condition. If the right side has source/target and left does not,
+    // swap so the more selective side drives the index lookup.
+    let (fetch, filter_side) =
+        if condition_selectivity(right) > condition_selectivity(left) {
+            (right, left)
+        } else {
+            (left, right)
+        };
+    let mut edges = dispatch_edge_condition(graph, fetch)?;
+    let filter = extract_and_filter(filter_side)?;
     edges.retain(|e| edge_matches_filter(e, &filter));
     Ok(edges)
+}
+
+/// Returns a selectivity score for a condition (higher = more selective).
+///
+/// `source` lookups are the most selective (indexed by node), followed
+/// by `target`, then `label` (which may match many edges).
+fn condition_selectivity(condition: &crate::velesql::Condition) -> u8 {
+    match condition {
+        crate::velesql::Condition::Comparison(cmp)
+            if cmp.operator == crate::velesql::CompareOp::Eq =>
+        {
+            match cmp.column.as_str() {
+                "source" => 3,
+                "target" => 2,
+                "label" => 1,
+                _ => 0,
+            }
+        }
+        _ => 0,
+    }
 }
 
 /// A simple filter derived from one side of an AND condition.

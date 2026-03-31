@@ -173,9 +173,17 @@ fn test_alter_collection_set_option() {
     let results = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
         .expect("ALTER COLLECTION should succeed");
 
+    // ALTER now returns one result per option with a warning payload
+    // explaining that the option is validated but not yet persisted (US-300).
+    assert_eq!(results.len(), 1, "ALTER returns one result per option");
+    let payload = results[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["status"], "accepted");
     assert!(
-        results.is_empty(),
-        "ALTER returns empty result set on success"
+        payload["warning"]
+            .as_str()
+            .expect("warning string")
+            .contains("US-300"),
+        "warning must reference the tracking ticket"
     );
 }
 

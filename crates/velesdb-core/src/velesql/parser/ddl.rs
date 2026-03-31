@@ -439,7 +439,7 @@ fn build_collection_kind(
 ) -> Result<CreateCollectionKind, ParseError> {
     match kind_kw {
         Some("METADATA") => Ok(CreateCollectionKind::Metadata),
-        Some("GRAPH") => Ok(build_graph_params(options, suffix)),
+        Some("GRAPH") => build_graph_params(options, suffix),
         _ => build_vector_params(options, suffix),
     }
 }
@@ -451,6 +451,7 @@ fn build_vector_params(
 ) -> Result<CreateCollectionKind, ParseError> {
     let dimension = lookup_required_usize(options, "dimension", "Vector collection")?;
     let metric = lookup_optional_str(options, "metric").unwrap_or_else(|| "cosine".to_string());
+    validate_metric(&metric)?;
     let mut storage = lookup_optional_str(options, "storage");
 
     let (m, ef_construction) = extract_with_suffix_hnsw(options, suffix, &mut storage);
@@ -468,9 +469,12 @@ fn build_vector_params(
 fn build_graph_params(
     options: &[(String, String)],
     suffix: Option<CreateSuffix>,
-) -> CreateCollectionKind {
+) -> Result<CreateCollectionKind, ParseError> {
     let dimension = lookup_optional_usize(options, "dimension");
     let metric = lookup_optional_str(options, "metric");
+    if let Some(ref m) = metric {
+        validate_metric(m)?;
+    }
     let schema_mode = match suffix {
         Some(CreateSuffix::TypedSchema(defs)) => GraphSchemaMode::Typed(defs),
         Some(CreateSuffix::Schemaless | CreateSuffix::With(_)) | None => {
@@ -478,11 +482,11 @@ fn build_graph_params(
         }
     };
 
-    CreateCollectionKind::Graph(GraphCollectionParams {
+    Ok(CreateCollectionKind::Graph(GraphCollectionParams {
         dimension,
         metric,
         schema_mode,
-    })
+    }))
 }
 
 /// Extracts HNSW parameters and storage from body options + WITH suffix.
@@ -553,6 +557,28 @@ fn lookup_optional_str(options: &[(String, String)], key: &str) -> Option<String
 /// Finds an optional `usize` option by key (silently ignores parse failures).
 fn lookup_optional_usize(options: &[(String, String)], key: &str) -> Option<usize> {
     lookup_optional_str(options, key).and_then(|v| v.parse::<usize>().ok())
+}
+
+/// Validates that a metric string is a recognized `DistanceMetric` alias.
+///
+/// This catches invalid metric values at parse time rather than deferring
+/// to execution time, giving the user immediate feedback.
+///
+/// The accepted aliases mirror [`DistanceMetric::parse_alias`]:
+/// cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard.
+fn validate_metric(metric: &str) -> Result<(), ParseError> {
+    match metric.to_lowercase().as_str() {
+        "cosine" | "euclidean" | "l2" | "dot" | "dotproduct" | "inner" | "ip" | "hamming"
+        | "jaccard" => Ok(()),
+        _ => Err(ParseError::syntax(
+            0,
+            metric,
+            format!(
+                "Unknown metric '{metric}'. Supported: cosine, euclidean, \
+                 l2, dot, dotproduct, inner, ip, hamming, jaccard"
+            ),
+        )),
+    }
 }
 
 /// Converts a `WithValue` to its string representation for storage in options.

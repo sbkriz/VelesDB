@@ -14,6 +14,10 @@ pub struct InsertStatement {
     /// Target columns.
     pub columns: Vec<String>,
     /// Rows of values; each row corresponds to `columns`.
+    ///
+    /// The `values` alias preserves backward compatibility with any
+    /// externally serialized data that used the previous field name.
+    #[serde(alias = "values")]
     pub rows: Vec<Vec<Value>>,
 }
 
