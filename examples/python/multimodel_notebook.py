@@ -197,6 +197,4 @@ finally:
 # %% [markdown]
 # ## Next Steps
 #
-# - [VelesQL Specification](../../docs/reference/VELESQL_SPEC.md)
-# - [JOIN Reference](../../docs/reference/VELESQL_JOIN.md)
-# - [ORDER BY Reference](../../docs/reference/VELESQL_ORDERBY.md)
+# - [VelesQL Specification](../../docs/VELESQL_SPEC.md)

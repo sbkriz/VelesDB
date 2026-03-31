@@ -73,7 +73,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 - `/query` supports top-level `MATCH`, but request body must include `collection`.
 - `/collections/{name}/match` is the collection-scoped graph endpoint.
 - Canonical payload contract: `docs/reference/VELESQL_CONTRACT.md`.
-- Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_CASES.md`.
+- Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`.
 - Recommended developer syntax for mixed filters:
   `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
 

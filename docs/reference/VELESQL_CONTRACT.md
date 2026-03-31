@@ -199,8 +199,7 @@ These syntax profiles are frozen for this contract version:
 
 Reference grammar:
 
-- `docs/reference/VELESQL_SPEC.md`
-- `docs/VELESQL_SPEC.md`
+- `docs/VELESQL_SPEC.md` (canonical, v3.6)
 
 ## Stable vs Experimental
 
@@ -240,7 +239,8 @@ Reference grammar:
 
 Contract test cases are listed in:
 
-- `docs/reference/VELESQL_CONFORMANCE_CASES.md`
+- `conformance/velesql_parser_cases.json` (parser conformance, v3.6)
+- `conformance/velesql_contract_cases.json` (runtime contract)
 
 Each invalid case maps to an expected HTTP status and an expected error shape.
 
