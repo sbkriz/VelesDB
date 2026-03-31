@@ -16,6 +16,8 @@ pub fn print_result(result: &QueryResult, format: &str) {
             QueryKind::Ddl => "DDL statement executed successfully.",
             QueryKind::Dml => "DML statement executed successfully.",
             QueryKind::Train => "TRAIN statement executed successfully.",
+            QueryKind::Admin => "Admin statement executed successfully.",
+            QueryKind::Introspection => "No collections found.",
             QueryKind::Select => "No results.",
         };
         println!("{}", msg.dimmed());

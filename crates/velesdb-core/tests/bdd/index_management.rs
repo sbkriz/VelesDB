@@ -1,4 +1,4 @@
-//! E2E lifecycle tests for VelesQL `CREATE INDEX` / `DROP INDEX`.
+//! E2E lifecycle tests for `VelesQL` `CREATE INDEX` / `DROP INDEX`.
 //!
 //! Each test exercises the full pipeline: SQL string -> parse -> execute ->
 //! verify database state. Isolated via `tempfile::TempDir`, requires

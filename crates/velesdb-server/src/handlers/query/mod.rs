@@ -10,7 +10,9 @@ use std::sync::Arc;
 use velesdb_core::collection::search::query::projection;
 #[cfg(test)]
 use velesdb_core::velesql;
-use velesdb_core::velesql::{DmlStatement, Query, SelectColumns};
+use velesdb_core::velesql::{
+    DdlStatement, DmlStatement, IntrospectionStatement, Query, SelectColumns,
+};
 
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
@@ -173,6 +175,64 @@ pub async fn query(
     )
 }
 
+/// Extract the collection name targeted by a mutation/DDL/introspection query.
+///
+/// Returns `"_system"` for global operations that do not target a specific
+/// collection (SHOW COLLECTIONS, EXPLAIN, FLUSH without collection).
+fn extract_mutation_collection_name(parsed: &Query) -> String {
+    if let Some(name) = extract_ddl_collection(parsed) {
+        return name;
+    }
+    if let Some(name) = extract_dml_collection(parsed) {
+        return name;
+    }
+    if let Some(ref intro) = parsed.introspection {
+        return match intro {
+            IntrospectionStatement::DescribeCollection(d) => d.name.clone(),
+            IntrospectionStatement::ShowCollections | IntrospectionStatement::Explain(_) => {
+                "_system".to_string()
+            }
+        };
+    }
+    if let Some(ref admin) = parsed.admin {
+        let velesdb_core::velesql::AdminStatement::Flush(f) = admin;
+        return f
+            .collection
+            .clone()
+            .unwrap_or_else(|| "_system".to_string());
+    }
+    if let Some(ref train) = parsed.train {
+        return train.collection.clone();
+    }
+    "_system".to_string()
+}
+
+/// Extract collection name from a DDL statement.
+fn extract_ddl_collection(parsed: &Query) -> Option<String> {
+    parsed.ddl.as_ref().map(|ddl| match ddl {
+        DdlStatement::CreateCollection(s) => s.name.clone(),
+        DdlStatement::DropCollection(s) => s.name.clone(),
+        DdlStatement::CreateIndex(s) => s.collection.clone(),
+        DdlStatement::DropIndex(s) => s.collection.clone(),
+        DdlStatement::Analyze(s) => s.collection.clone(),
+        DdlStatement::Truncate(s) => s.collection.clone(),
+        DdlStatement::AlterCollection(s) => s.collection.clone(),
+    })
+}
+
+/// Extract collection name from a DML statement.
+fn extract_dml_collection(parsed: &Query) -> Option<String> {
+    parsed.dml.as_ref().map(|dml| match dml {
+        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => s.table.clone(),
+        DmlStatement::Update(s) => s.table.clone(),
+        DmlStatement::InsertEdge(s) => s.collection.clone(),
+        DmlStatement::Delete(s) => s.table.clone(),
+        DmlStatement::DeleteEdge(s) => s.collection.clone(),
+        DmlStatement::SelectEdges(s) => s.collection.clone(),
+        DmlStatement::InsertNode(s) => s.collection.clone(),
+    })
+}
+
 /// Execute a DDL, graph/delete DML, introspection, admin, or TRAIN query.
 ///
 /// DDL (CREATE/DROP/ALTER/ANALYZE/TRUNCATE), graph/delete DML mutations
@@ -192,12 +252,13 @@ fn execute_mutation_query(
 ) -> axum::response::Response {
     match state.db.execute_query(parsed, params) {
         Ok(results) => {
+            let coll_name = extract_mutation_collection_name(parsed);
+            notify_query_timing(state, &coll_name, start);
             let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
             #[allow(clippy::cast_possible_truncation)]
             // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
             let took_ms = timing_ms.round() as u64;
-            let projected =
-                projection::project_results(&results, &parsed.select.columns);
+            let projected = projection::project_results(&results, &parsed.select.columns);
             let rows_returned = projected.len();
             Json(QueryResponse {
                 results: projected,

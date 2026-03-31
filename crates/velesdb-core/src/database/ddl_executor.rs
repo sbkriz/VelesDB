@@ -1,4 +1,4 @@
-//! DDL executor for VelesQL.
+//! DDL executor for `VelesQL`.
 //!
 //! Handles CREATE/DROP COLLECTION, CREATE/DROP INDEX, ANALYZE, TRUNCATE,
 //! and ALTER COLLECTION by delegating to existing [`Database`] APIs.

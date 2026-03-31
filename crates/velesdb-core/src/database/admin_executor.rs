@@ -8,16 +8,18 @@ use crate::{Error, Result, SearchResult};
 
 use super::Database;
 
-/// Applies a flush function (fast or full) to a collection reference.
+/// Dispatches to `flush()` (fast) or `flush_full()` based on the `full` flag.
 ///
-/// This helper avoids repeating `if full { flush_full() } else { flush() }`
-/// across each registry loop.
-fn flush_with<T, F, G>(coll: &T, full: bool, fast: F, full_fn: G) -> Result<()>
-where
-    F: FnOnce(&T) -> Result<()>,
-    G: FnOnce(&T) -> Result<()>,
-{
-    if full { full_fn(coll) } else { fast(coll) }
+/// Avoids repeating `if full { flush_full() } else { flush() }` at each call
+/// site while staying closure-free (no `redundant_closure_for_method_calls`).
+macro_rules! flush_dispatch {
+    ($coll:expr, $full:expr) => {
+        if $full {
+            $coll.flush_full()
+        } else {
+            $coll.flush()
+        }
+    };
 }
 
 impl Database {
@@ -68,13 +70,13 @@ impl Database {
     /// Returns `CollectionNotFound` if the name does not match any registry.
     fn flush_single_collection(&self, name: &str, full: bool) -> Result<()> {
         if let Some(vc) = self.get_vector_collection(name) {
-            return if full { vc.flush_full() } else { vc.flush() };
+            return flush_dispatch!(vc, full);
         }
         if let Some(gc) = self.get_graph_collection(name) {
-            return if full { gc.flush_full() } else { gc.flush() };
+            return flush_dispatch!(gc, full);
         }
         if let Some(mc) = self.get_metadata_collection(name) {
-            return if full { mc.flush_full() } else { mc.flush() };
+            return flush_dispatch!(mc, full);
         }
         Err(Error::CollectionNotFound(name.to_string()))
     }
@@ -89,13 +91,13 @@ impl Database {
     /// Returns the first flush error encountered.
     fn flush_all_collections(&self, full: bool) -> Result<()> {
         for (_, vc) in self.vector_colls.read().iter() {
-            flush_with(vc, full, |c| c.flush(), |c| c.flush_full())?;
+            flush_dispatch!(vc, full)?;
         }
         for (_, gc) in self.graph_colls.read().iter() {
-            flush_with(gc, full, |c| c.flush(), |c| c.flush_full())?;
+            flush_dispatch!(gc, full)?;
         }
         for (_, mc) in self.metadata_colls.read().iter() {
-            flush_with(mc, full, |c| c.flush(), |c| c.flush_full())?;
+            flush_dispatch!(mc, full)?;
         }
         Ok(())
     }

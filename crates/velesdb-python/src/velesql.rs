@@ -416,7 +416,11 @@ impl ParsedStatement {
             DmlStatement::SelectEdges(s) => &s.collection,
             DmlStatement::InsertNode(s) => &s.collection,
         };
-        if name.is_empty() { None } else { Some(name.clone()) }
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.clone())
+        }
     }
 
     /// Returns a human-readable label for the query type.

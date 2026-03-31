@@ -1,4 +1,4 @@
-//! BDD integration tests for VelesQL introspection statements.
+//! BDD integration tests for `VelesQL` introspection statements.
 //!
 //! Tests SHOW COLLECTIONS, DESCRIBE COLLECTION, and EXPLAIN SELECT
 //! through the full pipeline: parse -> validate -> execute.
@@ -35,7 +35,7 @@ fn test_show_collections_returns_all_types() {
         .iter()
         .filter_map(|r| payload_str(r, "name"))
         .collect();
-    names.sort();
+    names.sort_unstable();
     assert_eq!(names, vec!["docs", "kg", "tags"]);
 
     // Verify types are present for each.
@@ -250,7 +250,7 @@ fn test_show_collections_many_collections() {
     }
 }
 
-/// DESCRIBE after inserting data — verify point_count reflects state.
+/// DESCRIBE after inserting data — verify `point_count` reflects state.
 #[test]
 fn test_describe_collection_with_data() {
     use velesdb_core::Point;
@@ -287,7 +287,7 @@ fn test_describe_collection_with_data() {
     );
 }
 
-/// DESCRIBE with HNSW params — verify custom M and ef_construction are shown.
+/// DESCRIBE with HNSW params — verify custom M and `ef_construction` are shown.
 #[test]
 fn test_describe_collection_with_hnsw_params() {
     let (_dir, db) = create_test_db();

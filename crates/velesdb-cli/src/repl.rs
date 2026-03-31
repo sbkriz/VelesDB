@@ -54,6 +54,10 @@ pub enum QueryKind {
     Dml,
     /// TRAIN statement.
     Train,
+    /// Introspection statement (SHOW COLLECTIONS / DESCRIBE / EXPLAIN).
+    Introspection,
+    /// Admin statement (FLUSH).
+    Admin,
 }
 
 /// Query execution result
@@ -199,6 +203,10 @@ pub fn execute_query(
     // Determine query kind for display purposes.
     let kind = if parsed.is_ddl_query() {
         QueryKind::Ddl
+    } else if parsed.is_introspection_query() {
+        QueryKind::Introspection
+    } else if parsed.is_admin_query() {
+        QueryKind::Admin
     } else if parsed.is_dml_query() {
         QueryKind::Dml
     } else if parsed.is_train() {

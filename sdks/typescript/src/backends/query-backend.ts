@@ -80,7 +80,7 @@ export function isLikelyAggregationQuery(queryString: string): boolean {
 export function isLikelyDdlOrMutationQuery(queryString: string): boolean {
   return /^\s*(CREATE|DROP)\s+(COLLECTION|GRAPH|METADATA|INDEX)\b/i.test(queryString)
     || /^\s*DELETE\s+(FROM|EDGE)\b/i.test(queryString)
-    || /^\s*INSERT\s+(EDGE|NODE)\b/i.test(queryString)
+    || /^\s*INSERT\s+(INTO|EDGE|NODE)\b/i.test(queryString)
     || /^\s*UPSERT\s+INTO\b/i.test(queryString)
     || /^\s*(SHOW|DESCRIBE|EXPLAIN)\b/i.test(queryString)
     || /^\s*(FLUSH|ANALYZE|TRUNCATE)\b/i.test(queryString)

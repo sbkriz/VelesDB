@@ -1,4 +1,4 @@
-//! BDD tests for VelesQL v3.5 Phase 5: SELECT EDGES and INSERT NODE.
+//! BDD tests for `VelesQL` v3.5 Phase 5: SELECT EDGES and INSERT NODE.
 //!
 //! All tests exercise the full pipeline: SQL string -> parse -> execute -> verify.
 //! Requires `persistence` feature (gated in `bdd.rs`).

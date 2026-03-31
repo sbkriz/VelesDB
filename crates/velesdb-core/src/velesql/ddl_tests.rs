@@ -952,8 +952,7 @@ fn test_create_graph_typed_schema_multiple_nodes() {
 
 #[test]
 fn test_invalid_metric_rejected_at_parse_time() {
-    let result =
-        Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'manhattan');");
+    let result = Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'manhattan');");
     assert!(result.is_err(), "invalid metric should fail at parse time");
     let err = result.unwrap_err();
     let msg = err.to_string();
@@ -976,9 +975,7 @@ fn test_valid_metric_aliases_parse_successfully() {
         "hamming",
         "jaccard",
     ] {
-        let sql = format!(
-            "CREATE COLLECTION test_m (dimension = 64, metric = '{alias}');"
-        );
+        let sql = format!("CREATE COLLECTION test_m (dimension = 64, metric = '{alias}');");
         let result = Parser::parse(&sql);
         assert!(
             result.is_ok(),

@@ -535,14 +535,41 @@ fn build_insert_node(collection: String, fields: &[(String, Value)]) -> Result<Q
 
 /// Builds the JSON payload for an `INSERT NODE` statement.
 ///
-/// If a `payload` field is present, its string value is parsed as JSON.
+/// If a `payload` field is present as a JSON string, it is parsed and used
+/// exclusively -- no other non-`id` fields are allowed alongside it.
+/// If `payload` is present but not a string, a parse error is returned.
 /// Otherwise, all non-`id` fields are collected into a JSON object.
 fn build_node_payload(fields: &[(String, Value)]) -> Result<serde_json::Value, ParseError> {
     // Check for explicit payload field first.
-    let payload_field = fields.iter().find(|(k, _)| k == "payload");
-    if let Some((_, Value::String(json_str))) = payload_field {
-        return serde_json::from_str(json_str)
-            .map_err(|e| ParseError::syntax(0, "", format!("Invalid JSON in payload: {e}")));
+    if let Some((_, payload_val)) = fields.iter().find(|(k, _)| k == "payload") {
+        return match payload_val {
+            Value::String(json_str) => {
+                let extra_fields: Vec<&str> = fields
+                    .iter()
+                    .filter(|(k, _)| k != "id" && k != "payload")
+                    .map(|(k, _)| k.as_str())
+                    .collect();
+                if !extra_fields.is_empty() {
+                    return Err(ParseError::syntax(
+                        0,
+                        "",
+                        format!(
+                            "When 'payload' is specified as JSON string, other fields \
+                             are ignored. Remove extra fields ({}) or omit the 'payload' field",
+                            extra_fields.join(", ")
+                        ),
+                    ));
+                }
+                serde_json::from_str(json_str)
+                    .map_err(|e| ParseError::syntax(0, "", format!("Invalid JSON in payload: {e}")))
+            }
+            _ => Err(ParseError::syntax(
+                0,
+                "",
+                "The 'payload' field must be a JSON string \
+                 (e.g., payload = '{\"key\": \"value\"}')",
+            )),
+        };
     }
 
     // Collect non-id fields into a JSON object.

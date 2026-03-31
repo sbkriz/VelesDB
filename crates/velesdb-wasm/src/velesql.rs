@@ -348,7 +348,11 @@ impl ParsedQuery {
             DmlStatement::SelectEdges(s) => &s.collection,
             DmlStatement::InsertNode(s) => &s.collection,
         };
-        if name.is_empty() { None } else { Some(name.clone()) }
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.clone())
+        }
     }
 
     /// Recursively check if a condition contains vector search.

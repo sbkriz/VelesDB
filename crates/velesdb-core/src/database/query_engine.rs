@@ -1,6 +1,8 @@
 //! Query execution: `execute_query`, `explain_query`, plan caching, and DML dispatch.
 
-use crate::velesql::{AdminStatement, DdlStatement, DmlStatement, IntrospectionStatement, Query, TrainStatement};
+use crate::velesql::{
+    AdminStatement, DdlStatement, DmlStatement, IntrospectionStatement, Query, TrainStatement,
+};
 use crate::{Error, Result, SearchResult};
 
 use super::Database;

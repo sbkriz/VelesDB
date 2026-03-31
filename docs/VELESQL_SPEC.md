@@ -1578,6 +1578,10 @@ Returns a payload with `{"status": "flushed", "full": true/false}`.
 Flushing a nonexistent collection returns a `CollectionNotFound` error.
 Flushing an empty database (no collections) succeeds with no error.
 
+> **Note:** `full` (case-insensitive) is a reserved modifier for FLUSH. To flush a
+> collection named `full`, use `FLUSH FULL full` or quote the identifier:
+> `` FLUSH `full` ``.
+
 ---
 
 ## DML Statements (INSERT, UPDATE, DELETE)
@@ -1730,6 +1734,10 @@ SELECT EDGES FROM kg WHERE source = 1 AND label = 'KNOWS'
 
 Each result contains a JSON payload with `edge_id`, `source`, `target`, `label`,
 and `properties` fields.
+
+> **Limitation:** WHERE supports at most two conditions combined with AND. Three-condition
+> queries like `WHERE source = 1 AND label = 'X' AND target = 2` are not supported.
+> Use two-condition AND and filter results client-side if needed.
 
 ### INSERT NODE (v3.5+)
 

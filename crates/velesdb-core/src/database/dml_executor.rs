@@ -1,4 +1,4 @@
-//! DML mutation executor for VelesQL (INSERT EDGE, DELETE, DELETE EDGE,
+//! DML mutation executor for `VelesQL` (INSERT EDGE, DELETE, DELETE EDGE,
 //! SELECT EDGES, INSERT NODE).
 //!
 //! Extracted from `ddl_executor.rs` to keep each file under the 500 NLOC
@@ -344,12 +344,11 @@ fn dispatch_edge_and(
     // Prefer fetching by source/target (most selective) as the primary
     // condition. If the right side has source/target and left does not,
     // swap so the more selective side drives the index lookup.
-    let (fetch, filter_side) =
-        if condition_selectivity(right) > condition_selectivity(left) {
-            (right, left)
-        } else {
-            (left, right)
-        };
+    let (fetch, filter_side) = if condition_selectivity(right) > condition_selectivity(left) {
+        (right, left)
+    } else {
+        (left, right)
+    };
     let mut edges = dispatch_edge_condition(graph, fetch)?;
     let filter = extract_and_filter(filter_side)?;
     edges.retain(|e| edge_matches_filter(e, &filter));

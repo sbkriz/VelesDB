@@ -422,6 +422,12 @@ pub async fn query<R: Runtime>(
 
     // DDL/DML/TRAIN/Introspection/Admin queries are dispatched through
     // Database::execute_query which handles them internally (no collection lookup needed).
+    //
+    // All DML (including INSERT INTO/UPSERT/UPDATE) is routed through
+    // Database::execute_query which handles dispatch internally.
+    // This differs from the server handler which lets INSERT/UPSERT/UPDATE
+    // flow through the standard query path for collection-scoped projection.
+    // Both approaches are functionally equivalent (verified by BDD regression tests).
     if parsed.is_ddl_query()
         || parsed.is_dml_query()
         || parsed.is_train()

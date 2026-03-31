@@ -1,4 +1,4 @@
-//! BDD tests for VelesQL v3.5 Phase 4: multi-row INSERT, UPSERT, WITH (quality=...).
+//! BDD tests for `VelesQL` v3.5 Phase 4: multi-row INSERT, UPSERT, WITH (quality=...).
 //!
 //! All tests exercise the full pipeline: SQL string -> parse -> execute -> verify.
 //! Requires `persistence` feature (gated in `bdd.rs`).
