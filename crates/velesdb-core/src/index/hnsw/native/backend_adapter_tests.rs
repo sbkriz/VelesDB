@@ -422,3 +422,162 @@ fn test_parallel_insert_chunked_recall() {
         "average recall@{k} should be >= 0.90, got {avg_recall:.4}"
     );
 }
+
+// =========================================================================
+// TDD Tests: adaptive_ef_for_batch (#486 — bulk insert optimization)
+// =========================================================================
+
+#[test]
+fn test_adaptive_ef_small_batch_no_reduction() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 32, 400, 100);
+
+    // Batches <= 1000 use full ef_construction with stagnation disabled
+    let (ef, stag) = hnsw.adaptive_ef_for_batch(500);
+    assert_eq!(ef, 400, "small batch should use full ef_construction");
+    assert_eq!(stag, 0, "small batch should have stagnation disabled");
+
+    let (ef, stag) = hnsw.adaptive_ef_for_batch(1000);
+    assert_eq!(
+        ef, 400,
+        "batch of exactly 1000 should use full ef_construction"
+    );
+    assert_eq!(
+        stag, 0,
+        "batch of exactly 1000 should have stagnation disabled"
+    );
+}
+
+#[test]
+fn test_adaptive_ef_medium_batch_85_percent() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 32, 400, 100);
+
+    // Batches > 1K and <= 10K use 85% of ef_construction
+    let (ef, stag) = hnsw.adaptive_ef_for_batch(5_000);
+    assert_eq!(
+        ef, 340,
+        "batch of 5K should use 85% of ef_construction (340)"
+    );
+    assert_eq!(stag, 170, "stagnation should be ef/2 = 170");
+}
+
+#[test]
+fn test_adaptive_ef_large_batch_75_percent() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 32, 400, 100);
+
+    // Batches > 10K and <= 50K use 75% of ef_construction
+    let (ef, stag) = hnsw.adaptive_ef_for_batch(20_000);
+    assert_eq!(
+        ef, 300,
+        "batch of 20K should use 75% of ef_construction (300)"
+    );
+    assert_eq!(stag, 150, "stagnation should be ef/2 = 150");
+}
+
+#[test]
+fn test_adaptive_ef_very_large_batch_60_percent() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 32, 400, 100);
+
+    // Batches > 50K use 60% of ef_construction
+    let (ef, stag) = hnsw.adaptive_ef_for_batch(100_000);
+    assert_eq!(
+        ef, 240,
+        "batch of 100K should use 60% of ef_construction (240)"
+    );
+    assert_eq!(stag, 120, "stagnation should be ef/2 = 120");
+}
+
+#[test]
+fn test_adaptive_ef_floor_at_4x_max_connections() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    // ef_construction=40, M=32: 60% of 40 = 24, but floor is 4*M=128
+    let hnsw = NativeHnsw::new(engine, 32, 40, 100);
+
+    let (ef, stag) = hnsw.adaptive_ef_for_batch(100_000);
+    assert_eq!(
+        ef, 128,
+        "ef should be floored at 4*max_connections when scaling goes below it"
+    );
+    assert_eq!(stag, 64, "stagnation should be ef/2 = 64");
+}
+
+#[test]
+fn test_adaptive_ef_boundary_10001() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 400, 100);
+
+    // Exactly 10001 crosses into the 75% tier
+    let (ef, _) = hnsw.adaptive_ef_for_batch(10_001);
+    assert_eq!(ef, 300, "batch of 10001 should use 75% tier");
+}
+
+#[test]
+fn test_adaptive_ef_boundary_50001() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 400, 100);
+
+    // Exactly 50001 crosses into the 60% tier
+    let (ef, _) = hnsw.adaptive_ef_for_batch(50_001);
+    assert_eq!(ef, 240, "batch of 50001 should use 60% tier");
+}
+
+#[test]
+fn test_adaptive_ef_recall_preserved_with_2000_vectors() {
+    // Regression test: adaptive ef for a 2000-vector batch (75% tier)
+    // must maintain recall >= 0.90 (same threshold as non-adaptive test above).
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    let vectors: Vec<Vec<f32>> = (0..2000)
+        .map(|i| (0..32).map(|j| ((i * 32 + j) as f32) * 0.001).collect())
+        .collect();
+
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+
+    // This exercises connect_batch_chunked -> connect_node_with_ef with adaptive ef
+    hnsw.parallel_insert(&data)
+        .expect("parallel_insert should succeed");
+
+    assert_eq!(hnsw.len(), 2000);
+
+    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let k = 10;
+    let ef_search = 128;
+    let num_queries = 50;
+    let mut total_recall = 0.0;
+
+    for q_idx in 0..num_queries {
+        let query: Vec<f32> = (0..32)
+            .map(|j| ((q_idx * 7 + j * 13) as f32) * 0.002)
+            .collect();
+
+        let hnsw_results = hnsw.search(&query, k, ef_search);
+        let hnsw_ids: Vec<usize> = hnsw_results.iter().map(|&(id, _)| id).collect();
+
+        let mut distances: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(id, v)| (id, bf_engine.distance(&query, v)))
+            .collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let ground_truth: Vec<usize> = distances.iter().take(k).map(|&(id, _)| id).collect();
+
+        total_recall += recall_at_k(&ground_truth, &hnsw_ids);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    // Reason: num_queries is a small constant (50); f64 is exact for integers up to 2^53.
+    let avg_recall = total_recall / num_queries as f64;
+
+    assert!(
+        avg_recall >= 0.90,
+        "adaptive ef recall@{k} should be >= 0.90, got {avg_recall:.4}"
+    );
+}

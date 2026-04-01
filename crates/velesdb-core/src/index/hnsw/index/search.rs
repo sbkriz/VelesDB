@@ -94,6 +94,43 @@ impl HnswIndex {
         results
     }
 
+    /// Performs HNSW search with a pre-filter bitmap.
+    ///
+    /// Over-fetches candidates from the HNSW graph (using `ef_search` as the
+    /// candidate pool size), then retains only results whose external ID is
+    /// present in `allowed_ids`. This avoids the expensive payload-level
+    /// post-filter for points that cannot match.
+    ///
+    /// Graph connectivity is preserved: the HNSW traversal explores all
+    /// nodes for navigation, but only bitmap-matching nodes appear in the
+    /// output. This maintains recall quality.
+    pub(crate) fn search_hnsw_only_filtered(
+        &self,
+        query: &[f32],
+        candidates_k: usize,
+        ef_search: usize,
+        allowed_ids: &roaring::RoaringBitmap,
+    ) -> Vec<ScoredResult> {
+        let inner = self.inner.read();
+        let neighbours = inner.search(query, candidates_k, ef_search);
+
+        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
+        for &(node_id, raw_dist) in &neighbours {
+            if let Some(id) = self.mappings.get_id(node_id) {
+                // Bitmap uses u32 keys. IDs in the bitmap must match.
+                // IDs > u32::MAX cannot be represented in the bitmap, so they
+                // are passed through unconditionally to the post-filter.
+                let in_bitmap = u32::try_from(id).is_ok_and(|id32| allowed_ids.contains(id32));
+                let exceeds_bitmap_range = u32::try_from(id).is_err();
+                if in_bitmap || exceeds_bitmap_range {
+                    let score = inner.transform_score(raw_dist);
+                    results.push(ScoredResult::new(id, score));
+                }
+            }
+        }
+        results
+    }
+
     /// Determines whether two-stage reranking should be used.
     ///
     /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.
@@ -103,11 +140,11 @@ impl HnswIndex {
         k: usize,
         ef_search: usize,
     ) -> Option<usize> {
-        // Skip reranking for Fast, Adaptive, or AutoTune quality (these handle
+        // Skip reranking for Adaptive or AutoTune quality (these handle
         // their own exploration strategy) or if vector storage is disabled.
         if matches!(
             quality,
-            SearchQuality::Fast | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
+            SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || !self.enable_vector_storage
         {
             return None;
@@ -115,13 +152,13 @@ impl HnswIndex {
 
         // Two-stage reranking: use a larger candidate pool for initial HNSW search,
         // then rerank with exact SIMD distances for better precision.
+        // Fast mode uses k-only reranking (no oversampling, just re-score for
+        // rank correction). Balanced uses 3x for 0.995+ recall.
         let min_rerank_k = match quality {
-            SearchQuality::Balanced => k * 2,
+            SearchQuality::Fast => k,
+            SearchQuality::Balanced => k * 3,
             SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
-            SearchQuality::Fast
-            | SearchQuality::Perfect
-            | SearchQuality::Adaptive { .. }
-            | SearchQuality::AutoTune => {
+            SearchQuality::Perfect | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune => {
                 return None;
             }
         };
@@ -224,7 +261,7 @@ impl HnswIndex {
             return self.search_adaptive(query, k, min_ef, max_ef);
         }
 
-        let ef_search = quality.ef_search(k);
+        let ef_search = quality.ef_search_for_scale(k, self.len());
 
         // Two-stage mode: larger candidate pool + exact SIMD reranking.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {

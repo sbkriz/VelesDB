@@ -8,7 +8,7 @@
 //! - Persistence (file dump/load)
 
 use super::distance::DistanceEngine;
-use super::graph::{NativeHnsw, NO_ENTRY_POINT};
+use super::graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 use super::layer::{Layer, NodeId};
 use crate::distance::DistanceMetric;
 use rayon::prelude::*;
@@ -235,12 +235,66 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         (batch_len / 50).clamp(DEFAULT_CHUNK, MAX_CHUNK)
     }
 
+    /// Computes the effective `ef_construction` for a batch of the given size.
+    ///
+    /// For large batches, the full `ef_construction` search budget is wasteful
+    /// because the graph scaffold built by earlier vectors already provides
+    /// sufficient connectivity for neighbor discovery. Reducing the beam width
+    /// proportionally to batch size matches the strategy used by Qdrant and
+    /// hnswlib for bulk loading.
+    ///
+    /// The returned value is always >= `max_connections` to guarantee that
+    /// each inserted node can discover enough neighbors for a well-connected
+    /// graph.
+    ///
+    /// Returns `(effective_ef, stagnation_limit)`.
+    #[must_use]
+    pub(in crate::index::hnsw::native) fn adaptive_ef_for_batch(
+        &self,
+        batch_size: usize,
+    ) -> (usize, usize) {
+        let base = self.ef_construction;
+
+        // Conservative scaling: the original 0.25/0.50 reduction destroyed
+        // graph quality at 100K+ (recall dropped from 97% to 64%).
+        // Malkov & Yashunin 2018 recommends ef_construction >= 2*M;
+        // these floors keep ef well above that while still accelerating
+        // bulk loads vs single-insert.
+        let scale = if batch_size > 50_000 {
+            0.60
+        } else if batch_size > 10_000 {
+            0.75
+        } else if batch_size > 1_000 {
+            0.85
+        } else {
+            return (base, 0);
+        };
+
+        // Reason: f64 product of two small positive values fits in usize.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let scaled = (base as f64 * scale) as usize;
+
+        // Floor at 4*M to guarantee adequate neighbor diversity budget.
+        let effective_ef = scaled.max(self.max_connections * 4);
+
+        // Stagnation-based early termination: ef/2 gives the beam search
+        // enough runway to escape local clusters at scale (was ef/3, which
+        // caused premature termination at 100K+).
+        let stagnation = effective_ef / 2;
+
+        (effective_ef, stagnation)
+    }
+
     /// Connects nodes in chunks, refreshing the entry point between chunks.
     ///
     /// Each chunk runs `par_iter` over its assignments, then promotes the
     /// highest-layer node and increments the count. This keeps the entry
     /// point fresher than a single monolithic `par_iter` over the entire
     /// batch, improving recall for large insertions.
+    ///
+    /// For batches > 1K vectors, uses adaptive `ef_construction` reduction
+    /// to lower the search budget proportionally, matching the bulk-loading
+    /// strategies of Qdrant and hnswlib. Single-vector insert is unaffected.
     ///
     /// # Errors
     ///
@@ -252,6 +306,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         first_node: NodeId,
     ) -> crate::error::Result<()> {
         let chunk_size = Self::compute_chunk_size(assignments.len());
+        let (effective_ef, stagnation) = self.adaptive_ef_for_batch(assignments.len());
 
         for chunk in assignments.chunks(chunk_size) {
             let loaded = self.entry_point.load(std::sync::atomic::Ordering::Acquire);
@@ -268,7 +323,14 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                     let batch_idx = node_id - first_node;
                     let query: &[f32] = &processed[batch_idx];
                     let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
-                    self.connect_node(*node_id, query, *layer, current_ep);
+                    self.connect_node_with_ef(
+                        *node_id,
+                        query,
+                        *layer,
+                        current_ep,
+                        effective_ef,
+                        stagnation,
+                    );
                     Ok(())
                 })?;
 
@@ -511,8 +573,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             max_connections_0: graph.max_connections_0,
             ef_construction: graph.ef_construction,
             level_mult,
-            alpha: 1.0,
-            stagnation_limit: graph.ef_construction / 4,
+            alpha: DEFAULT_ALPHA,
+            stagnation_limit: graph.ef_construction / 2,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
             columnar: parking_lot::RwLock::new(None),
         })

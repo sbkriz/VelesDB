@@ -36,6 +36,16 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 /// writes remain serialized via `entry_point_promote_lock` (Issue #422).
 pub const NO_ENTRY_POINT: usize = usize::MAX;
 
+/// Default VAMANA alpha for neighbor diversification.
+///
+/// Alpha > 1.0 biases `select_neighbors` toward graph navigability:
+/// a candidate is accepted when `alpha * candidate_dist <= dist_to_selected`,
+/// so higher alpha keeps neighbors that are farther from each other, producing
+/// a more connected graph with better recall for all search modes.
+///
+/// 1.2 is the value recommended by the VAMANA paper (Subramanya et al., 2019).
+pub const DEFAULT_ALPHA: f32 = 1.2;
+
 /// Native HNSW index implementation.
 ///
 /// # Type Parameters
@@ -72,10 +82,14 @@ pub struct NativeHnsw<D: DistanceEngine> {
     pub(in crate::index::hnsw::native) ef_construction: usize,
     /// Level multiplier for layer selection (1/ln(M))
     pub(in crate::index::hnsw::native) level_mult: f64,
-    /// VAMANA alpha parameter for neighbor diversification (default: 1.0)
+    /// VAMANA alpha parameter for neighbor diversification (default: 1.2).
+    ///
+    /// Alpha > 1.0 biases neighbor selection toward diversity over proximity,
+    /// producing a more navigable graph with better recall across all search
+    /// modes. The value 1.2 follows the VAMANA paper recommendation.
     pub(in crate::index::hnsw::native) alpha: f32,
     /// Maximum consecutive candidates without improving top-k before early termination.
-    /// Default: `ef_construction / 4`. Set to `0` to disable.
+    /// Default: `ef_construction / 2`. Set to `0` to disable.
     pub(crate) stagnation_limit: usize,
     /// Node capacity pre-allocated by `pre_expand_layers()`. Allows `expand_layers()`
     /// to skip the write lock when the insert falls within the pre-allocated range.
@@ -89,7 +103,7 @@ pub struct NativeHnsw<D: DistanceEngine> {
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
-    /// Creates a new native HNSW index.
+    /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
     ///
     /// Vector storage is initialized lazily on the first `insert()` call,
     /// using the dimension of the first inserted vector.
@@ -105,7 +119,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             max_connections,
             ef_construction,
             max_elements,
-            1.0,
+            DEFAULT_ALPHA,
             None,
         )
     }
@@ -113,6 +127,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with a known vector dimension.
     ///
     /// Pre-allocates contiguous vector storage for cache-friendly access.
+    /// Uses `DEFAULT_ALPHA` (1.2) for VAMANA diversification.
     ///
     /// # Errors
     ///
@@ -124,13 +139,41 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         max_elements: usize,
         dimension: usize,
     ) -> crate::error::Result<Self> {
+        Self::new_with_dimension_and_alpha(
+            distance,
+            max_connections,
+            ef_construction,
+            max_elements,
+            dimension,
+            DEFAULT_ALPHA,
+        )
+    }
+
+    /// Creates a new native HNSW index with a known dimension and custom alpha.
+    ///
+    /// Pre-allocates contiguous vector storage for cache-friendly access.
+    /// `alpha` controls VAMANA neighbor diversification: 1.0 = no diversification,
+    /// 1.2 = recommended default, >1.2 = more diversity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vector storage allocation fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_dimension_and_alpha(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        dimension: usize,
+        alpha: f32,
+    ) -> crate::error::Result<Self> {
         let storage = ContiguousVectors::new(dimension, max_elements)?;
         Ok(Self::build(
             distance,
             max_connections,
             ef_construction,
             max_elements,
-            1.0,
+            alpha,
             Some(storage),
         ))
     }
@@ -179,7 +222,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             ef_construction,
             level_mult,
             alpha,
-            stagnation_limit: ef_construction / 4,
+            // ef/2 gives beam search more exploration budget at scale.
+            // The prior ef/4 caused premature termination at 100K+ vectors,
+            // contributing to recall degradation (97% at 10K → 64% at 100K).
+            stagnation_limit: ef_construction / 2,
             pre_allocated_capacity: AtomicUsize::new(0),
             columnar: RwLock::new(None),
         }
