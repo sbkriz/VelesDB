@@ -599,3 +599,97 @@ fn test_remove_node_edges_cleans_label_index() {
     assert!(store.get_edges_by_label("KNOWS").is_empty());
     assert!(store.get_edges_by_label("FOLLOWS").is_empty());
 }
+
+// =============================================================================
+// Zero-allocation edge access: for_each_outgoing, outgoing_degree, incoming_degree
+// =============================================================================
+
+/// `for_each_outgoing` visits every outgoing edge exactly once.
+#[test]
+fn test_for_each_outgoing_visits_all_edges() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "B").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 200, 300, "C").expect("valid"))
+        .expect("add");
+
+    let mut visited_ids = Vec::new();
+    store.for_each_outgoing(100, |edge| visited_ids.push(edge.id()));
+
+    visited_ids.sort_unstable();
+    assert_eq!(visited_ids, vec![1, 2]);
+}
+
+/// `for_each_outgoing` on a node with no outgoing edges invokes the closure zero times.
+#[test]
+fn test_for_each_outgoing_empty() {
+    let store = EdgeStore::new();
+    let mut count = 0;
+    store.for_each_outgoing(999, |_| count += 1);
+    assert_eq!(count, 0);
+}
+
+/// `outgoing_degree` returns the correct count without materializing edges.
+#[test]
+fn test_outgoing_degree() {
+    let mut store = EdgeStore::new();
+    assert_eq!(store.outgoing_degree(100), 0);
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    assert_eq!(store.outgoing_degree(100), 1);
+
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "B").expect("valid"))
+        .expect("add");
+    assert_eq!(store.outgoing_degree(100), 2);
+
+    // Node 200 has only one outgoing edge (none added yet)
+    assert_eq!(store.outgoing_degree(200), 0);
+}
+
+/// `incoming_degree` returns the correct count without materializing edges.
+#[test]
+fn test_incoming_degree() {
+    let mut store = EdgeStore::new();
+    assert_eq!(store.incoming_degree(200), 0);
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    assert_eq!(store.incoming_degree(200), 1);
+
+    store
+        .add_edge(GraphEdge::new(2, 300, 200, "B").expect("valid"))
+        .expect("add");
+    assert_eq!(store.incoming_degree(200), 2);
+
+    // Node 100 has no incoming edges
+    assert_eq!(store.incoming_degree(100), 0);
+}
+
+/// Degree methods agree with the length of materialized edge vectors.
+#[test]
+fn test_degree_matches_materialized_len() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "X").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 10, 30, "Y").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 30, 10, "Z").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.outgoing_degree(10), store.get_outgoing(10).len());
+    assert_eq!(store.incoming_degree(10), store.get_incoming(10).len());
+    assert_eq!(store.outgoing_degree(20), store.get_outgoing(20).len());
+    assert_eq!(store.incoming_degree(20), store.get_incoming(20).len());
+}

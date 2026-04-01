@@ -372,8 +372,9 @@ impl HnswIndex {
     /// Rayon-based brute-force search over `ShardedVectors`.
     ///
     /// Extracted from `brute_force_search_parallel` so the GPU gate in that
-    /// method stays compact.
-    fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
+    /// method stays compact. Also used by `search_brute_force` as the default
+    /// compute path (RF-DEDUP: single parallel implementation).
+    pub(super) fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         let vectors_snapshot = self.vectors.collect_for_parallel();
 
         let mut results: Vec<ScoredResult> = vectors_snapshot

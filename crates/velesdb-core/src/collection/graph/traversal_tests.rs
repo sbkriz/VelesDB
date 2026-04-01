@@ -174,3 +174,82 @@ fn test_with_max_depth_custom() {
     let config = TraversalConfig::default().with_max_depth(7);
     assert_eq!(config.max_depth, 7);
 }
+
+// =========================================================================
+// Resolution 1: TraversalResult::path must be Vec<u64> at public API
+// =========================================================================
+
+#[test]
+fn test_traversal_result_path_is_vec_u64() {
+    // GIVEN: a traversal result built from a known graph
+    let store = create_test_edge_store();
+    let config = TraversalConfig::with_range(1, 2);
+
+    // WHEN: performing a BFS traversal
+    let results = bfs_traverse(&store, 1, &config);
+
+    // THEN: path field is Vec<u64> (compile-time type check)
+    let result = results
+        .iter()
+        .find(|r| r.target_id == 3 && r.depth == 2)
+        .expect("test: should find node 3 at depth 2");
+    let path: Vec<u64> = result.path.clone();
+    assert_eq!(path, vec![100, 101]);
+}
+
+#[test]
+fn test_traversal_result_new_accepts_vec() {
+    // GIVEN / WHEN: constructing a TraversalResult with Vec<u64>
+    let path: Vec<u64> = vec![10, 20, 30];
+    let result = TraversalResult::new(42, path.clone(), 3);
+
+    // THEN: the path field round-trips correctly
+    let recovered: Vec<u64> = result.path;
+    assert_eq!(recovered, path);
+}
+
+// =========================================================================
+// Resolution 2: bfs_traverse_both deduplicates by target_id
+// =========================================================================
+
+#[test]
+fn test_bfs_traverse_both_dedup_by_target_id() {
+    // GIVEN: a graph A->B->C and C->B (bidirectional path through B)
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "LINK").unwrap())
+        .unwrap(); // A->B
+    store
+        .add_edge(GraphEdge::new(2, 20, 30, "LINK").unwrap())
+        .unwrap(); // B->C
+    store
+        .add_edge(GraphEdge::new(3, 30, 20, "LINK").unwrap())
+        .unwrap(); // C->B (reverse)
+
+    let config = TraversalConfig::with_range(1, 2).with_limit(100);
+
+    // WHEN: traverse_both from A with depth 2
+    let results = bfs_traverse_both(&store, 10, &config);
+
+    // THEN: each target node appears at most once in results
+    let mut seen = std::collections::HashMap::new();
+    for r in &results {
+        *seen.entry(r.target_id).or_insert(0u32) += 1;
+    }
+    for (node_id, count) in &seen {
+        assert_eq!(
+            *count, 1,
+            "Node {} appeared {} times in traverse_both, expected 1",
+            node_id, count
+        );
+    }
+    // Verify expected nodes are present
+    assert!(
+        results.iter().any(|r| r.target_id == 20),
+        "Node B (20) should appear in results"
+    );
+    assert!(
+        results.iter().any(|r| r.target_id == 30),
+        "Node C (30) should appear in results"
+    );
+}

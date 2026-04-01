@@ -65,12 +65,14 @@ impl NativeHnswIndex {
         metric: DistanceMetric,
         params: HnswParams,
     ) -> crate::error::Result<Self> {
-        let inner = NativeHnswInner::new(
+        let inner = NativeHnswInner::new_with_options(
             metric,
             params.max_connections,
             params.max_elements,
             params.ef_construction,
             dimension,
+            params.storage_mode,
+            params.alpha,
         )?;
 
         Ok(Self {
@@ -379,6 +381,7 @@ impl NativeHnswIndex {
                 self.vectors.insert(idx, vec_slice);
             }
         }
+
         Ok(())
     }
 

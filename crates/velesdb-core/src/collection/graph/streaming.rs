@@ -3,8 +3,10 @@
 //! This module provides lazy iterators that yield traversal results one at a time,
 //! avoiding the need to load all visited nodes into memory at once.
 
+use super::edge_concurrent::ConcurrentEdgeStore;
 use super::traversal::BfsState;
 use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
+use smallvec::SmallVec;
 use std::collections::{HashSet, VecDeque};
 
 /// Configuration for streaming traversal.
@@ -101,6 +103,9 @@ pub struct BfsIterator<'a> {
     queue: VecDeque<BfsState>,
     visited: HashSet<u64>,
     config: StreamingConfig,
+    /// Pre-built set for O(1) relationship-type filtering without per-edge allocation.
+    /// Empty when no filter is configured (all edge types accepted).
+    rel_types_set: HashSet<String>,
     yielded: usize,
     visited_overflow: bool,
     /// Buffer for pending results from current node being processed.
@@ -118,15 +123,19 @@ impl<'a> BfsIterator<'a> {
         let mut queue = VecDeque::new();
         queue.push_back(BfsState {
             node_id: start_id,
-            path: Vec::new(),
+            path: SmallVec::new(),
             depth: 0,
         });
+
+        // Pre-build HashSet from Vec<String> once, not per-edge.
+        let rel_types_set: HashSet<String> = config.rel_types.iter().cloned().collect();
 
         Self {
             edge_store,
             queue,
             visited,
             config,
+            rel_types_set,
             yielded: 0,
             visited_overflow: false,
             pending_results: VecDeque::new(),
@@ -179,10 +188,8 @@ impl Iterator for BfsIterator<'_> {
 
             // Process ALL edges from this node, collecting results
             for edge in edges {
-                // Filter by relationship type
-                if !self.config.rel_types.is_empty()
-                    && !self.config.rel_types.contains(&edge.label().to_string())
-                {
+                // Filter by relationship type using pre-built HashSet (zero allocation).
+                if !self.rel_types_set.is_empty() && !self.rel_types_set.contains(edge.label()) {
                     continue;
                 }
 
@@ -228,7 +235,7 @@ impl Iterator for BfsIterator<'_> {
 
                 // Buffer the result (don't return immediately - process all edges first)
                 self.pending_results
-                    .push_back(TraversalResult::new(target, new_path, new_depth));
+                    .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
             }
 
             // After processing all edges from this node, yield first pending result if any
@@ -250,6 +257,140 @@ pub fn bfs_stream(
     config: StreamingConfig,
 ) -> BfsIterator<'_> {
     BfsIterator::new(edge_store, start_id, config)
+}
+
+// ---------------------------------------------------------------------------
+// ConcurrentBfsIterator — BFS over ConcurrentEdgeStore (sharded)
+// ---------------------------------------------------------------------------
+
+/// Streaming BFS iterator that works with [`ConcurrentEdgeStore`].
+///
+/// Unlike [`BfsIterator`] (which borrows `&EdgeStore` and returns edge
+/// references), this iterator acquires per-shard read locks on each
+/// `get_outgoing()` call and works with owned `GraphEdge` values.
+/// No shard lock is held across iterations, maximising concurrency.
+pub struct ConcurrentBfsIterator<'a> {
+    edge_store: &'a ConcurrentEdgeStore,
+    queue: VecDeque<BfsState>,
+    visited: HashSet<u64>,
+    config: StreamingConfig,
+    rel_types_set: HashSet<String>,
+    yielded: usize,
+    visited_overflow: bool,
+    pending_results: VecDeque<TraversalResult>,
+}
+
+impl<'a> ConcurrentBfsIterator<'a> {
+    /// Creates a new concurrent BFS iterator starting from the given node.
+    #[must_use]
+    pub fn new(
+        edge_store: &'a ConcurrentEdgeStore,
+        start_id: u64,
+        config: StreamingConfig,
+    ) -> Self {
+        let mut visited = HashSet::new();
+        visited.insert(start_id);
+
+        let mut queue = VecDeque::new();
+        queue.push_back(BfsState {
+            node_id: start_id,
+            path: SmallVec::new(),
+            depth: 0,
+        });
+
+        let rel_types_set: HashSet<String> = config.rel_types.iter().cloned().collect();
+
+        Self {
+            edge_store,
+            queue,
+            visited,
+            config,
+            rel_types_set,
+            yielded: 0,
+            visited_overflow: false,
+            pending_results: VecDeque::new(),
+        }
+    }
+}
+
+impl Iterator for ConcurrentBfsIterator<'_> {
+    type Item = TraversalResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(limit) = self.config.limit {
+            if self.yielded >= limit {
+                return None;
+            }
+        }
+
+        if let Some(result) = self.pending_results.pop_front() {
+            self.yielded += 1;
+            return Some(result);
+        }
+
+        while let Some(state) = self.queue.pop_front() {
+            // Per-node shard lock: acquired and released within this call.
+            let edges = self.edge_store.get_outgoing(state.node_id);
+
+            for edge in &edges {
+                if !self.rel_types_set.is_empty() && !self.rel_types_set.contains(edge.label()) {
+                    continue;
+                }
+
+                let target = edge.target();
+                let new_depth = state.depth + 1;
+
+                if new_depth > self.config.max_depth {
+                    continue;
+                }
+
+                if !self.visited_overflow && self.visited.contains(&target) {
+                    continue;
+                }
+
+                if !self.visited_overflow {
+                    if self.visited.len() >= self.config.max_visited_size {
+                        self.visited_overflow = true;
+                        self.visited.clear();
+                    } else {
+                        self.visited.insert(target);
+                    }
+                }
+
+                let mut new_path = state.path.clone();
+                new_path.push(edge.id());
+
+                if new_depth < self.config.max_depth {
+                    self.queue.push_back(BfsState {
+                        node_id: target,
+                        path: new_path.clone(),
+                        depth: new_depth,
+                    });
+                }
+
+                self.pending_results
+                    .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+            }
+
+            if let Some(result) = self.pending_results.pop_front() {
+                self.yielded += 1;
+                return Some(result);
+            }
+        }
+
+        None
+    }
+}
+
+/// Convenience function to create a streaming BFS iterator over a
+/// [`ConcurrentEdgeStore`].
+#[must_use]
+pub fn concurrent_bfs_stream(
+    edge_store: &ConcurrentEdgeStore,
+    start_id: u64,
+    config: StreamingConfig,
+) -> ConcurrentBfsIterator<'_> {
+    ConcurrentBfsIterator::new(edge_store, start_id, config)
 }
 
 // Tests moved to streaming_tests.rs per project rules

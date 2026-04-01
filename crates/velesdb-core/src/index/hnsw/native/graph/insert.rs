@@ -208,7 +208,31 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         node_id: NodeId,
         query: &[f32],
         node_layer: usize,
+        entry_point: NodeId,
+    ) {
+        self.connect_node_with_ef(
+            node_id,
+            query,
+            node_layer,
+            entry_point,
+            self.ef_construction,
+            0,
+        );
+    }
+
+    /// Connects a node into the HNSW graph using a caller-specified ef budget.
+    ///
+    /// Used by `connect_batch_chunked` to apply adaptive `ef_construction`
+    /// reduction during bulk insert (lower search budget for large batches)
+    /// without affecting single-vector insert or the stored `ef_construction`.
+    pub(in crate::index::hnsw::native) fn connect_node_with_ef(
+        &self,
+        node_id: NodeId,
+        query: &[f32],
+        node_layer: usize,
         mut entry_point: NodeId,
+        effective_ef: usize,
+        stagnation: usize,
     ) {
         for layer_idx in (0..=node_layer).rev() {
             let max_conn = if layer_idx == 0 {
@@ -216,14 +240,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             } else {
                 self.max_connections
             };
-            // Stagnation disabled during construction (0) to ensure
-            // optimal neighbor selection — see Devin review PR #336.
             let neighbors = self.search_layer(
                 query,
                 &[entry_point],
-                self.ef_construction,
+                effective_ef,
                 layer_idx,
-                0,
+                stagnation,
                 None,
             );
             let selected = self.select_neighbors(&neighbors, max_conn);

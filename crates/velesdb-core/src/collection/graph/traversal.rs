@@ -11,6 +11,7 @@
 #![allow(dead_code)] // WIP: Will be used by MATCH clause execution
 
 use super::EdgeStore;
+use smallvec::SmallVec;
 use std::collections::{HashSet, VecDeque};
 
 /// Default maximum depth for unbounded traversals.
@@ -27,7 +28,23 @@ pub const DEFAULT_MAX_DEPTH: u32 = 3;
 /// - Knowledge graphs
 pub const SAFETY_MAX_DEPTH: u32 = 100;
 
+/// Stack-allocated path type used internally by BFS/DFS traversal.
+///
+/// Most graph queries are depth 1-3 (social networks, knowledge graphs).
+/// `SmallVec<[u64; 4]>` stores up to 4 edge IDs inline (32 bytes on stack)
+/// and only heap-allocates for deeper traversals, eliminating per-path
+/// allocation overhead in the common case.
+///
+/// Note: [`TraversalResult::path`] uses `Vec<u64>` at the public API
+/// boundary. This type is exposed for advanced internal use only.
+pub type TraversalPath = SmallVec<[u64; 4]>;
+
 /// Result of a graph traversal operation.
+///
+/// The `path` field is `Vec<u64>` at the public API boundary. Internally,
+/// BFS state uses `SmallVec<[u64; 4]>` to avoid per-path heap allocation
+/// for typical depth 1-3 traversals, but this is converted to `Vec` when
+/// building the result.
 #[derive(Debug, Clone)]
 pub struct TraversalResult {
     /// The target node ID reached.
@@ -45,6 +62,23 @@ impl TraversalResult {
         Self {
             target_id,
             path,
+            depth,
+        }
+    }
+
+    /// Creates a traversal result from an internal `SmallVec` path.
+    ///
+    /// Converts the stack-allocated path to a heap-allocated `Vec` at the
+    /// public API boundary.
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
+    // Reason: Call sites pass owned SmallVecs (often via move or clone); taking
+    // by value avoids requiring callers to borrow-then-clone at call sites that
+    // already own the value.
+    pub(crate) fn from_smallvec(target_id: u64, path: TraversalPath, depth: u32) -> Self {
+        Self {
+            target_id,
+            path: path.to_vec(),
             depth,
         }
     }
@@ -128,7 +162,8 @@ pub(super) struct BfsState {
     /// Current node ID.
     pub(super) node_id: u64,
     /// Path taken to reach this node (edge IDs).
-    pub(super) path: Vec<u64>,
+    /// Uses `SmallVec` to avoid heap allocation for typical depth 1-3 traversals.
+    pub(super) path: TraversalPath,
     /// Current depth.
     pub(super) depth: u32,
 }
@@ -157,13 +192,17 @@ fn bfs_traverse_directed(
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
 
+    // Pre-build a HashSet<&str> once for the entire traversal, not per-node.
+    // Vec<String>::contains(&to_string()) allocated a String per edge in the inner loop.
+    let rel_filter: HashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
+
     // CRITICAL FIX: Mark source node as visited before traversal
     // to prevent cycles back to source causing duplicate work
     visited.insert(source_id);
 
     queue.push_back(BfsState {
         node_id: source_id,
-        path: Vec::new(),
+        path: SmallVec::new(),
         depth: 0,
     });
 
@@ -179,6 +218,7 @@ fn bfs_traverse_directed(
             &edges,
             &state,
             config,
+            &rel_filter,
             direction,
             &mut results,
             &mut visited,
@@ -192,10 +232,12 @@ fn bfs_traverse_directed(
 /// Processes neighbors for a single BFS level: filters edges, records results,
 /// and enqueues unvisited nodes for the next hop.
 #[inline]
+#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes pre-built filter set alongside traversal state; bundling into a context struct adds complexity without clarity for a private fn
 fn process_bfs_neighbors(
     edges: &[&super::GraphEdge],
     state: &BfsState,
     config: &TraversalConfig,
+    rel_filter: &HashSet<&str>,
     direction: BfsDirection,
     results: &mut Vec<TraversalResult>,
     visited: &mut HashSet<u64>,
@@ -205,7 +247,7 @@ fn process_bfs_neighbors(
         if results.len() >= config.limit {
             break;
         }
-        if !config.rel_types.is_empty() && !config.rel_types.contains(&edge.label().to_string()) {
+        if !rel_filter.is_empty() && !rel_filter.contains(edge.label()) {
             continue;
         }
         let next_node = match direction {
@@ -220,7 +262,11 @@ fn process_bfs_neighbors(
         new_path.push(edge.id());
 
         if new_depth >= config.min_depth {
-            results.push(TraversalResult::new(next_node, new_path.clone(), new_depth));
+            results.push(TraversalResult::from_smallvec(
+                next_node,
+                new_path.clone(),
+                new_depth,
+            ));
         }
         if new_depth < config.max_depth && visited.insert(next_node) {
             queue.push_back(BfsState {
@@ -282,20 +328,18 @@ pub fn bfs_traverse_both(
 
     // Forward traversal
     let forward = bfs_traverse(edge_store, source_id, &config_half);
+    // Build O(1) dedup set from forward results to avoid O(n) linear scan per reverse result.
+    let seen: HashSet<u64> = forward.iter().map(|r| r.target_id).collect();
     results.extend(forward);
 
-    // Reverse traversal
+    // Reverse traversal — skip targets already reached by forward BFS
     if results.len() < config.limit {
         let reverse = bfs_traverse_reverse(edge_store, source_id, &config_half);
         for r in reverse {
             if results.len() >= config.limit {
                 break;
             }
-            // Avoid duplicates
-            if !results
-                .iter()
-                .any(|existing| existing.target_id == r.target_id && existing.path == r.path)
-            {
+            if !seen.contains(&r.target_id) {
                 results.push(r);
             }
         }

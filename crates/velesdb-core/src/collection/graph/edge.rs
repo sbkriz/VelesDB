@@ -269,6 +269,35 @@ impl EdgeStore {
         self.resolve_edge_ids(self.outgoing.get(&node_id))
     }
 
+    /// Invokes `f` for each outgoing edge from `node_id` without allocating a `Vec`.
+    ///
+    /// Prefer this over [`get_outgoing`](Self::get_outgoing) in hot loops (e.g. BFS
+    /// frontiers) where the caller processes edges inline rather than collecting them.
+    #[inline]
+    pub fn for_each_outgoing<F: FnMut(&GraphEdge)>(&self, node_id: u64, mut f: F) {
+        if let Some(ids) = self.outgoing.get(&node_id) {
+            for id in ids {
+                if let Some(edge) = self.edges.get(id) {
+                    f(edge);
+                }
+            }
+        }
+    }
+
+    /// Returns the number of outgoing edges from `node_id` without materializing them.
+    #[must_use]
+    #[inline]
+    pub fn outgoing_degree(&self, node_id: u64) -> usize {
+        self.outgoing.get(&node_id).map_or(0, Vec::len)
+    }
+
+    /// Returns the number of incoming edges to `node_id` without materializing them.
+    #[must_use]
+    #[inline]
+    pub fn incoming_degree(&self, node_id: u64) -> usize {
+        self.incoming.get(&node_id).map_or(0, Vec::len)
+    }
+
     /// Gets all incoming edges to a node.
     #[must_use]
     pub fn get_incoming(&self, node_id: u64) -> Vec<&GraphEdge> {

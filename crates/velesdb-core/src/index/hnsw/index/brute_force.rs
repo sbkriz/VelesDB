@@ -10,15 +10,15 @@ use crate::index::hnsw::params::SearchQuality;
 use crate::scored_result::ScoredResult;
 
 impl HnswIndex {
-    /// Performs brute-force SIMD search for guaranteed 100% recall.
+    /// Performs brute-force search for guaranteed 100% recall.
     ///
-    /// This method computes exact distances to all vectors using SIMD-optimized
-    /// functions and returns the top k results.
+    /// Uses rayon-parallelized distance computation across all stored vectors.
+    /// Falls back to HNSW graph search when vector storage is disabled.
     ///
     /// # Performance
     ///
-    /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
-    /// or when perfect recall is required.
+    /// O(n / cores) where n = number of vectors. Best for small indices
+    /// (<10k vectors) or when perfect recall is required.
     ///
     /// # Panics
     ///
@@ -34,29 +34,8 @@ impl HnswIndex {
             return self.search_hnsw_only(query, k, ef_search);
         }
 
-        // Compute distances to all vectors
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-        let vectors_snapshot: Vec<(usize, Vec<f32>)> = self.vectors.collect_for_parallel();
-
-        let mut results: Vec<ScoredResult> = Vec::with_capacity(vectors_snapshot.len());
-
-        for (i, (idx, v)) in vectors_snapshot.iter().enumerate() {
-            // Prefetch upcoming vectors
-            if i + prefetch_distance < vectors_snapshot.len() {
-                crate::simd_native::prefetch_vector(&vectors_snapshot[i + prefetch_distance].1);
-            }
-
-            if let Some(id) = self.mappings.get_id(*idx) {
-                let score = self.compute_distance(query, v);
-                results.push(ScoredResult::new(id, score));
-            }
-        }
-
-        // Sort by distance (metric-dependent ordering)
-        self.metric.sort_scored_results(&mut results);
-
-        results.truncate(k);
-        results
+        // RF-DEDUP: delegate to rayon-parallelized implementation
+        self.brute_force_search_rayon(query, k)
     }
 
     /// Performs GPU-accelerated brute-force search if available.

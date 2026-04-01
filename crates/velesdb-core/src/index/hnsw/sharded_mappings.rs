@@ -127,16 +127,68 @@ impl ShardedMappings {
         idx
     }
 
-    /// Batch version of `register_or_replace` using a single `entry()` per ID.
+    /// Batch version of `register_or_replace` with a fast path for pure inserts.
     ///
-    /// For each ID, acquires one shard-level write lock via `DashMap::entry()`:
-    /// - **Vacant**: allocates a new index and inserts bidirectional mappings.
-    /// - **Occupied**: replaces the forward mapping, removes the stale reverse
-    ///   mapping, and inserts the new reverse mapping.
+    /// **Fast path** (all IDs are new — common for batch-insert workloads):
+    /// reserves a contiguous index range with a single `fetch_add(N)` instead
+    /// of N individual atomic increments. Each ID is still verified via
+    /// `DashMap::entry()` to handle concurrent races; if a race is detected
+    /// the method falls back to per-ID allocation for that entry.
     ///
-    /// This eliminates the triple-lock pattern (`contains_key` + `register` +
-    /// `register_or_replace` fallback) from the previous implementation.
+    /// **Slow path** (at least one ID already exists): processes each ID
+    /// individually with one `entry()` call per ID, replacing stale mappings.
     pub fn register_or_replace_batch(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+
+        let all_vacant = ids.iter().all(|id| !self.id_to_idx.contains_key(id));
+
+        if all_vacant {
+            self.batch_insert_fast_path(ids)
+        } else {
+            self.batch_replace_slow_path(ids)
+        }
+    }
+
+    /// Fast path: all IDs are new. Reserves `[start, start+N)` with one atomic op.
+    ///
+    /// If a concurrent insert races between the vacancy check and `entry()`,
+    /// the affected ID falls back to individual `fetch_add(1)` allocation.
+    fn batch_insert_fast_path(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
+        use dashmap::mapref::entry::Entry;
+
+        let n = ids.len();
+        let start = self.next_idx.fetch_add(n, Ordering::Relaxed);
+
+        let mut results = Vec::with_capacity(n);
+        for (i, &id) in ids.iter().enumerate() {
+            let result = match self.id_to_idx.entry(id) {
+                Entry::Vacant(entry) => {
+                    let idx = start + i;
+                    entry.insert(idx);
+                    self.idx_to_id.insert(idx, id);
+                    (idx, None)
+                }
+                Entry::Occupied(mut entry) => {
+                    // Race: another thread inserted this ID after our vacancy check.
+                    // Use individual allocation (the range slot `start+i` becomes a
+                    // tombstone — harmless, as next_idx is monotonic and never reused).
+                    let old_idx = *entry.get();
+                    let new_idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+                    entry.insert(new_idx);
+                    self.idx_to_id.remove(&old_idx);
+                    self.idx_to_id.insert(new_idx, id);
+                    (new_idx, Some(old_idx))
+                }
+            };
+            results.push(result);
+        }
+        results
+    }
+
+    /// Slow path: at least one ID exists. Processes each ID individually.
+    fn batch_replace_slow_path(&self, ids: &[u64]) -> Vec<(usize, Option<usize>)> {
         use dashmap::mapref::entry::Entry;
 
         let mut results = Vec::with_capacity(ids.len());
