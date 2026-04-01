@@ -284,7 +284,10 @@ impl Database {
             // for_dataset_size as base then override with explicit values.
             let (m_val, ef_val) = if let Some(n) = expected_vectors {
                 let base = velesdb_core::index::hnsw::HnswParams::for_dataset_size(dimension, n);
-                (m.or(Some(base.max_connections)), ef_construction.or(Some(base.ef_construction)))
+                (
+                    m.or(Some(base.max_connections)),
+                    ef_construction.or(Some(base.ef_construction)),
+                )
             } else {
                 (m, ef_construction)
             };
