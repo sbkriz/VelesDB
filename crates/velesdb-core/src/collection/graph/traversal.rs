@@ -453,6 +453,17 @@ pub fn bfs_traverse_reverse(
 }
 
 /// Performs bidirectional BFS (follows both directions).
+///
+/// # Deduplication strategy
+///
+/// Uses target-only dedup via `FxHashSet<u64>`: each target node appears
+/// at most once across forward and reverse results. This was chosen over
+/// the prior path+target dedup because:
+/// - O(1) `HashSet::contains` vs O(n) linear scan per reverse result.
+/// - Cleaner output — a node reached by both forward and reverse edges
+///   appears once (via whichever direction discovered it first).
+/// - The forward pass populates the `seen` set; reverse results are skipped
+///   if their `target_id` is already present.
 #[must_use]
 pub fn bfs_traverse_both(
     edge_store: &EdgeStore,

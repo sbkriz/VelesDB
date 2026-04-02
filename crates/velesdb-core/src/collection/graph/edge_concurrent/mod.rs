@@ -324,9 +324,17 @@ impl ConcurrentEdgeStore {
 
     /// Builds a CSR-like read snapshot from current shard state.
     ///
-    /// The snapshot stores only outgoing neighbor target IDs per source node
-    /// in contiguous memory, enabling [`with_neighbors()`](Self::with_neighbors)
+    /// The snapshot stores only outgoing neighbor **target node IDs** per source
+    /// node in contiguous memory, enabling [`with_neighbors()`](Self::with_neighbors)
     /// to provide zero-copy `&[u64]` access without shard locking.
+    ///
+    /// # Limitation — target IDs only
+    ///
+    /// The snapshot does **not** store edge IDs, labels, or properties.
+    /// It is optimized for BFS neighbor expansion where only connectivity
+    /// matters. To retrieve full edge metadata (edge ID, label, properties),
+    /// use [`get_outgoing()`](Self::get_outgoing) which reads from the
+    /// authoritative shard data.
     ///
     /// Call this after bulk inserts, after `flush()`, or after loading
     /// from disk. The snapshot is automatically invalidated on any write.

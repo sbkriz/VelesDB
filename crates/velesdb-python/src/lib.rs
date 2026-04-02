@@ -265,8 +265,10 @@ impl Database {
     ///     >>> large = db.create_collection("big", dimension=128, expected_vectors=1_000_000)
     #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None, expected_vectors = None))]
     #[allow(deprecated)]
+    #[allow(clippy::too_many_arguments)] // Reason: `py` is an injected PyO3 token, not a user-facing argument
     fn create_collection(
         &self,
+        py: Python<'_>,
         name: &str,
         dimension: usize,
         metric: &str,
@@ -280,6 +282,17 @@ impl Database {
 
         // Priority: explicit m/ef > expected_vectors > auto(dimension)
         if m.is_some() || ef_construction.is_some() {
+            // Warn when expected_vectors is also set: explicit values override
+            // the adaptive defaults, so expected_vectors only fills in gaps.
+            if expected_vectors.is_some() {
+                let _ = PyErr::warn(
+                    py,
+                    &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+                    c"expected_vectors is set alongside explicit m/ef_construction; \
+                      explicit values take priority and override adaptive defaults",
+                    1,
+                );
+            }
             // If expected_vectors is set alongside explicit params, use
             // for_dataset_size as base then override with explicit values.
             let (m_val, ef_val) = if let Some(n) = expected_vectors {

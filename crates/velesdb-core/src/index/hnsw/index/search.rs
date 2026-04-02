@@ -129,6 +129,19 @@ impl HnswIndex {
     /// Determines whether two-stage reranking should be used.
     ///
     /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.
+    ///
+    /// # Fast mode behavior
+    ///
+    /// `SearchQuality::Fast` enables reranking with `min_rerank_k = k` (no
+    /// oversampling). This performs rank correction — re-scoring the top-k
+    /// HNSW candidates with exact SIMD distances — without the latency
+    /// penalty of a larger candidate pool. The result is better rank ordering
+    /// at negligible cost, since the HNSW search itself already fetched these
+    /// candidates.
+    ///
+    /// Higher quality modes (`Balanced`, `Accurate`) use progressively larger
+    /// oversampling factors (3x, 4x) to pull in candidates that HNSW's greedy
+    /// search might miss, at the cost of additional distance computations.
     pub(super) fn should_two_stage_rerank(
         &self,
         quality: SearchQuality,

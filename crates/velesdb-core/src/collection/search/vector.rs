@@ -424,6 +424,18 @@ impl Collection {
     /// applying the metadata filter. Falls back to [`search_with_filter`] when no
     /// quality options are set.
     ///
+    /// # Note on bitmap pre-filter
+    ///
+    /// Unlike [`search_with_filter`], this method does not use
+    /// [`search_with_optional_bitmap`] because `search_with_quality` and
+    /// `search_hnsw_only_filtered` are separate code paths on `HnswIndex`.
+    /// Combining quality-aware ef_search with bitmap pre-filtering would
+    /// require a new `HnswIndex` method.
+    // TODO(EPIC-090): Wire bitmap pre-filter into quality-aware search path.
+    // This requires a `search_with_quality_and_bitmap` method on `HnswIndex`
+    // that combines `search_with_quality`'s ef_search adaptation with
+    // `search_hnsw_only_filtered`'s bitmap exclusion.
+    ///
     /// # Errors
     ///
     /// Returns an error if the query vector dimension doesn't match the collection.

@@ -106,6 +106,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// is closer to the anchor than the farthest existing neighbor.
     /// This preserves directional diversity without the O(M^2) cost of
     /// full pairwise diversity scoring.
+    ///
+    /// # Complexity trade-off
+    ///
+    /// An O(M log M) sort-based approach would rank all candidates by quality
+    /// before eviction, but M is small (16-64) and this function is called
+    /// once per neighbor per insert — on the hot path of index construction.
+    /// The O(M) scan-based eviction was chosen for construction throughput.
+    /// Recall quality is enforced by tests: >= 0.80 in unit tests (1K vectors),
+    /// >= 0.90 at 100K scale.
     #[inline]
     fn connect_back_with_pruning(
         &self,
