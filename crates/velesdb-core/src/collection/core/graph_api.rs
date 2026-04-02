@@ -521,10 +521,12 @@ impl Collection {
         let traverser = ParallelTraverser::with_config(par_config);
         let edge_store = &self.edge_store;
 
+        let rel_types = &config.rel_types;
         let adjacency = |node: u64| -> Vec<(u64, u64)> {
             edge_store
                 .get_outgoing(node)
                 .into_iter()
+                .filter(|e| rel_types.is_empty() || rel_types.contains(&e.label().to_string()))
                 .map(|e| (e.target(), e.id()))
                 .collect()
         };

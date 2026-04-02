@@ -489,7 +489,7 @@ impl Collection {
             let results =
                 self.index
                     .search_hnsw_only_filtered(query, candidates_k, ef_search, &bitmap);
-            return self.merge_delta(results, query, k, metric);
+            return self.merge_delta(results, query, candidates_k, metric);
         }
         self.search_ids_with_adc_if_pq(query, candidates_k)
     }
