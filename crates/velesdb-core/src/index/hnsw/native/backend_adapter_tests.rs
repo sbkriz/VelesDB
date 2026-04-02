@@ -651,7 +651,6 @@ fn test_batch_ef_schedule_boundary_batch_size() {
     assert_eq!(schedule.finalize_ef, 100);
 }
 
-
 // =========================================================================
 // TDD Tests: graduated ef_construction recall (I1)
 // =========================================================================

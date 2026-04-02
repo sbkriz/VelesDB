@@ -21,11 +21,7 @@ fn edge_passes_rel_filter(edge: &GraphEdge, rel_types: &[&str]) -> bool {
 }
 
 /// Reconstructs the edge-ID path from `source` to `target` using parent pointers.
-fn reconstruct_path(
-    parent_map: &FxHashMap<u64, (u64, u64)>,
-    source: u64,
-    target: u64,
-) -> Vec<u64> {
+fn reconstruct_path(parent_map: &FxHashMap<u64, (u64, u64)>, source: u64, target: u64) -> Vec<u64> {
     let mut path = Vec::new();
     let mut current = target;
     while current != source {
@@ -125,7 +121,12 @@ fn traverse_with_frontier<F>(
 
         let outgoing = params.store.get_outgoing(node);
         let neighbors = collect_neighbor_expansions(
-            &outgoing, node, depth, params.filter, &mut visited, &mut parent_map,
+            &outgoing,
+            node,
+            depth,
+            params.filter,
+            &mut visited,
+            &mut parent_map,
         );
 
         for (target, next_depth) in neighbors {

@@ -403,25 +403,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
             let chunk_offset = nodes_connected;
 
-            chunk
-                .par_iter()
-                .enumerate()
-                .try_for_each(|(i, (node_id, layer))| -> crate::error::Result<()> {
+            chunk.par_iter().enumerate().try_for_each(
+                |(i, (node_id, layer))| -> crate::error::Result<()> {
                     let batch_idx = node_id - first_node;
                     let query: &[f32] = &processed[batch_idx];
                     let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
                     let ef = schedule.ef_for_position(chunk_offset + i);
                     let stagnation = ef / 2;
-                    self.connect_node_with_ef(
-                        *node_id,
-                        query,
-                        *layer,
-                        current_ep,
-                        ef,
-                        stagnation,
-                    );
+                    self.connect_node_with_ef(*node_id, query, *layer, current_ep, ef, stagnation);
                     Ok(())
-                })?;
+                },
+            )?;
 
             if let Some(best) = chunk.iter().max_by_key(|(_, layer)| *layer) {
                 self.promote_entry_point(best.0, best.1);
