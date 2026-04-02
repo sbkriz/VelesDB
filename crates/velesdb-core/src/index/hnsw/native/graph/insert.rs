@@ -110,23 +110,53 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Atomically updates the entry point if the index is empty or the node
     /// reaches a higher layer than the current maximum.
     ///
-    /// Serializes concurrent promotions via `entry_point_promote_lock` so that
-    /// `entry_point` and `max_layer` are updated together. The mutex is only
-    /// contended during insert (rare); search reads use a lock-free
-    /// `Acquire` load on the `AtomicUsize` (Issue #422).
+    /// Uses lock-free CAS loops instead of a mutex. Entry-point promotion is
+    /// extremely rare (O(log_M(N)) times per index lifetime), so the CAS loop
+    /// almost never retries. Two separate CAS operations handle the two cases:
+    ///
+    /// 1. **Empty index**: CAS on `entry_point` from `NO_ENTRY_POINT` to `node_id`.
+    /// 2. **Layer promotion**: CAS on `max_layer` from `current_max` to `node_layer`.
+    ///    Only the CAS winner updates `entry_point`, ensuring consistency.
+    ///
+    /// Between `max_layer` CAS success and `entry_point` store, a concurrent
+    /// reader may see the new `max_layer` with the old `entry_point`. This is
+    /// safe: `search_layer_single` returns `None` (via `with_neighbors`) for
+    /// layers where the old EP has no edges, causing a no-op greedy descent.
     pub(in crate::index::hnsw::native) fn promote_entry_point(
         &self,
         node_id: NodeId,
         node_layer: usize,
     ) {
-        let _guard = self.entry_point_promote_lock.lock();
-        let current_ep = self.entry_point.load(Ordering::Relaxed);
-        let current_max = self.max_layer.load(Ordering::Relaxed);
-        if current_ep == NO_ENTRY_POINT || node_layer > current_max {
-            if node_layer > current_max {
-                self.max_layer.store(node_layer, Ordering::Relaxed);
+        // Case 1: First insert — race to set entry_point from NO_ENTRY_POINT.
+        if self.entry_point.load(Ordering::Acquire) == NO_ENTRY_POINT {
+            // CAS: only one thread wins the first-insert race.
+            if self
+                .entry_point
+                .compare_exchange(NO_ENTRY_POINT, node_id, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.max_layer.store(node_layer, Ordering::Release);
+                return;
             }
-            self.entry_point.store(node_id, Ordering::Release);
+            // Another thread won — fall through to layer promotion check.
+        }
+
+        // Case 2: Layer promotion — CAS loop on max_layer.
+        loop {
+            let current_max = self.max_layer.load(Ordering::Acquire);
+            if node_layer <= current_max {
+                break; // No promotion needed — most common case.
+            }
+            // Try to atomically claim the new max_layer. Only the CAS
+            // winner updates entry_point; losers retry the loop.
+            if self
+                .max_layer
+                .compare_exchange(current_max, node_layer, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.entry_point.store(node_id, Ordering::Release);
+                break;
+            }
         }
     }
 

@@ -26,14 +26,14 @@ use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
 use crate::perf_optimizations::ContiguousVectors;
 use locking::{record_lock_acquire, record_lock_release, LockRank};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Sentinel value for [`NativeHnsw::entry_point`]: indicates no entry point exists.
 ///
 /// Using `usize::MAX` instead of `Option<NodeId>` behind an `RwLock` allows
 /// lock-free reads on the search hot path (`Ordering::Acquire` load) while
-/// writes remain serialized via `entry_point_promote_lock` (Issue #422).
+/// writes use CAS loops for lock-free promotion (Issue #422, I3).
 pub const NO_ENTRY_POINT: usize = usize::MAX;
 
 /// Default VAMANA alpha for neighbor diversification.
@@ -62,13 +62,14 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Entry point for search (highest layer node).
     ///
     /// Stores `NO_ENTRY_POINT` (`usize::MAX`) when the index is empty.
-    /// Read with `Ordering::Acquire`, written under `entry_point_promote_lock`
-    /// with `Ordering::Release` (Issue #422).
+    /// Read with `Ordering::Acquire`, written via CAS in `promote_entry_point`
+    /// with `Ordering::Release` (Issue #422, I3 lock-free CAS).
     pub(in crate::index::hnsw::native) entry_point: AtomicUsize,
-    /// Serializes entry-point promotions so that `entry_point` and `max_layer`
-    /// are updated atomically with respect to each other.
-    pub(in crate::index::hnsw::native) entry_point_promote_lock: Mutex<()>,
-    /// Maximum layer for entry point
+    /// Maximum layer for entry point.
+    ///
+    /// Updated via CAS in `promote_entry_point`. The CAS on `max_layer`
+    /// serves as the linearization point: only the CAS winner updates
+    /// `entry_point`, ensuring consistency without a mutex.
     pub(in crate::index::hnsw::native) max_layer: AtomicUsize,
     /// Number of elements in the index
     pub(in crate::index::hnsw::native) count: AtomicUsize,
@@ -213,7 +214,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             vectors: RwLock::new(vectors),
             layers: RwLock::new(vec![Layer::new(max_elements)]),
             entry_point: AtomicUsize::new(NO_ENTRY_POINT),
-            entry_point_promote_lock: Mutex::new(()),
             max_layer: AtomicUsize::new(0),
             count: AtomicUsize::new(0),
             rng_state: AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),

@@ -565,7 +565,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             vectors: parking_lot::RwLock::new(vectors),
             layers: parking_lot::RwLock::new(graph.layers),
             entry_point: std::sync::atomic::AtomicUsize::new(entry_point),
-            entry_point_promote_lock: parking_lot::Mutex::new(()),
             max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
             count: std::sync::atomic::AtomicUsize::new(count),
             rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
