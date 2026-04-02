@@ -381,19 +381,8 @@ impl Collection {
         let mut sparse_batch = Vec::new();
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
-        // Check both new AND old payloads for labels — old labels must be
-        // removed when a point is upserted without _labels (Devin review).
-        let new_has_labels = Self::any_point_has_labels(points);
-        let old_has_labels = old_payloads
-            .iter()
-            .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()));
-        let needs_label_updates = new_has_labels || old_has_labels;
-        let mut label_updates: Vec<(u64, Option<serde_json::Value>, Option<serde_json::Value>)> =
-            if needs_label_updates {
-                Vec::with_capacity(points.len())
-            } else {
-                Vec::new()
-            };
+        let needs_label_updates = Self::needs_label_updates(points, old_payloads);
+        let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
 
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
             let effective_old =
@@ -416,6 +405,29 @@ impl Collection {
 
         Self::apply_label_updates(&self.label_index, &label_updates);
         sparse_batch
+    }
+
+    /// Checks whether label index updates are needed for this batch.
+    ///
+    /// Returns `true` when either new or old payloads contain `_labels`,
+    /// ensuring stale labels are removed when a point drops its labels.
+    fn needs_label_updates(points: &[Point], old_payloads: &[Option<serde_json::Value>]) -> bool {
+        Self::any_point_has_labels(points)
+            || old_payloads
+                .iter()
+                .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()))
+    }
+
+    /// Pre-allocates the label update buffer when needed.
+    fn alloc_label_buffer(
+        needed: bool,
+        capacity: usize,
+    ) -> Vec<(u64, Option<serde_json::Value>, Option<serde_json::Value>)> {
+        if needed {
+            Vec::with_capacity(capacity)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Returns `true` if any point carries `_labels` in its payload.
