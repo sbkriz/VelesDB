@@ -12,7 +12,8 @@
 
 use super::EdgeStore;
 use smallvec::SmallVec;
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet;
+use std::collections::VecDeque;
 
 /// Default maximum depth for unbounded traversals.
 pub const DEFAULT_MAX_DEPTH: u32 = 3;
@@ -189,12 +190,12 @@ fn bfs_traverse_directed(
     direction: BfsDirection,
 ) -> Vec<TraversalResult> {
     let mut results = Vec::new();
-    let mut visited = HashSet::new();
+    let mut visited = FxHashSet::default();
     let mut queue = VecDeque::new();
 
-    // Pre-build a HashSet<&str> once for the entire traversal, not per-node.
+    // Pre-build a FxHashSet<&str> once for the entire traversal, not per-node.
     // Vec<String>::contains(&to_string()) allocated a String per edge in the inner loop.
-    let rel_filter: HashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
+    let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
 
     // CRITICAL FIX: Mark source node as visited before traversal
     // to prevent cycles back to source causing duplicate work
@@ -237,10 +238,10 @@ fn process_bfs_neighbors(
     edges: &[&super::GraphEdge],
     state: &BfsState,
     config: &TraversalConfig,
-    rel_filter: &HashSet<&str>,
+    rel_filter: &FxHashSet<&str>,
     direction: BfsDirection,
     results: &mut Vec<TraversalResult>,
-    visited: &mut HashSet<u64>,
+    visited: &mut FxHashSet<u64>,
     queue: &mut VecDeque<BfsState>,
 ) {
     for edge in edges {
@@ -329,7 +330,7 @@ pub fn bfs_traverse_both(
     // Forward traversal
     let forward = bfs_traverse(edge_store, source_id, &config_half);
     // Build O(1) dedup set from forward results to avoid O(n) linear scan per reverse result.
-    let seen: HashSet<u64> = forward.iter().map(|r| r.target_id).collect();
+    let seen: FxHashSet<u64> = forward.iter().map(|r| r.target_id).collect();
     results.extend(forward);
 
     // Reverse traversal — skip targets already reached by forward BFS

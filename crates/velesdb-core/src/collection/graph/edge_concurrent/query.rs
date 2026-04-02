@@ -6,7 +6,8 @@
 //! - Edge count
 
 use super::{ConcurrentEdgeStore, GraphEdge};
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet;
+use std::collections::VecDeque;
 
 impl ConcurrentEdgeStore {
     /// Gets all outgoing edges from a node (thread-safe).
@@ -146,7 +147,7 @@ impl ConcurrentEdgeStore {
     /// with per-shard locks.
     #[must_use]
     pub fn traverse_bfs(&self, start: u64, max_depth: u32) -> Vec<u64> {
-        let mut visited = HashSet::new();
+        let mut visited = FxHashSet::default();
         let mut queue = VecDeque::new();
         queue.push_back((start, 0u32));
 

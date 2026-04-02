@@ -7,7 +7,8 @@ use super::edge_concurrent::ConcurrentEdgeStore;
 use super::traversal::BfsState;
 use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
 use smallvec::SmallVec;
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet;
+use std::collections::VecDeque;
 
 /// Configuration for streaming traversal.
 ///
@@ -32,7 +33,7 @@ impl Default for StreamingConfig {
         Self {
             max_depth: DEFAULT_MAX_DEPTH,
             limit: None,
-            max_visited_size: 100_000, // ~800KB for HashSet<u64>
+            max_visited_size: 100_000, // ~800KB for FxHashSet<u64>
             rel_types: Vec::new(),
         }
     }
@@ -101,11 +102,11 @@ impl StreamingConfig {
 pub struct BfsIterator<'a> {
     edge_store: &'a EdgeStore,
     queue: VecDeque<BfsState>,
-    visited: HashSet<u64>,
+    visited: FxHashSet<u64>,
     config: StreamingConfig,
     /// Pre-built set for O(1) relationship-type filtering without per-edge allocation.
     /// Empty when no filter is configured (all edge types accepted).
-    rel_types_set: HashSet<String>,
+    rel_types_set: FxHashSet<String>,
     yielded: usize,
     visited_overflow: bool,
     /// Buffer for pending results from current node being processed.
@@ -117,7 +118,7 @@ impl<'a> BfsIterator<'a> {
     /// Creates a new BFS iterator starting from the given node.
     #[must_use]
     pub fn new(edge_store: &'a EdgeStore, start_id: u64, config: StreamingConfig) -> Self {
-        let mut visited = HashSet::new();
+        let mut visited = FxHashSet::default();
         visited.insert(start_id);
 
         let mut queue = VecDeque::new();
@@ -127,8 +128,8 @@ impl<'a> BfsIterator<'a> {
             depth: 0,
         });
 
-        // Pre-build HashSet from Vec<String> once, not per-edge.
-        let rel_types_set: HashSet<String> = config.rel_types.iter().cloned().collect();
+        // Pre-build FxHashSet from Vec<String> once, not per-edge.
+        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
 
         Self {
             edge_store,
@@ -188,7 +189,7 @@ impl Iterator for BfsIterator<'_> {
 
             // Process ALL edges from this node, collecting results
             for edge in edges {
-                // Filter by relationship type using pre-built HashSet (zero allocation).
+                // Filter by relationship type using pre-built FxHashSet (zero allocation).
                 if !self.rel_types_set.is_empty() && !self.rel_types_set.contains(edge.label()) {
                     continue;
                 }
@@ -272,9 +273,9 @@ pub fn bfs_stream(
 pub struct ConcurrentBfsIterator<'a> {
     edge_store: &'a ConcurrentEdgeStore,
     queue: VecDeque<BfsState>,
-    visited: HashSet<u64>,
+    visited: FxHashSet<u64>,
     config: StreamingConfig,
-    rel_types_set: HashSet<String>,
+    rel_types_set: FxHashSet<String>,
     yielded: usize,
     visited_overflow: bool,
     pending_results: VecDeque<TraversalResult>,
@@ -288,7 +289,7 @@ impl<'a> ConcurrentBfsIterator<'a> {
         start_id: u64,
         config: StreamingConfig,
     ) -> Self {
-        let mut visited = HashSet::new();
+        let mut visited = FxHashSet::default();
         visited.insert(start_id);
 
         let mut queue = VecDeque::new();
@@ -298,7 +299,7 @@ impl<'a> ConcurrentBfsIterator<'a> {
             depth: 0,
         });
 
-        let rel_types_set: HashSet<String> = config.rel_types.iter().cloned().collect();
+        let rel_types_set: FxHashSet<String> = config.rel_types.iter().cloned().collect();
 
         Self {
             edge_store,

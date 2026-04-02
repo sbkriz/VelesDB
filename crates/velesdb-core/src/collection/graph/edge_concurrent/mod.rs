@@ -17,7 +17,7 @@ use super::edge::{EdgeStore, GraphEdge};
 use crate::error::{Error, Result};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Default number of shards for concurrent edge store.
 /// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
@@ -289,7 +289,7 @@ impl ConcurrentEdgeStore {
         }
 
         // Phase 5: Remove edge IDs from global registry
-        let mut removed: HashSet<u64> = HashSet::new();
+        let mut removed: FxHashSet<u64> = FxHashSet::default();
         for (edge_id, _) in &outgoing_edges {
             if removed.insert(*edge_id) {
                 ids.remove(edge_id);
