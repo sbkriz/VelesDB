@@ -106,7 +106,7 @@ impl Collection {
             crate::filter::Condition::Or { conditions } => {
                 Self::bitmap_from_or(indexes, conditions)
             }
-            // TODO(US-486): NOT and Neq need a universe bitmap to invert.
+            // TODO #487: NOT and Neq need a universe bitmap to invert.
             // Post-filter handles these correctly until then.
             _ => None,
         }
