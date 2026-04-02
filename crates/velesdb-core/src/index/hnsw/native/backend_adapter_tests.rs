@@ -581,3 +581,205 @@ fn test_adaptive_ef_recall_preserved_with_2000_vectors() {
         "adaptive ef recall@{k} should be >= 0.90, got {avg_recall:.4}"
     );
 }
+// =========================================================================
+// TDD Tests: BatchEfSchedule — graduated ef_construction (I1)
+// =========================================================================
+
+#[test]
+fn test_batch_ef_schedule_small_batch_uniform() {
+    // Batches < 1000 should use full ef for all phases
+    let schedule = super::backend_adapter::compute_batch_ef_schedule(200, 500, 16);
+    assert_eq!(schedule.scaffold_ef, 200);
+    assert_eq!(schedule.bulk_ef, 200);
+    assert_eq!(schedule.finalize_ef, 200);
+    assert_eq!(schedule.scaffold_count, 500);
+    assert_eq!(schedule.finalize_start, 500);
+}
+
+#[test]
+fn test_batch_ef_schedule_large_batch_graduated() {
+    // Batch of 10_000 with ef=200, M=16
+    let schedule = super::backend_adapter::compute_batch_ef_schedule(200, 10_000, 16);
+    assert_eq!(schedule.scaffold_ef, 200, "scaffold should use full ef");
+    assert_eq!(schedule.bulk_ef, 100, "bulk should use 0.5x ef");
+    assert_eq!(schedule.finalize_ef, 150, "finalize should use 0.75x ef");
+    assert_eq!(schedule.scaffold_count, 1000, "scaffold = 10%");
+    assert_eq!(schedule.finalize_start, 9000, "finalize starts at 90%");
+}
+
+#[test]
+fn test_batch_ef_schedule_floor_enforcement() {
+    // When 0.5x ef < 2*m, the floor should kick in
+    // ef=40, m=16 → bulk = max(20, 32) = 32; finalize = max(30, 32) = 32
+    let schedule = super::backend_adapter::compute_batch_ef_schedule(40, 5000, 16);
+    assert_eq!(schedule.scaffold_ef, 40);
+    assert_eq!(schedule.bulk_ef, 32, "bulk floored at 2*M");
+    assert_eq!(schedule.finalize_ef, 32, "finalize floored at 2*M");
+}
+
+#[test]
+fn test_batch_ef_schedule_ef_for_position() {
+    let schedule = super::backend_adapter::compute_batch_ef_schedule(200, 10_000, 16);
+
+    // Scaffold phase: positions 0..999
+    assert_eq!(schedule.ef_for_position(0), 200);
+    assert_eq!(schedule.ef_for_position(999), 200);
+
+    // Bulk phase: positions 1000..8999
+    assert_eq!(schedule.ef_for_position(1000), 100);
+    assert_eq!(schedule.ef_for_position(5000), 100);
+    assert_eq!(schedule.ef_for_position(8999), 100);
+
+    // Finalize phase: positions 9000..9999
+    assert_eq!(schedule.ef_for_position(9000), 150);
+    assert_eq!(schedule.ef_for_position(9999), 150);
+}
+
+#[test]
+fn test_batch_ef_schedule_boundary_batch_size() {
+    // Exactly 1000: should apply graduated schedule
+    let schedule = super::backend_adapter::compute_batch_ef_schedule(100, 1000, 16);
+    assert_eq!(schedule.scaffold_count, 100);
+    assert_eq!(schedule.finalize_start, 900);
+    assert_eq!(schedule.bulk_ef, 50);
+    assert_eq!(schedule.finalize_ef, 75);
+
+    // 999: should use uniform full ef
+    let schedule = super::backend_adapter::compute_batch_ef_schedule(100, 999, 16);
+    assert_eq!(schedule.scaffold_ef, 100);
+    assert_eq!(schedule.bulk_ef, 100);
+    assert_eq!(schedule.finalize_ef, 100);
+}
+
+
+// =========================================================================
+// TDD Tests: graduated ef_construction recall (I1)
+// =========================================================================
+
+/// Verifies that graduated ef_construction maintains recall >= 0.90
+/// with 5000 vectors. The 3-phase schedule (scaffold/bulk/finalize)
+/// reduces construction work while preserving graph quality.
+#[test]
+fn test_graduated_ef_construction_recall() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Generate 5000 deterministic 64-D vectors with enough spread for recall testing
+    let vectors: Vec<Vec<f32>> = (0..5000)
+        .map(|i| (0..64).map(|j| ((i * 64 + j) as f32) * 0.0001).collect())
+        .collect();
+
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+
+    hnsw.parallel_insert(&data)
+        .expect("test: parallel_insert of 5000 vectors should succeed");
+
+    assert_eq!(hnsw.len(), 5000);
+
+    let bf_engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let k = 10;
+    let ef_search = 128;
+    let num_queries = 100;
+
+    let mut total_recall = 0.0;
+
+    for q_idx in 0..num_queries {
+        let query: Vec<f32> = (0..64)
+            .map(|j| ((q_idx * 11 + j * 17) as f32) * 0.0003)
+            .collect();
+
+        let hnsw_results = hnsw.search(&query, k, ef_search);
+        let hnsw_ids: Vec<usize> = hnsw_results.iter().map(|&(id, _)| id).collect();
+
+        let mut distances: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(id, v)| (id, bf_engine.distance(&query, v)))
+            .collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let ground_truth: Vec<usize> = distances.iter().take(k).map(|&(id, _)| id).collect();
+
+        total_recall += recall_at_k(&ground_truth, &hnsw_ids);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    // Reason: num_queries is a small constant (100); f64 is exact for integers up to 2^53.
+    let avg_recall = total_recall / num_queries as f64;
+
+    assert!(
+        avg_recall >= 0.90,
+        "graduated ef_construction: recall@{k} should be >= 0.90 at 5000 vectors, got {avg_recall:.4}"
+    );
+}
+
+/// Verifies that the graduated schedule applies to cosine metric as well,
+/// since cosine normalizes vectors before insertion.
+#[test]
+fn test_graduated_ef_construction_recall_cosine() {
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Generate 3000 deterministic 32-D vectors
+    let vectors: Vec<Vec<f32>> = (0..3000)
+        .map(|i| {
+            let raw: Vec<f32> = (0..32)
+                .map(|j| ((i * 32 + j) as f32) * 0.001 + 0.1)
+                .collect();
+            // Pre-normalize for cosine metric ground-truth comparison
+            let norm: f32 = raw.iter().map(|x| x * x).sum::<f32>().sqrt();
+            raw.iter().map(|x| x / norm).collect()
+        })
+        .collect();
+
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+
+    hnsw.parallel_insert(&data)
+        .expect("test: parallel_insert of 3000 cosine vectors should succeed");
+
+    assert_eq!(hnsw.len(), 3000);
+
+    let bf_engine = SimdDistance::new(DistanceMetric::Cosine);
+    let k = 10;
+    let ef_search = 128;
+    let num_queries = 50;
+
+    let mut total_recall = 0.0;
+
+    for q_idx in 0..num_queries {
+        let raw: Vec<f32> = (0..32)
+            .map(|j| ((q_idx * 7 + j * 13) as f32) * 0.002 + 0.1)
+            .collect();
+        let norm: f32 = raw.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let query: Vec<f32> = raw.iter().map(|x| x / norm).collect();
+
+        let hnsw_results = hnsw.search(&query, k, ef_search);
+        let hnsw_ids: Vec<usize> = hnsw_results.iter().map(|&(id, _)| id).collect();
+
+        let mut distances: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(id, v)| (id, bf_engine.distance(&query, v)))
+            .collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let ground_truth: Vec<usize> = distances.iter().take(k).map(|&(id, _)| id).collect();
+
+        total_recall += recall_at_k(&ground_truth, &hnsw_ids);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    // Reason: num_queries is a small constant (50); f64 is exact for integers up to 2^53.
+    let avg_recall = total_recall / num_queries as f64;
+
+    assert!(
+        avg_recall >= 0.90,
+        "graduated ef cosine: recall@{k} should be >= 0.90 at 3000 vectors, got {avg_recall:.4}"
+    );
+}
