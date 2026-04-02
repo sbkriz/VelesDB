@@ -431,7 +431,7 @@ impl Collection {
     /// `search_hnsw_only_filtered` are separate code paths on `HnswIndex`.
     /// Combining quality-aware ef_search with bitmap pre-filtering would
     /// require a new `HnswIndex` method.
-    // TODO(EPIC-090): Wire bitmap pre-filter into quality-aware search path.
+    // TODO #issue: Wire bitmap pre-filter into quality-aware search path.
     // This requires a `search_with_quality_and_bitmap` method on `HnswIndex`
     // that combines `search_with_quality`'s ef_search adaptation with
     // `search_hnsw_only_filtered`'s bitmap exclusion.
