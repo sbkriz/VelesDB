@@ -1342,3 +1342,133 @@ fn test_upsert_removes_stale_labels_from_label_index() {
         "Person label should be removed after upsert without _labels"
     );
 }
+
+/// Regression test: `can_skip_phase2` must not skip when label index is populated.
+///
+/// Scenario: insert a point with `_labels: ["Person"]`, then upsert the same
+/// point with `payload: None` (no payload at all). Without the fix,
+/// `can_skip_phase2` returns `true` because `any_payload` is false, skipping
+/// Phase 2 entirely and leaving stale labels in the index.
+///
+/// Devin review finding (2026-04-02).
+#[test]
+fn test_can_skip_phase2_respects_populated_label_index() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection");
+
+    // Step 1: Insert point with _labels — populates the label index.
+    let p1 = Point::new(
+        1,
+        vec![1.0, 0.0, 0.0, 0.0],
+        Some(serde_json::json!({"_labels": ["Person"], "name": "Alice"})),
+    );
+    collection.upsert(vec![p1]).expect("upsert with labels");
+
+    // Verify label index is populated.
+    let label_idx = collection.label_index.read();
+    assert!(
+        label_idx.lookup("Person").is_some_and(|b| b.contains(1)),
+        "Person label should be indexed for node 1"
+    );
+    drop(label_idx);
+
+    // Step 2: Upsert same point with NO payload at all.
+    // This is the scenario where `can_skip_phase2` incorrectly returned true
+    // because `any_payload` was false and the label index was not checked.
+    let p1_no_payload = Point::without_payload(1, vec![0.0, 1.0, 0.0, 0.0]);
+    collection
+        .upsert(vec![p1_no_payload])
+        .expect("upsert without payload");
+
+    // Verify stale label is removed — Phase 2 must have run.
+    let label_idx = collection.label_index.read();
+    let still_has = label_idx.lookup("Person").is_some_and(|b| b.contains(1));
+    assert!(
+        !still_has,
+        "Person label should be removed when upserting with payload: None"
+    );
+}
+
+/// Regression test: `find_start_nodes_full_scan` must filter by labels.
+///
+/// Scenario: when node IDs exceed `u32::MAX`, the label index cannot store
+/// them (RoaringBitmap limitation), so `find_start_nodes` falls back to
+/// `find_start_nodes_full_scan`. Without the fix, `needs_payload` was only
+/// set when properties were present, causing label-only patterns like
+/// `(n:Person)` to return ALL nodes instead of only Person-labeled ones.
+///
+/// Devin review finding (2026-04-02).
+#[test]
+fn test_full_scan_fallback_filters_by_labels() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection");
+
+    let large_base: u64 = u64::from(u32::MAX) + 1;
+
+    // Insert nodes with large IDs (> u32::MAX) so the label index cannot
+    // index them and `has_large_ids` is set. Use payloads to store labels.
+    let person_node = Point::new(
+        large_base,
+        vec![1.0, 0.0, 0.0, 0.0],
+        Some(serde_json::json!({"_labels": ["Person"], "name": "Alice"})),
+    );
+    let company_node = Point::new(
+        large_base + 1,
+        vec![0.0, 1.0, 0.0, 0.0],
+        Some(serde_json::json!({"_labels": ["Company"], "name": "Acme"})),
+    );
+    collection
+        .upsert(vec![person_node, company_node])
+        .expect("upsert large-ID nodes");
+
+    // Confirm the label index has large_ids set and no indexed entries.
+    let label_idx = collection.label_index.read();
+    assert!(
+        label_idx.has_large_ids(),
+        "has_large_ids should be true after indexing nodes with ID > u32::MAX"
+    );
+    assert!(
+        label_idx.lookup("Person").is_none(),
+        "Person bitmap should be empty (IDs too large for RoaringBitmap)"
+    );
+    drop(label_idx);
+
+    // Run MATCH (n:Person) RETURN n — should only return the Person node.
+    let match_clause = crate::velesql::MatchClause {
+        patterns: vec![crate::velesql::GraphPattern {
+            name: None,
+            nodes: vec![crate::velesql::NodePattern::new()
+                .with_alias("n")
+                .with_label("Person")],
+            relationships: vec![],
+        }],
+        where_clause: None,
+        return_clause: crate::velesql::ReturnClause {
+            items: vec![crate::velesql::ReturnItem {
+                expression: "n".to_string(),
+                alias: None,
+            }],
+            order_by: None,
+            limit: Some(100),
+        },
+    };
+    let params = std::collections::HashMap::new();
+    let results = collection
+        .execute_match(&match_clause, &params)
+        .expect("execute_match should succeed");
+
+    // Only the Person-labeled node should be returned, not the Company node.
+    assert_eq!(
+        results.len(),
+        1,
+        "MATCH (n:Person) should return exactly 1 node, got {}",
+        results.len()
+    );
+    assert_eq!(
+        results[0].node_id, large_base,
+        "matched node should be the Person node (id={})",
+        large_base
+    );
+}

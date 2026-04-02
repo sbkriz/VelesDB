@@ -315,6 +315,12 @@ impl Collection {
             return false;
         }
 
+        // Label index: when populated, old payloads may contain `_labels`
+        // that need cleanup. Phase 2 must run to call `apply_label_updates`.
+        if !self.label_index.read().is_empty() {
+            return false;
+        }
+
         // Sparse vectors require collection into the sparse batch buffer
         let any_sparse = points.iter().any(Point::has_sparse_vectors);
         !any_sparse

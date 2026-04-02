@@ -555,14 +555,14 @@ impl Collection {
             .collect()
     }
 
-    /// O(N) full scan fallback for start nodes (no labels in pattern).
+    /// O(N) full scan fallback for start nodes (no labels, or large-ID fallback).
     fn find_start_nodes_full_scan(
         &self,
         first_node: &crate::velesql::NodePattern,
     ) -> Vec<(u64, HashMap<String, u64>)> {
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
-        let needs_payload = !first_node.properties.is_empty();
+        let needs_payload = !first_node.properties.is_empty() || !first_node.labels.is_empty();
 
         // Union of vector IDs and payload IDs — graph-only nodes have no vector.
         let mut all_ids: std::collections::HashSet<u64> =
