@@ -123,7 +123,7 @@ fn bench_scale(c: &mut Criterion) {
                 |b| {
                     b.iter(|| {
                         for query in &queries {
-                            let _ = index.search_with_quality(query, k, quality);
+                            let _ = index.search_with_quality(query, k, quality).unwrap();
                         }
                     });
                 },
@@ -159,6 +159,7 @@ fn bench_scale(c: &mut Criterion) {
             for (qi, query) in queries.iter().enumerate() {
                 let results: Vec<u64> = index
                     .search_with_quality(query, k, quality)
+                    .unwrap()
                     .iter()
                     .map(|r| r.id)
                     .collect();
@@ -186,7 +187,9 @@ fn bench_scale(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     for query in &queries {
-                        let _ = index.search_with_quality(query, k, SearchQuality::Balanced);
+                        let _ = index
+                            .search_with_quality(query, k, SearchQuality::Balanced)
+                            .unwrap();
                     }
                 });
             },

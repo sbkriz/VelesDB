@@ -170,12 +170,18 @@ unsafe fn cosine_4acc_main_loop(
         na1 = _mm256_fmadd_ps(va1, va1, na1);
         nb1 = _mm256_fmadd_ps(vb1, vb1, nb1);
 
-        let (va2, vb2) = (_mm256_loadu_ps(a_ptr.add(16)), _mm256_loadu_ps(b_ptr.add(16)));
+        let (va2, vb2) = (
+            _mm256_loadu_ps(a_ptr.add(16)),
+            _mm256_loadu_ps(b_ptr.add(16)),
+        );
         dot2 = _mm256_fmadd_ps(va2, vb2, dot2);
         na2 = _mm256_fmadd_ps(va2, va2, na2);
         nb2 = _mm256_fmadd_ps(vb2, vb2, nb2);
 
-        let (va3, vb3) = (_mm256_loadu_ps(a_ptr.add(24)), _mm256_loadu_ps(b_ptr.add(24)));
+        let (va3, vb3) = (
+            _mm256_loadu_ps(a_ptr.add(24)),
+            _mm256_loadu_ps(b_ptr.add(24)),
+        );
         dot3 = _mm256_fmadd_ps(va3, vb3, dot3);
         na3 = _mm256_fmadd_ps(va3, va3, na3);
         nb3 = _mm256_fmadd_ps(vb3, vb3, nb3);

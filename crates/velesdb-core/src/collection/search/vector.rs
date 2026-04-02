@@ -216,7 +216,7 @@ impl Collection {
         };
 
         let metric = self.config.read().metric;
-        let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.index.search_with_quality(query, k, quality)?;
         let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
@@ -247,7 +247,7 @@ impl Collection {
         let metric = config.metric;
         drop(config);
 
-        let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.index.search_with_quality(query, k, quality)?;
         let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
@@ -313,7 +313,7 @@ impl Collection {
         let rerank_k = k.saturating_mul(4).max(k + 32);
         let index_results = self
             .index
-            .search_with_rerank_quality(query, k, rerank_k, quality);
+            .search_with_rerank_quality(query, k, rerank_k, quality)?;
         let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
@@ -458,7 +458,9 @@ impl Collection {
         // Over-fetch for filtering: retrieve more candidates than needed.
         let candidates_k = compute_oversampled_k(k, filter);
 
-        let index_results = self.index.search_with_quality(query, candidates_k, quality);
+        let index_results = self
+            .index
+            .search_with_quality(query, candidates_k, quality)?;
         let index_results = self.merge_delta(index_results, query, candidates_k, metric);
 
         let results = self.filter_and_hydrate(index_results, filter, k, higher_is_better);

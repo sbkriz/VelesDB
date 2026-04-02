@@ -50,7 +50,7 @@ impl Collection {
         let higher_is_better = metric.higher_is_better();
         let index_results =
             self.index
-                .search_batch_parallel(queries, candidates_k, SearchQuality::Balanced);
+                .search_batch_parallel(queries, candidates_k, SearchQuality::Balanced)?;
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
@@ -168,9 +168,9 @@ impl Collection {
 
         // Perf: Use parallel HNSW search (P0 optimization)
         let metric = self.config.read().metric;
-        let index_results = self
-            .index
-            .search_batch_parallel(queries, k, SearchQuality::Balanced);
+        let index_results =
+            self.index
+                .search_batch_parallel(queries, k, SearchQuality::Balanced)?;
 
         // Pre-merge delta per query (requires &self)
         let merged: Vec<_> = index_results
@@ -228,7 +228,7 @@ impl Collection {
         let metric = self.validate_multi_query_inputs(vectors)?;
         let overfetch_k = Self::overfetch_factor(top_k);
 
-        let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric);
+        let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric)?;
         let filtered = self.apply_pre_fusion_filter(batch_results, filter);
 
         let fused = fusion
@@ -277,17 +277,24 @@ impl Collection {
     }
 
     /// Runs batch index search and merges delta buffer per query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] if any query vector has a dimension
+    /// different from the index dimension.
     fn search_and_merge_delta(
         &self,
         vectors: &[&[f32]],
         overfetch_k: usize,
         metric: crate::DistanceMetric,
-    ) -> Vec<Vec<(u64, f32)>> {
-        let batch_results =
-            self.index
-                .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+    ) -> Result<Vec<Vec<(u64, f32)>>> {
+        let batch_results = self.index.search_batch_parallel(
+            vectors,
+            overfetch_k,
+            crate::SearchQuality::Balanced,
+        )?;
 
-        batch_results
+        Ok(batch_results
             .into_iter()
             .zip(vectors)
             .map(|(query_results, query)| {
@@ -296,7 +303,7 @@ impl Collection {
                     .map(Into::into)
                     .collect()
             })
-            .collect()
+            .collect())
     }
 
     /// Applies metadata filter to batch results before fusion.
@@ -367,7 +374,7 @@ impl Collection {
         let metric = self.validate_multi_query_inputs(vectors)?;
         let overfetch_k = Self::overfetch_factor(top_k);
 
-        let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric);
+        let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric)?;
 
         let fused = fusion
             .fuse(batch_results)

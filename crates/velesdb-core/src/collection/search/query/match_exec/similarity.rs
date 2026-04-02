@@ -11,9 +11,10 @@
 use super::parse_property_path;
 use super::{parse_projection_item, MatchResult, ProjectionItem};
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::point::SearchResult;
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
+use crate::validation::validate_dimension_match;
 use std::collections::HashMap;
 
 impl Collection {
@@ -219,12 +220,7 @@ impl Collection {
         let expected_dimension = config.dimension;
         drop(config);
 
-        if query_vector.len() != expected_dimension {
-            return Err(Error::DimensionMismatch {
-                expected: expected_dimension,
-                actual: query_vector.len(),
-            });
-        }
+        validate_dimension_match(expected_dimension, query_vector.len())?;
 
         // Hoist both storage locks once for the entire scoring loop.
         let payload_guard = self.payload_storage.read();
@@ -268,12 +264,7 @@ impl Collection {
 
         for mut result in results {
             if let Ok(Some(node_vector)) = vector_storage.retrieve(result.node_id) {
-                if node_vector.len() != expected_dimension {
-                    return Err(Error::DimensionMismatch {
-                        expected: expected_dimension,
-                        actual: node_vector.len(),
-                    });
-                }
+                validate_dimension_match(expected_dimension, node_vector.len())?;
 
                 let score = metric.calculate(&node_vector, query_vector);
 

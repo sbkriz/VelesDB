@@ -20,6 +20,7 @@ use super::upsert::{self, UpsertResult};
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 use crate::scored_result::ScoredResult;
+use crate::validation::validate_dimension_match;
 use parking_lot::RwLock;
 use std::path::Path;
 
@@ -301,12 +302,7 @@ impl NativeHnswIndex {
     pub fn insert(&self, id: u64, vector: &[f32]) -> crate::error::Result<()> {
         // Validate dimension BEFORE upsert_mapping to avoid destroying the old
         // mapping for an invalid vector (Devin review finding).
-        if vector.len() != self.dimension {
-            return Err(crate::error::Error::DimensionMismatch {
-                expected: self.dimension,
-                actual: vector.len(),
-            });
-        }
+        validate_dimension_match(self.dimension, vector.len())?;
 
         let result = self.upsert_mapping(id);
 
@@ -336,12 +332,7 @@ impl NativeHnswIndex {
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
         // Validate all dimensions upfront before any upsert_mapping side effects.
         for (_id, vec) in items {
-            if vec.len() != self.dimension {
-                return Err(crate::error::Error::DimensionMismatch {
-                    expected: self.dimension,
-                    actual: vec.len(),
-                });
-            }
+            validate_dimension_match(self.dimension, vec.len())?;
         }
 
         let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();

@@ -67,6 +67,7 @@ fn measure_recall(
     for query in queries {
         let results: Vec<u64> = index
             .search_with_quality(query, K, quality)
+            .unwrap()
             .iter()
             .map(|r| r.id)
             .collect();
