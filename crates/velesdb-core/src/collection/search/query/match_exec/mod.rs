@@ -500,7 +500,14 @@ impl Collection {
 
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {
-            return Ok(self.find_start_nodes_indexed(first_node));
+            let indexed = self.find_start_nodes_indexed(first_node);
+            // If the label index has nodes with IDs > u32::MAX that could not
+            // be indexed (RoaringBitmap limitation), fall back to a full scan
+            // to avoid silently returning incomplete results.
+            if indexed.is_empty() && self.label_index.read().has_large_ids() {
+                return Ok(self.find_start_nodes_full_scan(first_node));
+            }
+            return Ok(indexed);
         }
 
         // Slow path: full scan (no labels in pattern).

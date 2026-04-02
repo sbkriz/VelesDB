@@ -35,6 +35,10 @@ use std::collections::HashMap;
 pub struct LabelIndex {
     /// label_name -> set of node IDs with that label.
     labels: HashMap<String, RoaringBitmap>,
+    /// Set to `true` when any `index_from_payload` call encounters a node ID
+    /// exceeding `u32::MAX`. Callers should fall back to a full scan when this
+    /// flag is set and the bitmap lookup returns no results.
+    has_large_ids: bool,
 }
 
 impl LabelIndex {
@@ -57,6 +61,11 @@ impl LabelIndex {
                 node_id,
                 "LabelIndex: node_id exceeds u32::MAX, cannot index"
             );
+            // Track that we have unindexable IDs so callers can fall back
+            // to a full scan instead of returning silently incomplete results.
+            if payload.get("_labels").and_then(|v| v.as_array()).is_some() {
+                self.has_large_ids = true;
+            }
             return 0;
         };
 
@@ -113,6 +122,14 @@ impl LabelIndex {
                 }
             }
         }
+    }
+
+    /// Returns `true` if any node with `_labels` had an ID exceeding `u32::MAX`
+    /// and could not be indexed. Callers should fall back to a full scan when
+    /// this is `true` and the bitmap lookup returns empty results.
+    #[must_use]
+    pub fn has_large_ids(&self) -> bool {
+        self.has_large_ids
     }
 
     /// Returns the bitmap of node IDs carrying the given label.
