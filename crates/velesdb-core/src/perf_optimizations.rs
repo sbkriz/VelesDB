@@ -406,14 +406,6 @@ impl ContiguousVectors {
         }
     }
 
-    /// Prefetches multiple vectors for batch processing.
-    #[inline]
-    pub fn prefetch_batch(&self, indices: &[usize]) {
-        for &idx in indices {
-            self.prefetch(idx);
-        }
-    }
-
     /// Resizes the internal buffer.
     ///
     /// # P2 Audit + PERF-002: Panic-Safety with RAII Guard

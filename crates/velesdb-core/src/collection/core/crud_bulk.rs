@@ -128,6 +128,7 @@ impl Collection {
         self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
         self.update_text_index_from_raw(ids, payloads);
+        self.update_label_index_from_raw(ids, payloads);
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
@@ -229,6 +230,32 @@ impl Collection {
         }
     }
 
+    /// Batch-updates the label index from raw payload slices.
+    ///
+    /// Mirrors `update_text_index_from_raw` but for the label index.
+    /// Only indexes payloads that contain `_labels` arrays.
+    ///
+    /// LOCK ORDER: label_index(7) — after payload_storage(3).
+    fn update_label_index_from_raw(
+        &self,
+        ids: &[u64],
+        payloads: Option<&[Option<serde_json::Value>]>,
+    ) {
+        let Some(ps) = payloads else { return };
+        let has_labels = ps
+            .iter()
+            .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()));
+        if !has_labels {
+            return;
+        }
+        let mut label_idx = self.label_index.write();
+        for (i, opt) in ps.iter().enumerate() {
+            if let Some(payload) = opt {
+                label_idx.index_from_payload(ids[i], payload);
+            }
+        }
+    }
+
     /// Collects sparse vectors grouped by index name for batch insert.
     fn collect_sparse_batch(
         points: &[Point],
@@ -256,7 +283,7 @@ impl Collection {
         Ok(())
     }
 
-    /// Stores payloads and updates BM25 text index in bulk.
+    /// Stores payloads and updates BM25 text index + label index in bulk.
     ///
     /// Uses `LogPayloadStorage::store_batch()` for a single WAL sync instead
     /// of per-point fsync, improving bulk insert throughput by 10-50x.
@@ -278,7 +305,35 @@ impl Collection {
             }
         }
 
+        // Issue #486: Update label index for bulk-inserted points.
+        // The bulk path previously skipped label indexing (handled in
+        // per_point_updates for the single-upsert path). Without this,
+        // MATCH queries with label patterns (e.g., `(d:Doc)`) return
+        // empty results for points inserted via upsert_bulk / REST API.
+        Self::update_label_index_bulk(&self.label_index, points);
+
         Ok(())
+    }
+
+    /// Batch-updates the label index for bulk-inserted points.
+    ///
+    /// For the bulk path, points are always new inserts (no old payload to
+    /// remove from the label index), so we only need to index the new payloads.
+    ///
+    /// LOCK ORDER: label_index(7) — after payload_storage(3).
+    fn update_label_index_bulk(
+        label_index: &parking_lot::RwLock<crate::collection::graph::LabelIndex>,
+        points: &[Point],
+    ) {
+        if !Self::any_point_has_labels(points) {
+            return;
+        }
+        let mut label_idx = label_index.write();
+        for point in points {
+            if let Some(ref payload) = point.payload {
+                label_idx.index_from_payload(point.id, payload);
+            }
+        }
     }
 
     /// Applies sparse batch with WAL-before-apply for bulk insert.

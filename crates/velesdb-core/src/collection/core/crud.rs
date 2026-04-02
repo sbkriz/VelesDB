@@ -413,7 +413,7 @@ impl Collection {
     }
 
     /// Returns `true` if any point carries `_labels` in its payload.
-    fn any_point_has_labels(points: &[Point]) -> bool {
+    pub(super) fn any_point_has_labels(points: &[Point]) -> bool {
         points.iter().any(|p| {
             p.payload
                 .as_ref()
