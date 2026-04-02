@@ -4,10 +4,9 @@
 //! avoiding the need to load all visited nodes into memory at once.
 
 use super::edge_concurrent::ConcurrentEdgeStore;
-use super::traversal::BfsState;
+use super::traversal::{reconstruct_path, BfsState};
 use super::{EdgeStore, TraversalResult, DEFAULT_MAX_DEPTH};
-use smallvec::SmallVec;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 
 /// Configuration for streaming traversal.
@@ -112,6 +111,11 @@ pub struct BfsIterator<'a> {
     /// Buffer for pending results from current node being processed.
     /// This ensures all edges from a node are yielded before moving to next node.
     pending_results: VecDeque<TraversalResult>,
+    /// Parent-pointer map: target_node -> (parent_node, edge_id).
+    /// Replaces per-state path cloning with O(visited_nodes) memory.
+    parent_map: FxHashMap<u64, (u64, u64)>,
+    /// Source node ID for path reconstruction.
+    source_id: u64,
 }
 
 impl<'a> BfsIterator<'a> {
@@ -124,7 +128,6 @@ impl<'a> BfsIterator<'a> {
         let mut queue = VecDeque::new();
         queue.push_back(BfsState {
             node_id: start_id,
-            path: SmallVec::new(),
             depth: 0,
         });
 
@@ -140,6 +143,8 @@ impl<'a> BfsIterator<'a> {
             yielded: 0,
             visited_overflow: false,
             pending_results: VecDeque::new(),
+            parent_map: FxHashMap::default(),
+            source_id: start_id,
         }
     }
 
@@ -197,6 +202,7 @@ impl<'a> BfsIterator<'a> {
     ///
     /// Uses `CsrSnapshot` for contiguous `&[u64]` access to target IDs,
     /// edge IDs, and interned labels — no `GraphEdge` cloning.
+    /// Uses parent-pointer insertion instead of path cloning.
     fn expand_node_csr(&mut self, state: &BfsState) {
         let snapshot = self
             .edge_store
@@ -218,21 +224,21 @@ impl<'a> BfsIterator<'a> {
             if !self.try_visit(target) {
                 continue;
             }
-            let mut new_path = state.path.clone();
-            new_path.push(eid);
+            self.parent_map.insert(target, (state.node_id, eid));
             if new_depth < self.config.max_depth {
                 self.queue.push_back(BfsState {
                     node_id: target,
-                    path: new_path.clone(),
                     depth: new_depth,
                 });
             }
+            let path = reconstruct_path(target, self.source_id, &self.parent_map);
             self.pending_results
-                .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+                .push_back(TraversalResult::new(target, path, new_depth));
         }
     }
 
     /// Processes outgoing edges using the legacy path (clones `GraphEdge`).
+    /// Uses parent-pointer insertion instead of path cloning.
     fn expand_node_legacy(&mut self, state: &BfsState) {
         let edges = self.edge_store.get_outgoing(state.node_id);
         for edge in edges {
@@ -247,17 +253,16 @@ impl<'a> BfsIterator<'a> {
             if !self.try_visit(target) {
                 continue;
             }
-            let mut new_path = state.path.clone();
-            new_path.push(edge.id());
+            self.parent_map.insert(target, (state.node_id, edge.id()));
             if new_depth < self.config.max_depth {
                 self.queue.push_back(BfsState {
                     node_id: target,
-                    path: new_path.clone(),
                     depth: new_depth,
                 });
             }
+            let path = reconstruct_path(target, self.source_id, &self.parent_map);
             self.pending_results
-                .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+                .push_back(TraversalResult::new(target, path, new_depth));
         }
     }
 }
@@ -319,6 +324,7 @@ pub fn bfs_stream(
 /// references), this iterator acquires per-shard read locks on each
 /// `get_outgoing()` call and works with owned `GraphEdge` values.
 /// No shard lock is held across iterations, maximising concurrency.
+/// Uses parent-pointer map for zero-clone path reconstruction.
 pub struct ConcurrentBfsIterator<'a> {
     edge_store: &'a ConcurrentEdgeStore,
     queue: VecDeque<BfsState>,
@@ -328,6 +334,10 @@ pub struct ConcurrentBfsIterator<'a> {
     yielded: usize,
     visited_overflow: bool,
     pending_results: VecDeque<TraversalResult>,
+    /// Parent-pointer map: target_node -> (parent_node, edge_id).
+    parent_map: FxHashMap<u64, (u64, u64)>,
+    /// Source node ID for path reconstruction.
+    source_id: u64,
 }
 
 impl<'a> ConcurrentBfsIterator<'a> {
@@ -344,7 +354,6 @@ impl<'a> ConcurrentBfsIterator<'a> {
         let mut queue = VecDeque::new();
         queue.push_back(BfsState {
             node_id: start_id,
-            path: SmallVec::new(),
             depth: 0,
         });
 
@@ -359,6 +368,8 @@ impl<'a> ConcurrentBfsIterator<'a> {
             yielded: 0,
             visited_overflow: false,
             pending_results: VecDeque::new(),
+            parent_map: FxHashMap::default(),
+            source_id: start_id,
         }
     }
 }
@@ -407,19 +418,19 @@ impl Iterator for ConcurrentBfsIterator<'_> {
                     }
                 }
 
-                let mut new_path = state.path.clone();
-                new_path.push(edge.id());
+                // Record parent pointer; path reconstructed lazily for results.
+                self.parent_map.insert(target, (state.node_id, edge.id()));
 
                 if new_depth < self.config.max_depth {
                     self.queue.push_back(BfsState {
                         node_id: target,
-                        path: new_path.clone(),
                         depth: new_depth,
                     });
                 }
 
+                let path = reconstruct_path(target, self.source_id, &self.parent_map);
                 self.pending_results
-                    .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+                    .push_back(TraversalResult::new(target, path, new_depth));
             }
 
             if let Some(result) = self.pending_results.pop_front() {

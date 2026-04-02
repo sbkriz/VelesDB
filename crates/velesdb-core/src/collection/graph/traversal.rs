@@ -11,8 +11,8 @@
 #![allow(dead_code)] // WIP: Will be used by MATCH clause execution
 
 use super::EdgeStore;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
-use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 
 /// Default maximum depth for unbounded traversals.
@@ -157,16 +157,60 @@ impl TraversalConfig {
     }
 }
 
-/// BFS state for traversal.
+/// BFS state for traversal (parent-pointer variant).
+///
+/// Path reconstruction is deferred to result collection via a shared
+/// `FxHashMap<u64, (u64, u64)>` (target -> (parent, edge_id)).
+/// This eliminates per-edge `SmallVec` clones during frontier expansion.
 #[derive(Debug)]
 pub(super) struct BfsState {
     /// Current node ID.
     pub(super) node_id: u64,
-    /// Path taken to reach this node (edge IDs).
-    /// Uses `SmallVec` to avoid heap allocation for typical depth 1-3 traversals.
-    pub(super) path: TraversalPath,
     /// Current depth.
     pub(super) depth: u32,
+}
+
+/// Reconstructs the edge-ID path from `target` back to `source` using parent pointers.
+///
+/// Walks the parent chain `target -> parent -> ... -> source` collecting edge IDs,
+/// then reverses to produce source-to-target order.  Returns an empty `Vec` if
+/// `target == source` (the traversal root has no parent entry).
+#[must_use]
+pub(super) fn reconstruct_path(
+    target: u64,
+    source: u64,
+    parent_map: &FxHashMap<u64, (u64, u64)>,
+) -> Vec<u64> {
+    let mut path = Vec::new();
+    let mut current = target;
+    while current != source {
+        if let Some(&(parent, edge_id)) = parent_map.get(&current) {
+            path.push(edge_id);
+            current = parent;
+        } else {
+            // Unreachable in a correctly-built parent_map; defensive break.
+            break;
+        }
+    }
+    path.reverse();
+    path
+}
+
+/// Builds an edge-ID path by reconstructing the chain to `parent_node` and
+/// appending `edge_id`.
+///
+/// Used for already-visited nodes (cycle reporting) where the target's own
+/// parent_map entry points to a different (shorter) path.
+#[must_use]
+fn build_path_via_parent(
+    parent_node: u64,
+    edge_id: u64,
+    source: u64,
+    parent_map: &FxHashMap<u64, (u64, u64)>,
+) -> Vec<u64> {
+    let mut path = reconstruct_path(parent_node, source, parent_map);
+    path.push(edge_id);
+    path
 }
 
 /// Direction of edge traversal used by the shared BFS helper.
@@ -180,8 +224,9 @@ enum BfsDirection {
 
 /// Core BFS loop shared by forward and reverse traversal.
 ///
-/// The `direction` parameter controls which edges are followed and which
-/// endpoint is used as the next hop. All other logic is identical.
+/// Uses parent-pointer map instead of per-state path cloning.
+/// Paths are reconstructed lazily only for nodes that qualify as results
+/// (depth >= min_depth), eliminating O(visited * avg_depth) clone overhead.
 ///
 /// For forward direction, uses CSR zero-copy path when snapshot exists,
 /// avoiding `GraphEdge` cloning. Reverse direction always uses legacy path
@@ -196,6 +241,9 @@ fn bfs_traverse_directed(
     let mut results = Vec::new();
     let mut visited = FxHashSet::default();
     let mut queue = VecDeque::new();
+    // Parent-pointer map: target_node -> (parent_node, edge_id).
+    // O(visited_nodes) memory vs O(visited_nodes * avg_depth) for path cloning.
+    let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
 
     // Pre-build a FxHashSet<&str> once for the entire traversal, not per-node.
     let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
@@ -206,7 +254,6 @@ fn bfs_traverse_directed(
 
     queue.push_back(BfsState {
         node_id: source_id,
-        path: SmallVec::new(),
         depth: 0,
     });
 
@@ -219,8 +266,15 @@ fn bfs_traverse_directed(
         }
         if use_csr {
             process_bfs_csr(
-                edge_store, &state, config, &rel_filter,
-                &mut results, &mut visited, &mut queue,
+                edge_store,
+                &state,
+                config,
+                source_id,
+                &rel_filter,
+                &mut results,
+                &mut visited,
+                &mut queue,
+                &mut parent_map,
             );
         } else {
             let edges = match direction {
@@ -228,8 +282,16 @@ fn bfs_traverse_directed(
                 BfsDirection::Reverse => edge_store.get_incoming(state.node_id),
             };
             process_bfs_neighbors(
-                &edges, &state, config, &rel_filter, direction,
-                &mut results, &mut visited, &mut queue,
+                &edges,
+                &state,
+                config,
+                source_id,
+                &rel_filter,
+                direction,
+                &mut results,
+                &mut visited,
+                &mut queue,
+                &mut parent_map,
             );
         }
     }
@@ -241,16 +303,22 @@ fn bfs_traverse_directed(
 ///
 /// Reads target IDs, edge IDs, and interned labels from contiguous memory
 /// instead of cloning full `GraphEdge` objects (96+ bytes each).
+/// Uses parent-pointer insertion instead of path cloning.
+///
+/// Already-visited nodes still emit results (preserving cycle-reporting behavior)
+/// but are not re-enqueued for further expansion.
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_csr(
     edge_store: &EdgeStore,
     state: &BfsState,
     config: &TraversalConfig,
+    source_id: u64,
     rel_filter: &FxHashSet<&str>,
     results: &mut Vec<TraversalResult>,
     visited: &mut FxHashSet<u64>,
     queue: &mut VecDeque<BfsState>,
+    parent_map: &mut FxHashMap<u64, (u64, u64)>,
 ) {
     let snapshot = edge_store
         .csr_snapshot()
@@ -271,19 +339,21 @@ fn process_bfs_csr(
         if new_depth > config.max_depth {
             continue;
         }
-        let mut new_path = state.path.clone();
-        new_path.push(eid);
-        if new_depth >= config.min_depth {
-            results.push(TraversalResult::from_smallvec(
-                target,
-                new_path.clone(),
-                new_depth,
-            ));
+        let is_new = visited.insert(target);
+        if is_new {
+            parent_map.insert(target, (state.node_id, eid));
         }
-        if new_depth < config.max_depth && visited.insert(target) {
+        if new_depth >= config.min_depth {
+            let path = if is_new {
+                reconstruct_path(target, source_id, parent_map)
+            } else {
+                build_path_via_parent(state.node_id, eid, source_id, parent_map)
+            };
+            results.push(TraversalResult::new(target, path, new_depth));
+        }
+        if is_new && new_depth < config.max_depth {
             queue.push_back(BfsState {
                 node_id: target,
-                path: new_path,
                 depth: new_depth,
             });
         }
@@ -292,17 +362,23 @@ fn process_bfs_csr(
 
 /// Processes neighbors for a single BFS level: filters edges, records results,
 /// and enqueues unvisited nodes for the next hop.
+/// Uses parent-pointer insertion instead of path cloning.
+///
+/// Already-visited nodes still emit results (preserving cycle-reporting behavior)
+/// but are not re-enqueued for further expansion.
 #[inline]
-#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes pre-built filter set alongside traversal state; bundling into a context struct adds complexity without clarity for a private fn
+#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_neighbors(
     edges: &[&super::GraphEdge],
     state: &BfsState,
     config: &TraversalConfig,
+    source_id: u64,
     rel_filter: &FxHashSet<&str>,
     direction: BfsDirection,
     results: &mut Vec<TraversalResult>,
     visited: &mut FxHashSet<u64>,
     queue: &mut VecDeque<BfsState>,
+    parent_map: &mut FxHashMap<u64, (u64, u64)>,
 ) {
     for edge in edges {
         if results.len() >= config.limit {
@@ -319,20 +395,24 @@ fn process_bfs_neighbors(
         if new_depth > config.max_depth {
             continue;
         }
-        let mut new_path = state.path.clone();
-        new_path.push(edge.id());
-
-        if new_depth >= config.min_depth {
-            results.push(TraversalResult::from_smallvec(
-                next_node,
-                new_path.clone(),
-                new_depth,
-            ));
+        let is_new = visited.insert(next_node);
+        if is_new {
+            // Record parent pointer (first discovery = shortest BFS path).
+            parent_map.insert(next_node, (state.node_id, edge.id()));
         }
-        if new_depth < config.max_depth && visited.insert(next_node) {
+        if new_depth >= config.min_depth {
+            // Emit result for both new and revisited nodes (cycle reporting).
+            // For revisited nodes, build path via current node's chain + this edge.
+            let path = if is_new {
+                reconstruct_path(next_node, source_id, parent_map)
+            } else {
+                build_path_via_parent(state.node_id, edge.id(), source_id, parent_map)
+            };
+            results.push(TraversalResult::new(next_node, path, new_depth));
+        }
+        if is_new && new_depth < config.max_depth {
             queue.push_back(BfsState {
                 node_id: next_node,
-                path: new_path,
                 depth: new_depth,
             });
         }

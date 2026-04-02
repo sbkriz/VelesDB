@@ -250,3 +250,68 @@ fn test_bfs_csr_path_contains_edge_ids() {
     assert_eq!(node3.path[0], 100, "first hop via edge 100");
     assert_eq!(node3.path[1], 101, "second hop via edge 101");
 }
+
+// =============================================================================
+// G2: Parent-pointer path reconstruction — streaming BFS
+// =============================================================================
+
+#[test]
+fn test_streaming_parent_pointer_full_path() {
+    // GIVEN: a graph 1->2->3->4 with branch 2->5
+    let store = create_test_edge_store();
+    let config = StreamingConfig::default().with_max_depth(3);
+
+    // WHEN: streaming BFS from node 1
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // THEN: all paths reconstructed correctly via parent pointers
+    let node2 = results
+        .iter()
+        .find(|r| r.target_id == 2)
+        .expect("test: node 2");
+    assert_eq!(node2.path, vec![100], "1->2 via edge 100");
+
+    let node3 = results
+        .iter()
+        .find(|r| r.target_id == 3)
+        .expect("test: node 3");
+    assert_eq!(node3.path, vec![100, 101], "1->2->3 via edges 100,101");
+
+    let node5 = results
+        .iter()
+        .find(|r| r.target_id == 5)
+        .expect("test: node 5");
+    assert_eq!(node5.path, vec![100, 103], "1->2->5 via edges 100,103");
+
+    let node4 = results
+        .iter()
+        .find(|r| r.target_id == 4)
+        .expect("test: node 4");
+    assert_eq!(
+        node4.path,
+        vec![100, 101, 102],
+        "1->2->3->4 via edges 100,101,102"
+    );
+}
+
+#[test]
+fn test_streaming_parent_pointer_csr_path() {
+    // GIVEN: same graph with CSR snapshot
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+    let config = StreamingConfig::default().with_max_depth(3);
+
+    // WHEN: streaming BFS via CSR path
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // THEN: parent-pointer paths match expected values
+    let node4 = results
+        .iter()
+        .find(|r| r.target_id == 4)
+        .expect("test: node 4");
+    assert_eq!(
+        node4.path,
+        vec![100, 101, 102],
+        "CSR path: 1->2->3->4 via edges 100,101,102"
+    );
+}
