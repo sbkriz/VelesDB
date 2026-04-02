@@ -1051,7 +1051,9 @@ fn test_backward_pruning_preserves_diversity_across_clusters() {
 
     // Read hub's layer-0 neighbor list. With diversity-aware pruning,
     // we expect neighbors from multiple clusters, not just the nearest one.
-    hnsw.with_layers_read(|layers| {
+    // Acquire vectors *then* layers in the correct lock order (rank 10 → 20)
+    // to avoid incrementing the global invariant-violation counter.
+    hnsw.with_vectors_and_layers_read(|vectors, layers| {
         let neighbors = layers[0].get_neighbors(hub_id);
         assert!(
             !neighbors.is_empty(),
@@ -1061,19 +1063,17 @@ fn test_backward_pruning_preserves_diversity_across_clusters() {
         // Classify each neighbor by its dominant cluster.
         // Cluster assignment: whichever of the first 4 dims is largest.
         let mut clusters_seen = std::collections::HashSet::new();
-        hnsw.with_vectors_read(|vectors| {
-            for &n in &neighbors {
-                // SAFETY: test code — all node IDs were just inserted.
-                let vec = unsafe { vectors.get_unchecked(n) };
-                let cluster_id = vec[..4]
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                    .unwrap()
-                    .0;
-                clusters_seen.insert(cluster_id);
-            }
-        });
+        for &n in &neighbors {
+            // SAFETY: test code — all node IDs were just inserted.
+            let vec = unsafe { vectors.get_unchecked(n) };
+            let cluster_id = vec[..4]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap()
+                .0;
+            clusters_seen.insert(cluster_id);
+        }
 
         // With M0=32 connections and 4 clusters, we expect coverage of at
         // least 2 clusters (diversity-aware). The redundancy-aware eviction
