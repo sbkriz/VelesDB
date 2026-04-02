@@ -28,6 +28,38 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
+        self.upsert_bulk_inner(points, true)
+    }
+
+    /// Bulk insert without forcing WAL fsync at the end.
+    ///
+    /// Identical to [`upsert_bulk`](Self::upsert_bulk) except the WAL
+    /// buffer is flushed to the OS kernel (ensuring data is out of the
+    /// process) but **not** fsynced to disk. This eliminates the 1-5ms
+    /// per-batch fsync overhead on Windows.
+    ///
+    /// # Safety Contract
+    ///
+    /// The caller **must** call [`flush()`](Self::flush) after the final
+    /// batch to establish a durability barrier. Without that final fsync,
+    /// data since the last sync point may be lost on power failure.
+    ///
+    /// # When to Use
+    ///
+    /// Use this for intermediate batches in a streaming bulk import
+    /// (e.g., [`upsert_bulk_streaming`](super::async_ops::upsert_bulk_streaming)).
+    /// The final batch should use [`upsert_bulk`](Self::upsert_bulk) or be
+    /// followed by an explicit [`flush()`](Self::flush).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point has a mismatched dimension.
+    pub(crate) fn upsert_bulk_deferred_sync(&self, points: &[Point]) -> Result<usize> {
+        self.upsert_bulk_inner(points, false)
+    }
+
+    /// Shared implementation for bulk insert with configurable fsync.
+    fn upsert_bulk_inner(&self, points: &[Point], fsync: bool) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
         }
@@ -41,7 +73,7 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         let sparse_batch = Self::collect_sparse_batch(points);
 
-        self.store_vectors_and_payloads(&vector_refs, points)?;
+        self.store_vectors_and_payloads_inner(&vector_refs, points, fsync)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
@@ -52,17 +84,23 @@ impl Collection {
         Ok(inserted)
     }
 
-    /// Writes vectors and payloads to storage (parallel with rayon when available).
-    fn store_vectors_and_payloads(
+    /// Writes vectors and payloads with configurable fsync behavior.
+    ///
+    /// When `fsync` is `false`, WAL data is written and the buffer is
+    /// flushed to the OS kernel, but `sync_all()` is skipped. This
+    /// eliminates the 1-5ms per-batch overhead on Windows for
+    /// intermediate streaming batches.
+    fn store_vectors_and_payloads_inner(
         &self,
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
+        fsync: bool,
     ) -> Result<()> {
         #[cfg(feature = "persistence")]
         {
             let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(vector_refs),
-                || self.bulk_store_payloads(points),
+                || self.bulk_store_vectors_inner(vector_refs, fsync),
+                || self.bulk_store_payloads_inner(points, fsync),
             );
             vec_result?;
             pay_result?;
@@ -70,8 +108,8 @@ impl Collection {
 
         #[cfg(not(feature = "persistence"))]
         {
-            self.bulk_store_vectors(vector_refs)?;
-            self.bulk_store_payloads(points)?;
+            self.bulk_store_vectors_inner(vector_refs, fsync)?;
+            self.bulk_store_payloads_inner(points, fsync)?;
         }
 
         Ok(())
@@ -175,10 +213,23 @@ impl Collection {
     /// Extracted from `bulk_store_payloads` to accept `(u64, &Value)` pairs
     /// directly, avoiding the need to reconstruct `Point` structs.
     fn bulk_store_payload_entries(&self, entries: &[(u64, &serde_json::Value)]) -> Result<()> {
+        self.bulk_store_payload_entries_inner(entries, true)
+    }
+
+    /// Stores payload entries with configurable fsync behavior.
+    fn bulk_store_payload_entries_inner(
+        &self,
+        entries: &[(u64, &serde_json::Value)],
+        fsync: bool,
+    ) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
-        self.payload_storage.write().store_batch(entries)?;
+        if fsync {
+            self.payload_storage.write().store_batch(entries)?;
+        } else {
+            self.payload_storage.write().store_batch_deferred(entries)?;
+        }
         Ok(())
     }
 
@@ -277,9 +328,20 @@ impl Collection {
 
     /// Stores vectors in bulk via batch WAL + mmap write.
     fn bulk_store_vectors(&self, vectors: &[(u64, &[f32])]) -> Result<()> {
+        self.bulk_store_vectors_inner(vectors, true)
+    }
+
+    /// Stores vectors with configurable fsync behavior.
+    ///
+    /// When `fsync` is `false`, `store_batch()` writes WAL entries to the
+    /// `BufWriter` but `flush()` is skipped entirely. The mmap write is
+    /// still performed so the data is immediately readable in-process.
+    fn bulk_store_vectors_inner(&self, vectors: &[(u64, &[f32])], fsync: bool) -> Result<()> {
         let mut storage = self.vector_storage.write();
         storage.store_batch(vectors)?;
-        storage.flush()?;
+        if fsync {
+            storage.flush()?;
+        }
         Ok(())
     }
 
@@ -287,13 +349,22 @@ impl Collection {
     ///
     /// Uses `LogPayloadStorage::store_batch()` for a single WAL sync instead
     /// of per-point fsync, improving bulk insert throughput by 10-50x.
-    fn bulk_store_payloads(&self, points: &[Point]) -> Result<()> {
+    ///
+    /// When `fsync` is `false`, WAL entries are written and the buffer is
+    /// flushed to the OS kernel, but `sync_all()` is skipped.
+    fn bulk_store_payloads_inner(&self, points: &[Point], fsync: bool) -> Result<()> {
         let entries: Vec<(u64, &serde_json::Value)> = points
             .iter()
             .filter_map(|p| p.payload.as_ref().map(|pl| (p.id, pl)))
             .collect();
 
-        self.payload_storage.write().store_batch(&entries)?;
+        if fsync {
+            self.payload_storage.write().store_batch(&entries)?;
+        } else {
+            self.payload_storage
+                .write()
+                .store_batch_deferred(&entries)?;
+        }
 
         // Issue #425: BM25 skip — when no point has a payload AND the BM25
         // index is empty, skip the text index loop entirely. The bulk path
