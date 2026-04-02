@@ -1295,3 +1295,50 @@ fn test_upsert_bulk_multi_batch_search_correctness() {
         "search should return 10 results after multi-batch bulk insert"
     );
 }
+
+/// Regression test: upsert removing `_labels` must clean up LabelIndex.
+///
+/// Scenario: insert point with `_labels: ["Person"]`, then upsert the same
+/// point WITHOUT `_labels`. The LabelIndex must no longer contain the node
+/// under "Person". Previously, `has_any_labels` only checked new payloads,
+/// so label removal was silently skipped (Devin review finding).
+#[test]
+fn test_upsert_removes_stale_labels_from_label_index() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection");
+
+    // Step 1: Insert point with _labels
+    let p1 = Point::new(
+        1,
+        vec![1.0, 0.0, 0.0, 0.0],
+        Some(serde_json::json!({"_labels": ["Person"], "name": "Alice"})),
+    );
+    collection.upsert(vec![p1]).expect("upsert with labels");
+
+    // Verify label is indexed
+    let label_idx = collection.label_index.read();
+    assert!(
+        label_idx.lookup("Person").is_some_and(|b| b.contains(1)),
+        "Person label should be indexed for node 1"
+    );
+    drop(label_idx);
+
+    // Step 2: Upsert same point WITHOUT _labels
+    let p1_updated = Point::new(
+        1,
+        vec![1.0, 0.0, 0.0, 0.0],
+        Some(serde_json::json!({"name": "Alice Updated"})),
+    );
+    collection
+        .upsert(vec![p1_updated])
+        .expect("upsert without labels");
+
+    // Verify stale label is removed
+    let label_idx = collection.label_index.read();
+    let still_has = label_idx.lookup("Person").is_some_and(|b| b.contains(1));
+    assert!(
+        !still_has,
+        "Person label should be removed after upsert without _labels"
+    );
+}

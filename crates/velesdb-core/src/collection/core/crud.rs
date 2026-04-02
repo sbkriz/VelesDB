@@ -381,9 +381,15 @@ impl Collection {
         let mut sparse_batch = Vec::new();
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
-        let has_any_labels = Self::any_point_has_labels(points);
+        // Check both new AND old payloads for labels — old labels must be
+        // removed when a point is upserted without _labels (Devin review).
+        let new_has_labels = Self::any_point_has_labels(points);
+        let old_has_labels = old_payloads
+            .iter()
+            .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()));
+        let needs_label_updates = new_has_labels || old_has_labels;
         let mut label_updates: Vec<(u64, Option<serde_json::Value>, Option<serde_json::Value>)> =
-            if has_any_labels {
+            if needs_label_updates {
                 Vec::with_capacity(points.len())
             } else {
                 Vec::new()
@@ -402,7 +408,7 @@ impl Collection {
                 Self::update_text_index(&self.text_index, point);
             }
             Self::collect_sparse_vectors(point, &mut sparse_batch);
-            if has_any_labels {
+            if needs_label_updates {
                 label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
             }
             seen_payloads.insert(point.id, point.payload.as_ref());
