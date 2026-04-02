@@ -47,6 +47,12 @@ pub struct HnswParams {
     pub alpha: f32,
 }
 
+// Eq is safe because alpha values are always finite: they come from
+// `default_alpha()` (1.2), `with_alpha()` (caller-chosen), or serde
+// deserialization which rejects NaN/Inf for f32. No code path produces
+// NaN, so reflexivity (a == a) always holds.
+impl Eq for HnswParams {}
+
 impl Default for HnswParams {
     fn default() -> Self {
         Self::auto(768)

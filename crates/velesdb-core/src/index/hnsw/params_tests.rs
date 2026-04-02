@@ -408,6 +408,25 @@ fn test_hnsw_params_alpha_serde_roundtrip() {
 }
 
 #[test]
+fn test_hnsw_params_implements_eq() {
+    // HnswParams has a manual Eq impl (alpha is f32, but always finite).
+    // Verify Eq reflexivity and that equal values work as HashMap keys.
+    let a = HnswParams::auto(768);
+    let b = HnswParams::auto(768);
+    // PartialEq + Eq: reflexive, symmetric
+    assert_eq!(a, b);
+    assert_eq!(b, a);
+    assert_eq!(a, a); // reflexive
+
+    // Verify Eq is usable in contexts that require it.
+    // Storing in a slice and using contains() exercises PartialEq;
+    // the manual Eq impl on HnswParams enables use as HashMap key
+    // or in Eq-bounded generic contexts.
+    let params_list = [a];
+    assert!(params_list.contains(&b));
+}
+
+#[test]
 fn test_hnsw_params_alpha_backward_compat_missing_field() {
     // Persisted configs from before alpha was added won't have the field.
     // Deserialization must default to 1.2.

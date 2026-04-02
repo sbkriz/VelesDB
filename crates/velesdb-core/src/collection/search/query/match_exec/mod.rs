@@ -491,7 +491,19 @@ impl Collection {
     /// When the pattern specifies labels (e.g., `(n:Person)`), uses the
     /// `LabelIndex` bitmap intersection for O(k) lookup instead of scanning
     /// all N nodes. Falls back to full scan when no labels are specified
-    /// or when the label index has no matches (backward compatible).
+    /// or when the label index contains large IDs that could not be indexed
+    /// in the `RoaringBitmap` (u32 limitation).
+    ///
+    /// # Lock note
+    ///
+    /// The caller (`execute_match_with_context`) already holds a
+    /// `payload_storage.read()` guard. This method (and its delegates
+    /// `find_start_nodes_indexed`, `find_start_nodes_full_scan`) may acquire
+    /// a second concurrent read lock on the same `payload_storage`. This is
+    /// safe because `parking_lot::RwLock` allows unlimited concurrent readers
+    /// with no poisoning or deadlock risk. Refactoring to pass the existing
+    /// guard down would require changing 4+ function signatures for minimal
+    /// runtime benefit (read locks are non-blocking).
     fn find_start_nodes(&self, pattern: &GraphPattern) -> Result<Vec<(u64, HashMap<String, u64>)>> {
         let first_node = pattern
             .nodes
@@ -500,18 +512,44 @@ impl Collection {
 
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {
+            let has_large = self.label_index.read().has_large_ids();
             let indexed = self.find_start_nodes_indexed(first_node);
-            // If the label index has nodes with IDs > u32::MAX that could not
-            // be indexed (RoaringBitmap limitation), fall back to a full scan
-            // to avoid silently returning incomplete results.
-            if indexed.is_empty() && self.label_index.read().has_large_ids() {
-                return Ok(self.find_start_nodes_full_scan(first_node));
+
+            if has_large {
+                // RoaringBitmap cannot index IDs > u32::MAX, so the bitmap
+                // result may be incomplete. Fall back to a full scan and
+                // merge the results to avoid silently missing large-ID nodes.
+                return Ok(self.merge_with_full_scan(indexed, first_node));
             }
             return Ok(indexed);
         }
 
         // Slow path: full scan (no labels in pattern).
         Ok(self.find_start_nodes_full_scan(first_node))
+    }
+
+    /// Merges indexed bitmap results with a full scan to capture nodes whose
+    /// IDs exceed `u32::MAX` (not representable in `RoaringBitmap`).
+    ///
+    /// Collects IDs already present in `indexed` into a set, then appends
+    /// any full-scan results that are not already covered.
+    fn merge_with_full_scan(
+        &self,
+        indexed: Vec<(u64, HashMap<String, u64>)>,
+        first_node: &crate::velesql::NodePattern,
+    ) -> Vec<(u64, HashMap<String, u64>)> {
+        let full = self.find_start_nodes_full_scan(first_node);
+        if indexed.is_empty() {
+            return full;
+        }
+        let existing: std::collections::HashSet<u64> = indexed.iter().map(|(id, _)| *id).collect();
+        let mut merged = indexed;
+        for entry in full {
+            if !existing.contains(&entry.0) {
+                merged.push(entry);
+            }
+        }
+        merged
     }
 
     /// O(k) label-indexed lookup for start nodes.

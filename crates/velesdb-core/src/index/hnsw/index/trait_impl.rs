@@ -8,8 +8,13 @@ use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 
 impl VectorIndex for HnswIndex {
+    /// Inserts a vector, logging and silently dropping dimension mismatches.
+    ///
     /// Invariant: validate dimension BEFORE `upsert_mapping` to prevent
     /// orphaned mappings on error. See `batch.rs` Phase Ordering comment.
+    ///
+    /// Callers that need error propagation should use
+    /// [`HnswIndex::insert_batch_parallel`] which returns `Result`.
     #[inline]
     fn insert(&self, id: u64, vector: &[f32]) {
         if let Err(e) = validate_dimension_match(self.dimension, vector.len()) {
