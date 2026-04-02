@@ -3,6 +3,7 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::{Layer, NodeId};
 use super::{NativeHnsw, NO_ENTRY_POINT};
+use crate::perf_optimizations::ContiguousVectors;
 use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
@@ -170,6 +171,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// and layers expanded in single lock scopes. The caller is responsible for
     /// connecting nodes (Phase B) and updating `entry_point`/`count` (Phase C).
     ///
+    /// # Lock Strategy (I2 optimization)
+    ///
+    /// The vector write lock is acquired in two separate scopes:
+    /// 1. **Capacity reservation** — initializes storage and pre-grows the buffer
+    ///    if needed. May trigger an expensive realloc+copy on the cold path.
+    /// 2. **Bulk push** — copies vectors into pre-reserved space. Guaranteed
+    ///    fast memcpy with no reallocation.
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage allocation fails.
@@ -181,37 +190,64 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return Ok((Vec::new(), Vec::new()));
         }
 
-        // Normalize cosine vectors (Cow::Borrowed for non-cosine = zero-alloc)
         let processed: Vec<Cow<'a, [f32]>> =
             vectors.iter().map(|v| self.prepare_query(v)).collect();
 
-        // Batch-store all vectors (single write lock)
-        let first_id = {
-            let mut guard = self.vectors.write();
-            if guard.is_none() {
-                *guard = Some(crate::perf_optimizations::ContiguousVectors::new(
-                    processed[0].len(),
-                    vectors.len().max(16),
-                )?);
-            }
-            let storage = guard.as_mut().ok_or_else(|| {
-                crate::error::Error::Internal("Vector storage missing after init".to_string())
-            })?;
-            let first = storage.len();
-            let slices: Vec<&[f32]> = processed.iter().map(AsRef::as_ref).collect();
-            storage.push_batch(&slices)?;
-            first
-        };
+        // Pre-expand layers before vectors (lock ordering safe: layers only)
+        let current_len = self
+            .vectors
+            .read()
+            .as_ref()
+            .map_or(0, ContiguousVectors::len);
+        self.pre_expand_layers(current_len + vectors.len());
 
-        // Assign random layers and expand (single write lock via pre_expand_layers)
-        let total = first_id + vectors.len();
-        self.pre_expand_layers(total);
+        // Scope 1: Initialize storage and reserve capacity (may resize — cold path)
+        self.reserve_vector_capacity(&processed, vectors.len())?;
+
+        // Scope 2: Bulk push into pre-reserved space (fast memcpy — no resize)
+        let first_id = self.bulk_push_vectors(&processed)?;
 
         let assignments: Vec<(NodeId, usize)> = (0..vectors.len())
             .map(|i| (first_id + i, self.random_layer()))
             .collect();
 
         Ok((assignments, processed))
+    }
+
+    /// Initializes vector storage if needed and pre-reserves capacity.
+    ///
+    /// Cold path: the write lock may be held during a buffer resize.
+    fn reserve_vector_capacity(
+        &self,
+        processed: &[Cow<'_, [f32]>],
+        batch_size: usize,
+    ) -> crate::error::Result<()> {
+        let mut guard = self.vectors.write();
+        if guard.is_none() {
+            *guard = Some(ContiguousVectors::new(
+                processed[0].len(),
+                batch_size.max(16),
+            )?);
+        }
+        let storage = guard.as_mut().ok_or_else(|| {
+            crate::error::Error::Internal("Vector storage missing after init".to_string())
+        })?;
+        storage.reserve_additional(batch_size)?;
+        Ok(())
+    }
+
+    /// Pushes all processed vectors into pre-reserved storage.
+    ///
+    /// Fast path: write lock held only for bulk memcpy, no reallocation.
+    fn bulk_push_vectors(&self, processed: &[Cow<'_, [f32]>]) -> crate::error::Result<NodeId> {
+        let mut guard = self.vectors.write();
+        let storage = guard.as_mut().ok_or_else(|| {
+            crate::error::Error::Internal("Vector storage missing after reserve".to_string())
+        })?;
+        let first = storage.len();
+        let slices: Vec<&[f32]> = processed.iter().map(AsRef::as_ref).collect();
+        storage.push_batch(&slices)?;
+        Ok(first)
     }
 
     /// Greedy descent through upper HNSW layers above `node_layer` to find

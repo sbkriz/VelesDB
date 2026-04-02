@@ -240,6 +240,22 @@ impl ContiguousVectors {
         Ok(())
     }
 
+    /// Pre-allocates capacity for `additional` more vectors beyond the current length.
+    ///
+    /// Analogous to [`Vec::reserve`]: ensures the buffer can hold
+    /// `self.len() + additional` vectors without reallocating. No-op if
+    /// sufficient capacity already exists.
+    ///
+    /// Call before a batch push to guarantee `push_batch` won't resize.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AllocationFailed`] if reallocation fails.
+    pub fn reserve_additional(&mut self, additional: usize) -> crate::error::Result<()> {
+        let required = self.count.saturating_add(additional);
+        self.ensure_capacity(required)
+    }
+
     /// Inserts a vector at a specific index.
     ///
     /// Automatically grows capacity if needed.
