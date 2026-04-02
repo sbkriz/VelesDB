@@ -163,6 +163,103 @@ impl<'a> BfsIterator<'a> {
     pub fn visited_size(&self) -> usize {
         self.visited.len()
     }
+
+    /// Checks whether the given label passes the rel-type filter.
+    ///
+    /// Empty filter = accept all labels.
+    #[inline]
+    fn label_passes_filter(&self, label: &str) -> bool {
+        self.rel_types_set.is_empty() || self.rel_types_set.contains(label)
+    }
+
+    /// Records a visited target, handling overflow when the visited set
+    /// exceeds `max_visited_size`.
+    ///
+    /// Returns `true` if the target should be processed (not already visited).
+    #[inline]
+    fn try_visit(&mut self, target: u64) -> bool {
+        if self.visited_overflow {
+            return true;
+        }
+        if self.visited.contains(&target) {
+            return false;
+        }
+        if self.visited.len() >= self.config.max_visited_size {
+            self.visited_overflow = true;
+            self.visited.clear();
+            return true;
+        }
+        self.visited.insert(target);
+        true
+    }
+
+    /// Processes outgoing edges using CSR zero-copy path.
+    ///
+    /// Uses `CsrSnapshot` for contiguous `&[u64]` access to target IDs,
+    /// edge IDs, and interned labels — no `GraphEdge` cloning.
+    fn expand_node_csr(&mut self, state: &BfsState) {
+        let snapshot = self
+            .edge_store
+            .csr_snapshot()
+            .expect("invariant: CSR snapshot checked before calling expand_node_csr");
+        let targets = snapshot.neighbors(state.node_id);
+        let edge_ids = snapshot.edge_ids(state.node_id);
+
+        for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
+            let new_depth = state.depth + 1;
+            if new_depth > self.config.max_depth {
+                continue;
+            }
+            if let Some(label) = snapshot.label_at(state.node_id, i) {
+                if !self.label_passes_filter(label) {
+                    continue;
+                }
+            }
+            if !self.try_visit(target) {
+                continue;
+            }
+            let mut new_path = state.path.clone();
+            new_path.push(eid);
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    path: new_path.clone(),
+                    depth: new_depth,
+                });
+            }
+            self.pending_results
+                .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+        }
+    }
+
+    /// Processes outgoing edges using the legacy path (clones `GraphEdge`).
+    fn expand_node_legacy(&mut self, state: &BfsState) {
+        let edges = self.edge_store.get_outgoing(state.node_id);
+        for edge in edges {
+            if !self.label_passes_filter(edge.label()) {
+                continue;
+            }
+            let target = edge.target();
+            let new_depth = state.depth + 1;
+            if new_depth > self.config.max_depth {
+                continue;
+            }
+            if !self.try_visit(target) {
+                continue;
+            }
+            let mut new_path = state.path.clone();
+            new_path.push(edge.id());
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    path: new_path.clone(),
+                    depth: new_depth,
+                });
+            }
+            self.pending_results
+                .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+        }
+    }
 }
 
 impl Iterator for BfsIterator<'_> {
@@ -184,59 +281,11 @@ impl Iterator for BfsIterator<'_> {
 
         // Process nodes from queue until we have results to yield
         while let Some(state) = self.queue.pop_front() {
-            // Get outgoing edges
-            let edges = self.edge_store.get_outgoing(state.node_id);
-
-            // Process ALL edges from this node, collecting results
-            for edge in edges {
-                // Filter by relationship type using pre-built FxHashSet (zero allocation).
-                if !self.rel_types_set.is_empty() && !self.rel_types_set.contains(edge.label()) {
-                    continue;
-                }
-
-                let target = edge.target();
-                let new_depth = state.depth + 1;
-
-                // Skip if exceeds max depth
-                if new_depth > self.config.max_depth {
-                    continue;
-                }
-
-                // Check visited (with overflow handling)
-                // When visited_overflow is true, cycle detection is disabled but traversal
-                // is still bounded by max_depth, preventing infinite loops in cyclic graphs.
-                if !self.visited_overflow && self.visited.contains(&target) {
-                    continue;
-                }
-
-                // Track visited if not overflowed
-                // Note: When overflow occurs, we trade cycle detection for memory efficiency.
-                // The max_depth limit ensures termination even without visited tracking.
-                if !self.visited_overflow {
-                    if self.visited.len() >= self.config.max_visited_size {
-                        self.visited_overflow = true;
-                        self.visited.clear(); // Free memory
-                    } else {
-                        self.visited.insert(target);
-                    }
-                }
-
-                // Build path
-                let mut new_path = state.path.clone();
-                new_path.push(edge.id());
-
-                // Queue for further traversal
-                if new_depth < self.config.max_depth {
-                    self.queue.push_back(BfsState {
-                        node_id: target,
-                        path: new_path.clone(),
-                        depth: new_depth,
-                    });
-                }
-
-                // Buffer the result (don't return immediately - process all edges first)
-                self.pending_results
-                    .push_back(TraversalResult::from_smallvec(target, new_path, new_depth));
+            // Dispatch: CSR zero-copy path when snapshot exists, legacy otherwise.
+            if self.edge_store.has_csr_snapshot() {
+                self.expand_node_csr(&state);
+            } else {
+                self.expand_node_legacy(&state);
             }
 
             // After processing all edges from this node, yield first pending result if any

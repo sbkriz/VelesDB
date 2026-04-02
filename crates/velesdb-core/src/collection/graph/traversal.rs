@@ -182,6 +182,10 @@ enum BfsDirection {
 ///
 /// The `direction` parameter controls which edges are followed and which
 /// endpoint is used as the next hop. All other logic is identical.
+///
+/// For forward direction, uses CSR zero-copy path when snapshot exists,
+/// avoiding `GraphEdge` cloning. Reverse direction always uses legacy path
+/// since the CSR snapshot only covers outgoing edges.
 #[must_use]
 fn bfs_traverse_directed(
     edge_store: &EdgeStore,
@@ -194,7 +198,6 @@ fn bfs_traverse_directed(
     let mut queue = VecDeque::new();
 
     // Pre-build a FxHashSet<&str> once for the entire traversal, not per-node.
-    // Vec<String>::contains(&to_string()) allocated a String per edge in the inner loop.
     let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
 
     // CRITICAL FIX: Mark source node as visited before traversal
@@ -207,27 +210,84 @@ fn bfs_traverse_directed(
         depth: 0,
     });
 
+    // Use CSR zero-copy path for forward traversal when snapshot exists.
+    let use_csr = direction == BfsDirection::Forward && edge_store.has_csr_snapshot();
+
     while let Some(state) = queue.pop_front() {
         if results.len() >= config.limit {
             break;
         }
-        let edges = match direction {
-            BfsDirection::Forward => edge_store.get_outgoing(state.node_id),
-            BfsDirection::Reverse => edge_store.get_incoming(state.node_id),
-        };
-        process_bfs_neighbors(
-            &edges,
-            &state,
-            config,
-            &rel_filter,
-            direction,
-            &mut results,
-            &mut visited,
-            &mut queue,
-        );
+        if use_csr {
+            process_bfs_csr(
+                edge_store, &state, config, &rel_filter,
+                &mut results, &mut visited, &mut queue,
+            );
+        } else {
+            let edges = match direction {
+                BfsDirection::Forward => edge_store.get_outgoing(state.node_id),
+                BfsDirection::Reverse => edge_store.get_incoming(state.node_id),
+            };
+            process_bfs_neighbors(
+                &edges, &state, config, &rel_filter, direction,
+                &mut results, &mut visited, &mut queue,
+            );
+        }
     }
 
     results
+}
+
+/// CSR zero-copy BFS expansion for forward traversal.
+///
+/// Reads target IDs, edge IDs, and interned labels from contiguous memory
+/// instead of cloning full `GraphEdge` objects (96+ bytes each).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn process_bfs_csr(
+    edge_store: &EdgeStore,
+    state: &BfsState,
+    config: &TraversalConfig,
+    rel_filter: &FxHashSet<&str>,
+    results: &mut Vec<TraversalResult>,
+    visited: &mut FxHashSet<u64>,
+    queue: &mut VecDeque<BfsState>,
+) {
+    let snapshot = edge_store
+        .csr_snapshot()
+        .expect("invariant: CSR snapshot checked before calling process_bfs_csr");
+    let targets = snapshot.neighbors(state.node_id);
+    let edge_ids = snapshot.edge_ids(state.node_id);
+
+    for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
+        if results.len() >= config.limit {
+            break;
+        }
+        if let Some(label) = snapshot.label_at(state.node_id, i) {
+            if !rel_filter.is_empty() && !rel_filter.contains(label) {
+                continue;
+            }
+        }
+        let new_depth = state.depth + 1;
+        if new_depth > config.max_depth {
+            continue;
+        }
+        let mut new_path = state.path.clone();
+        new_path.push(eid);
+        if new_depth >= config.min_depth {
+            results.push(TraversalResult::from_smallvec(
+                target,
+                new_path.clone(),
+                new_depth,
+            ));
+        }
+        if new_depth < config.max_depth && visited.insert(target) {
+            queue.push_back(BfsState {
+                node_id: target,
+                path: new_path,
+                depth: new_depth,
+            });
+        }
+    }
 }
 
 /// Processes neighbors for a single BFS level: filters edges, records results,

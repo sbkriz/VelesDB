@@ -3,7 +3,7 @@
 //! Exposes Knowledge Graph operations on Collection for use by
 //! Tauri plugin, REST API, and other consumers.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphEdge, GraphSchema, TraversalConfig, TraversalPath, TraversalResult,
@@ -34,7 +34,7 @@ fn collect_neighbor_expansions(
     depth: u32,
     path: &TraversalPath,
     rel_types: &[&str],
-    visited: &mut HashSet<u64>,
+    visited: &mut FxHashSet<u64>,
 ) -> Vec<(u64, u32, TraversalPath)> {
     edges
         .iter()
@@ -58,8 +58,8 @@ fn expand_dfs_neighbors(
     node_id: u64,
     depth: u32,
     path: &TraversalPath,
-    rel_filter: &HashSet<&str>,
-    visited: &HashSet<u64>,
+    rel_filter: &FxHashSet<&str>,
+    visited: &FxHashSet<u64>,
     stack: &mut Vec<TraversalEntry>,
 ) {
     let outgoing = store.get_outgoing(node_id);
@@ -103,7 +103,7 @@ fn traverse_with_frontier<F>(
     push_fn: fn(&mut F, TraversalEntry),
     frontier: &mut F,
 ) -> Vec<TraversalResult> {
-    let mut visited = HashSet::new();
+    let mut visited = FxHashSet::default();
     let mut results = Vec::new();
     visited.insert(params.source);
 
@@ -462,11 +462,10 @@ impl Collection {
         source_id: u64,
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        use std::collections::HashSet;
-        let rel_filter: HashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
+        let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
 
         let mut results = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
+        let mut visited: FxHashSet<u64> = FxHashSet::default();
         let mut stack: Vec<TraversalEntry> = vec![(source_id, 0, SmallVec::new())];
 
         while let Some((node_id, depth, path)) = stack.pop() {

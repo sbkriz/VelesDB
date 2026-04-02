@@ -82,7 +82,7 @@ pub use degree_router::{
     DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
     DEFAULT_DEGREE_THRESHOLD,
 };
-pub use edge::{EdgeStore, GraphEdge};
+pub use edge::{CsrSnapshot, EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
